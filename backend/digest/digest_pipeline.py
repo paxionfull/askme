@@ -113,15 +113,10 @@ def _build_classify_messages(
     profile: dict[str, Any],
     articles: list[dict[str, str]],
 ) -> list[dict[str, str]]:
+    from prompts import load_prompt
+
     labels = classification_labels(profile)
-    system = (
-        "你是资讯目录分类器。只根据标题把每篇文章分到一个类别。\n"
-        "必须只输出一个 JSON 对象，不要 Markdown 说明。\n"
-        "规则：\n"
-        "1. 每个输入 id 恰好出现一次\n"
-        "2. category_id 必须来自给定类别列表\n"
-        "3. 不要合并事件、不要改写标题、不要丢文\n"
-    )
+    system = load_prompt("digest_classify")
     user_payload = {
         "categories": labels,
         "articles": articles,
@@ -144,30 +139,15 @@ def _build_cluster_messages(
     focus_enabled: bool,
     focus_criteria: str,
 ) -> list[dict[str, str]]:
-    system = (
-        "你是资讯事件聚类器。在每个类别内部，把报道同一新闻事件的文章合并为一组。\n"
-        "必须只输出一个 JSON 对象，不要 Markdown 说明。\n"
-        "规则：\n"
-        "1. 每个类别独立聚类，禁止跨类合并\n"
-        "2. 该类输入的每个 id 必须恰好出现在该类某一个 event.article_ids 中一次\n"
-        "3. 单篇文章也要放进 events（article_ids 长度为 1，title 可空字符串）\n"
-        "4. 多篇同事件时 title 为 5-15 字事件名；不要改写各条原标题\n"
-        "5. 不要虚构 id\n"
-    )
+    from prompts import load_prompt
+
+    system = load_prompt("digest_cluster")
     event_schema: dict[str, Any] = {
         "title": "事件名",
         "article_ids": ["a", "b"],
     }
     if focus_enabled:
-        system += (
-            "6. 每个 event 必须带 focus_score，且只能是 0 或 1（整数，禁止其它数值）\n"
-            "7. focus_score=1 表示该事件符合 focus.criteria、应作为当日全局头条；"
-            "否则必须为 0\n"
-            "8. 从严判定：绝大多数 event 应为 0；"
-            "只有真正符合标准的少数事件才标 1；"
-            "不要因类别内相对重要就标 1；"
-            "全天预计只有极少数 event 为 1\n"
-        )
+        system = f"{system}\n{load_prompt('digest_cluster_focus')}"
         event_schema["focus_score"] = 1
 
     user_payload: dict[str, Any] = {

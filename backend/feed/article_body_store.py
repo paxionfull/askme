@@ -153,6 +153,32 @@ class ArticleBodyStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM article_bodies WHERE feed_id = ?", (feed_id,))
 
+    def delete_older_than(self, cutoff) -> int:
+        """删除早于 cutoff 的正文缓存（优先 published_at，否则 cached_at）。"""
+        from core.time_scope import parse_publish_time
+
+        cutoff_ts = cutoff.timestamp()
+        deleted = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT feed_id, article_id, published_at, cached_at FROM article_bodies"
+            ).fetchall()
+            for row in rows:
+                pub = parse_publish_time(str(row["published_at"] or ""))
+                if pub is not None:
+                    stale = pub < cutoff
+                else:
+                    cached = float(row["cached_at"] or 0)
+                    stale = cached > 0 and cached < cutoff_ts
+                if not stale:
+                    continue
+                conn.execute(
+                    "DELETE FROM article_bodies WHERE feed_id = ? AND article_id = ?",
+                    (row["feed_id"], row["article_id"]),
+                )
+                deleted += 1
+        return deleted
+
     def save(
         self,
         feed_id: str,

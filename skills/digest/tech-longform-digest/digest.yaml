@@ -1,0 +1,4 @@
+id: tech-longform-digest
+name: "AI_news"
+description: "结构化整理规则"
+input_mode: titles

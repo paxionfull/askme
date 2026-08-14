@@ -110,6 +110,11 @@ def normalize_stored_llm_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def has_stored_llm_settings() -> bool:
+    """integrations.json 是否已有 llm 段（含用户主动清空后的空配置）。"""
+    return _LLM_SETTINGS_KEY in _read_integrations()
+
+
 def load_stored_llm_config() -> dict[str, Any]:
     data = _read_integrations()
     return normalize_stored_llm_config(data.get(_LLM_SETTINGS_KEY))
@@ -128,6 +133,36 @@ def save_stored_llm_config(config: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def clear_stored_llm_config() -> dict[str, Any]:
+    """清空持久化 LLM 配置（对话 + Embedding），并卸掉运行时覆盖。"""
+    item = normalize_stored_llm_config({})
+    data = _read_integrations()
+    data[_LLM_SETTINGS_KEY] = item
+    _write_integrations(data)
+    apply_cleared_llm_config(item)
+    return item
+
+
+def apply_cleared_llm_config(item: dict[str, Any] | None = None) -> dict[str, Any]:
+    """将模块级 LLM 运行时置空（用户重置配置后调用）。"""
+    global LLM_MODEL, LLM_API_KEY, LLM_API_BASE, LLM_MAX_TOKENS, LLM_EMBEDDING_MODEL
+    cleared = normalize_stored_llm_config(item)
+    LLM_MODEL = ""
+    LLM_API_KEY = ""
+    LLM_API_BASE = ""
+    LLM_EMBEDDING_MODEL = ""
+    LLM_MAX_TOKENS = cleared["max_tokens"]
+    for key in (
+        "LLM_MODEL",
+        "LLM_API_KEY",
+        "LLM_API_BASE",
+        "LLM_EMBEDDING_MODEL",
+        "LLM_MAX_TOKENS",
+    ):
+        os.environ.pop(key, None)
+    return cleared
+
+
 def apply_stored_llm_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """把持久化配置写入模块级默认值（优先于空的环境变量）。"""
     global LLM_MODEL, LLM_API_KEY, LLM_API_BASE, LLM_MAX_TOKENS, LLM_EMBEDDING_MODEL
@@ -144,6 +179,9 @@ def apply_stored_llm_config(config: dict[str, Any] | None = None) -> dict[str, A
     if item["embedding_model"]:
         LLM_EMBEDDING_MODEL = item["embedding_model"]
         os.environ["LLM_EMBEDDING_MODEL"] = item["embedding_model"]
+    else:
+        LLM_EMBEDDING_MODEL = ""
+        os.environ.pop("LLM_EMBEDDING_MODEL", None)
     LLM_MAX_TOKENS = item["max_tokens"]
     os.environ["LLM_MAX_TOKENS"] = str(item["max_tokens"])
     return item

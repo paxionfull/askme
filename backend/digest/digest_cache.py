@@ -137,6 +137,14 @@ class DigestSummaryStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM digest_summaries WHERE cache_key = ?", (key,))
 
+    def delete_older_than(self, cutoff_ts: float) -> int:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM digest_summaries WHERE updated_at < ?",
+                (float(cutoff_ts),),
+            )
+            return int(cur.rowcount or 0)
+
 
 _store = DigestSummaryStore()
 

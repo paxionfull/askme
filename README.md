@@ -67,11 +67,10 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8001
 ## 首次使用
 
 1. 打开 **设置 → 模型**，确认 LLM（及可选的 Embedding）已配置并可用。
-2. 回到 **库**：内置数据源来自 `.cursor/skills/*-discovery/`（启动后自动加载）。
+2. 打开 **源**，点击添加：粘贴网站 URL 或平台账号页；内置 skill（机器之心、量子位，以及 Reddit / X / 知乎平台能力）已在技能库中，匹配到时会直接复用，**不会在安装时自动写入源列表**（初始源数为 0）。
 3. 刷新数据源，拉取近期文章。
-4. 生成概览；需要问答时，先对相关文章 **建立索引**，再进入 **对话**。
-5. 部分平台源需要登录态（在 **设置 → 数据源授权** 配置，或添加源时按引导操作）：
-   - 知乎、微信公众号、小红书、X、Reddit 等
+4. 回到 **简报** 生成概览；需要问答时，先对相关文章 **建立索引**，再提问。
+5. 部分需登录的源：在 **设置 → 数据源授权** 配置 Cookie，或添加源时按引导操作。
 
 ## 环境变量
 
@@ -84,17 +83,18 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8001
 | `LLM_API_BASE` | 自定义 API Base（兼容网关 / 自建） |
 | `LLM_MAX_TOKENS` / `LLM_TIMEOUT` | 生成上限与超时 |
 | `CURSOR_API_KEY` | 未知站点自动接入（Cursor Agent） |
-| `ZHIHU_COOKIE` | 知乎 Cookie（也可设置页配置） |
-| `ASKME_COOKIE_WEIXIN` / `WEIXIN_MP_TOKEN` | 微信公众号后台凭证 |
+| `ASKME_COOKIE_*` / 设置页凭证 | 需登录站点的 Cookie（也可设置页配置） |
 | `FEED_PAGE_DELAY` 等 | 抓取限速，见 `.env.example` |
+| `DATA_RETENTION_DAYS` | 本地文章/正文/索引保留自然日数（默认 3；每日定时清理） |
 
-## 内置数据源（节选）
+## 内置数据源
 
-网站类（一站一 skill）：36氪、IT之家、量子位、机器之心、金十、财联社、OpenAI / Anthropic / DeepSeek / Kimi 博客、Google Research、Bloomberg、Reuters、MarketWatch 等。
+安装后出现在 **技能库**，不会自动加入用户源：
 
-平台多账号：微信公众号、知乎、小红书、Reddit、X（参数存在本地 registry，不另建 skill 目录）。
+- 网站类：`jiqizhixin-discovery`（机器之心）、`qbitai-discovery`（量子位）
+- 平台类：`reddit-platform-discovery`、`x-platform-discovery`、`zhihu-platform-discovery`（按账号接入，写入 `feed_registry.platform_accounts`）
 
-Digest 风格示例：`finance-flash-digest`、`tech-longform-digest`；对话角色：`chat-rag`。
+Digest 风格示例：`tech-longform-digest`；对话角色：`chat-rag`。
 
 ## 目录结构
 
@@ -113,7 +113,7 @@ askme/
 │   ├── skills/              # skill 注册 / 配置 / 校验
 │   └── onboarding/          # 新站点接入（Cursor / 平台脚手架）
 ├── frontend/                # React + Vite（开发端口 5173）
-├── .cursor/skills/          # discovery / digest / chat skills（运行时依赖，请勿删除）
+├── skills/                  # 内置 skill 包（discovery / chat / digest / onboarding）
 ├── data/                    # 本地数据与密钥（gitignore，首次运行自动创建）
 ├── scripts/dev.sh           # 本机启动后端
 └── .env.example
@@ -124,8 +124,8 @@ askme/
 **对话检索不准 / 无结果**  
 先确认已建立索引，并在设置中配置可用的 Embedding 模型。
 
-**微信 / 知乎等刷新报未授权**  
-到设置页完成 Cookie 登录或粘贴；微信需公众号**后台**凭证（含 `askme_mp_token` 与 `slave_sid` 一类字段，按界面提示操作）。
+**需登录的源刷新报未授权**  
+到设置页完成 Cookie 登录或粘贴。
 
 **「打开登录窗口」失败**  
 在后端虚拟环境中执行：`python -m playwright install chromium`。
@@ -144,5 +144,5 @@ askme/
 ## 开发提示
 
 - API 文档（后端起来后）：http://localhost:8001/docs
-- 新网站接入：在应用内「添加源」，或参考 `.cursor/skills/source-onboarding/SKILL.md`
-- 贡献新 discovery skill：在 `.cursor/skills/<slug>-discovery/` 实现 `scripts/discover.py`，并用 `_lib/discovery_validate.py` 校验
+- 新网站接入：在应用内「添加源」，或参考 `skills/onboarding/source-onboarding/SKILL.md`
+- 贡献新 discovery skill：在 `skills/discovery/<slug>-discovery/` 实现 `scripts/discover.py`，并用 `_lib/discovery_validate.py` 校验

@@ -1,11 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import {
+  fetchDigestSkills,
+  fetchFeeds,
+  saveFeedGroups,
+  type DigestSkillDetail,
+} from "../api";
 import CitationMarkdown from "../components/CitationMarkdown";
 import CitationSidebar from "../components/CitationSidebar";
 import DaysRangeSelect from "../components/DaysRangeSelect";
 import DigestGeneratingPanel from "../components/DigestGeneratingPanel";
 import DigestTreeView from "../components/DigestTreeView";
+import GettingStartedGuide, {
+  GETTING_STARTED_INTRO,
+  GETTING_STARTED_TITLE,
+} from "../components/GettingStartedGuide";
 import OverflowMenu, { type OverflowMenuItem } from "../components/OverflowMenu";
+import RuleExplainModal from "../components/RuleExplainModal";
 import ScopedArticlesBar from "../components/ScopedArticlesBar";
 import SummaryMarkdown, {
   acceptsArticleDrag,
@@ -14,7 +25,16 @@ import SummaryMarkdown, {
 import { useChat } from "../contexts/ChatContext";
 import { useDigest } from "../contexts/DigestContext";
 import { useResizableRatio } from "../hooks/useResizableRatio";
+import { useIndexBuildConfirm } from "../hooks/useIndexBuildConfirm";
 import { formatDaysLabel, isLlmConfigured, useSettings } from "../hooks/useSettings";
+import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
+import {
+  buildDigestExportFilename,
+  buildDigestMarkdownFromText,
+  buildDigestMarkdownFromTree,
+  downloadMarkdownFile,
+  formatDigestDayRange,
+} from "../utils/digestMarkdown";
 
 /** 焦点在可输入控件 / 菜单 / 弹层时，不抢占 Enter 发送。 */
 function isComposerShortcutBlocked(target: EventTarget | null): boolean {
@@ -35,6 +55,32 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   );
 }
 
+function getSubmitDisabledTitle(params: {
+  input: string;
+  scopedCount: number;
+  effectiveRagReady: boolean;
+  llmConfigured: boolean;
+  loadingStatus: boolean;
+  canSubmit: boolean;
+}): string | undefined {
+  const { input, scopedCount, effectiveRagReady, llmConfigured, loadingStatus, canSubmit } = params;
+  if (canSubmit) return undefined;
+  const trimmed = input.trim();
+  if (trimmed) {
+    if (!effectiveRagReady) {
+      return loadingStatus ? "正在同步索引，稍候即可问答" : "问答需先建立索引";
+    }
+    if (!llmConfigured) return "请先在设置配置 API Key 和模型";
+    return undefined;
+  }
+  if (scopedCount > 0 && !llmConfigured) return "生成摘要需先在设置配置 API Key 和模型";
+  if (!effectiveRagReady && !loadingStatus) {
+    return "问答需先建立索引；可先加入文章做摘要";
+  }
+  if (scopedCount > 0) return "空内容发送可生成摘要";
+  return "输入问题，或先加入文章后空内容发送生成摘要";
+}
+
 export default function ChatPage() {
   const { settings } = useSettings();
   const {
@@ -47,11 +93,13 @@ export default function ChatPage() {
     statusMessage: summarizeStatus,
     summaryError,
     digestBusy,
+    loadingIndex,
     startSummarize,
     stopSummarize,
     summaryGroupOptions,
     selectedGroupId,
     setSelectedSummaryGroup,
+    reloadSummaryGroups,
   } = useDigest();
   const {
     loadingSummary,
@@ -66,7 +114,6 @@ export default function ChatPage() {
     loadingStatus,
     statusRevalidating,
     effectiveRagReady,
-    effectiveChunkCount,
     messages,
     citations,
     activeCitationIndex,
@@ -87,6 +134,9 @@ export default function ChatPage() {
     setEnableDeepThinking,
   } = useChat();
 
+  const { requestIndexBuild, IndexBuildConfirmModal, IndexBuildLink, indexBuildBusy } =
+    useIndexBuildConfirm();
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
@@ -94,9 +144,12 @@ export default function ChatPage() {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
   const [showPromptPreview, setShowPromptPreview] = useState(false);
+  const [exportDone, setExportDone] = useState(false);
+  const exportResetTimerRef = useRef<number | null>(null);
   const displaySummary = generating ? summary : chatSummary;
   const showTree = Boolean(!generating && digestTree);
   const hasOverview = Boolean(displaySummary || digestTree || generating);
+
   const {
     containerRef,
     askPercent,
@@ -124,46 +177,201 @@ export default function ChatPage() {
   })();
   const [citationOpen, setCitationOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  const [digestSkills, setDigestSkills] = useState<DigestSkillDetail[]>([]);
+  const [savingRule, setSavingRule] = useState(false);
+  const [composerNudge, setComposerNudge] = useState(false);
+  const [ruleExplainOpen, setRuleExplainOpen] = useState(false);
+  const llmConfigured = isLlmConfigured(settings);
+  const selectedGroup = summaryGroupOptions.find((group) => group.id === selectedGroupId) ?? null;
+  const isUngrouped = selectedGroupId === UNGROUPED_GROUP_ID;
+  const hasRuleBound = Boolean(selectedGroup?.digestSkillId) && !isUngrouped;
+  const indexScopeLabel = selectedGroup?.name?.trim() || "当前板块";
+  const indexFeedIds = useMemo(
+    () => selectedGroup?.feedIds ?? [],
+    [selectedGroup?.feedIds],
+  );
+  const openIndexBuild = useCallback(() => {
+    void requestIndexBuild({
+      feedIds: indexFeedIds,
+      scopeLabel: indexScopeLabel,
+    });
+  }, [indexFeedIds, indexScopeLabel, requestIndexBuild]);
   const canSubmit = (canSend && Boolean(input.trim())) || canSendScopedSummary;
-  const inputEnabled = effectiveRagReady || scopedArticles.length > 0 || loadingStatus;
+  const submitDisabledTitle = getSubmitDisabledTitle({
+    input,
+    scopedCount: scopedArticles.length,
+    effectiveRagReady,
+    llmConfigured,
+    loadingStatus,
+    canSubmit,
+  });
+  const composerHint = (() => {
+    if (sending) return null;
+    const trimmed = input.trim();
+    if (trimmed) {
+      if (!effectiveRagReady) {
+        if (loadingStatus) return <>正在同步索引，稍候即可问答</>;
+        return (
+          <>
+            问答需先{" "}
+            <IndexBuildLink onClick={openIndexBuild} disabled={indexBuildBusy} />
+          </>
+        );
+      }
+      if (!llmConfigured) {
+        return (
+          <>
+            请先在{" "}
+            <Link to="/settings" className="text-[var(--accent)] hover:underline">
+              设置
+            </Link>{" "}
+            配置 API Key 和模型
+          </>
+        );
+      }
+      return null;
+    }
+    if (scopedArticles.length > 0 && !llmConfigured) {
+      return (
+        <>
+          生成摘要需先在{" "}
+          <Link to="/settings" className="text-[var(--accent)] hover:underline">
+            设置
+          </Link>{" "}
+          配置 API Key 和模型
+        </>
+      );
+    }
+    if (composerNudge && !canSubmit) {
+      if (!effectiveRagReady && !loadingStatus) {
+        return (
+          <>
+            问答需先{" "}
+            <IndexBuildLink onClick={openIndexBuild} disabled={indexBuildBusy} />
+            ；可先加入文章做摘要
+          </>
+        );
+      }
+      return "输入问题，或先加入文章后空内容发送生成摘要";
+    }
+    return null;
+  })();
+  const inputPlaceholder = (() => {
+    if (scopedArticles.length > 0) {
+      return input.trim()
+        ? `已加入 ${scopedArticles.length} 篇 · Enter 发送`
+        : `已加入 ${scopedArticles.length} 篇 · Enter 生成摘要`;
+    }
+    if (loadingStatus && !effectiveRagReady) return "正在同步索引…";
+    if (!effectiveRagReady) return "问答需建索引；可先加入文章做摘要";
+    if (!llmConfigured) return "请先在设置配置模型后再提问";
+    return "输入问题，Enter 发送";
+  })();
+
+  const boundRuleName =
+    digestSkills.find((skill) => skill.id === selectedGroup?.digestSkillId)?.name ||
+    selectedGroup?.digestSkillId ||
+    "";
+
+  const handleExportMarkdown = useCallback(() => {
+    const groupName = selectedGroup?.name?.trim() || "简报";
+    const dayRange = formatDigestDayRange(days);
+    const meta = {
+      groupName,
+      rangeLabel: formatDaysLabel(days),
+      dayRange,
+      ruleName: boundRuleName || "未绑定",
+    };
+    let md = "";
+    if (digestTree && !generating) {
+      md = buildDigestMarkdownFromTree(digestTree, meta);
+    } else if (displaySummary.trim()) {
+      md = buildDigestMarkdownFromText(displaySummary, meta);
+    } else {
+      return;
+    }
+    downloadMarkdownFile(buildDigestExportFilename(groupName, dayRange), md);
+    setExportDone(true);
+    if (exportResetTimerRef.current != null) {
+      window.clearTimeout(exportResetTimerRef.current);
+    }
+    exportResetTimerRef.current = window.setTimeout(() => {
+      setExportDone(false);
+      exportResetTimerRef.current = null;
+    }, 1600);
+  }, [
+    boundRuleName,
+    days,
+    digestTree,
+    displaySummary,
+    generating,
+    selectedGroup?.name,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (exportResetTimerRef.current != null) {
+        window.clearTimeout(exportResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    void fetchDigestSkills()
+      .then((data) => setDigestSkills(data.skills))
+      .catch(() => setDigestSkills([]));
+  }, []);
+
+  const bindRuleToSelectedGroup = useCallback(
+    async (skillId: string) => {
+      if (!selectedGroupId || selectedGroupId === UNGROUPED_GROUP_ID) return;
+      setSavingRule(true);
+      try {
+        const feedsData = await fetchFeeds();
+        const groups = feedsData.groups.map((group) =>
+          group.id === selectedGroupId
+            ? { ...group, digest_skill_id: skillId || null }
+            : group,
+        );
+        await saveFeedGroups(groups, feedsData.group_order);
+        await reloadSummaryGroups();
+      } catch {
+        // 错误由后续生成门禁提示
+      } finally {
+        setSavingRule(false);
+      }
+    },
+    [reloadSummaryGroups, selectedGroupId],
+  );
 
   const statusLine = (() => {
-    const parts = [formatDaysLabel(days)];
-    if (hasOverview) {
-      parts.push("概览就绪");
-    } else if (!loadingSummary && !generating) {
-      parts.push("无概览");
+    if (!hasRuleBound && !loadingSummary && !generating) {
+      return "需设置整理规则";
     }
     if (scopedArticles.length > 0) {
-      parts.push(`限定 ${scopedArticles.length} 篇`);
-    } else if (loadingStatus && !effectiveRagReady) {
-      parts.push("同步索引中");
-    } else if (effectiveRagReady) {
-      parts.push(`${effectiveChunkCount} 片段`);
-      if (statusRevalidating) parts.push("同步中");
-      if (hasOverview) parts.push("可提问");
-    } else {
-      parts.push("未建索引");
-      if (hasOverview) parts.push("可拖文章提问");
+      return `限定 ${scopedArticles.length} 篇`;
     }
-    return parts.join(" · ");
+    if (loadingIndex) {
+      return "建立索引中";
+    }
+    if (loadingStatus && !effectiveRagReady) {
+      return "同步索引中";
+    }
+    if (effectiveRagReady) {
+      if (statusRevalidating) return "同步中";
+      return null;
+    }
+    return "未建索引";
   })();
 
   const emptyState = (() => {
     if (messages.length > 0) return null;
-    if (generating) {
-      return { kind: "generating" as const };
-    }
-    if (!hasOverview) {
-      return { kind: "no-overview" as const };
-    }
-    if (scopedArticles.length > 0) {
-      return { kind: "scoped" as const };
-    }
-    if (effectiveRagReady) {
-      return { kind: "ready" as const };
-    }
-    return { kind: "overview-no-index" as const };
+    if (generating) return { kind: "generating" as const };
+    if (scopedArticles.length > 0) return { kind: "scoped" as const };
+    return {
+      kind: "guide" as const,
+      needIndex: !effectiveRagReady,
+    };
   })();
 
   const focusChatInput = useCallback(() => {
@@ -173,9 +381,18 @@ export default function ChatPage() {
   }, []);
 
   const handleSend = useCallback(() => {
-    if (!canSubmit || sending) return;
-    void sendMessage(input);
+    if (sending) return;
+    if (canSubmit) {
+      setComposerNudge(false);
+      void sendMessage(input);
+      return;
+    }
+    setComposerNudge(true);
   }, [canSubmit, input, sendMessage, sending]);
+
+  useEffect(() => {
+    if (canSubmit) setComposerNudge(false);
+  }, [canSubmit]);
 
   const handleInputKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -193,14 +410,14 @@ export default function ChatPage() {
         return;
       }
       if (isComposerShortcutBlocked(event.target)) return;
-      if (!canSubmit || sending) return;
+      if (sending) return;
       event.preventDefault();
       focusChatInput();
       handleSend();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [canSubmit, focusChatInput, handleSend, sending]);
+  }, [focusChatInput, handleSend, sending]);
 
   const handleArticleDragOver = useCallback((event: React.DragEvent) => {
     if (!acceptsArticleDrag(event.dataTransfer)) return;
@@ -390,12 +607,39 @@ export default function ChatPage() {
               className="shrink-0"
             />
           </label>
+          {selectedGroupId && !isUngrouped ? (
+            <label className="inline-flex min-w-0 items-center gap-1.5 text-sm">
+              <span className="shrink-0 text-xs text-[var(--ink-muted)]">整理规则</span>
+              <select
+                value={selectedGroup?.digestSkillId ?? ""}
+                onChange={(e) => void bindRuleToSelectedGroup(e.target.value)}
+                disabled={digestBusy || savingRule || digestSkills.length === 0}
+                className={`ui-select min-w-0 max-w-[11rem] truncate py-1.5 text-sm disabled:opacity-50 ${
+                  hasRuleBound
+                    ? ""
+                    : "border-[color-mix(in_srgb,var(--accent)_40%,var(--rule))] text-[var(--accent)]"
+                }`}
+                aria-label="选择整理规则"
+                title={hasRuleBound ? boundRuleName : "未设置整理规则时无法生成简报"}
+              >
+                <option value="">未设置</option>
+                {digestSkills.map((skill) => (
+                  <option key={skill.id} value={skill.id}>
+                    {skill.name || skill.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <button
             type="button"
             disabled={
               generating
                 ? false
-                : digestBusy || !isLlmConfigured(settings) || !selectedGroupId
+                : digestBusy ||
+                  !isLlmConfigured(settings) ||
+                  !selectedGroupId ||
+                  !hasRuleBound
             }
             onClick={() => void (generating ? stopSummarize() : startSummarize())}
             className={`group/gen relative min-w-[5.5rem] shrink-0 rounded-[var(--radius-control)] px-3 py-1.5 text-sm disabled:opacity-50 ${
@@ -408,9 +652,11 @@ export default function ChatPage() {
             title={
               generating
                 ? "停止当前简报生成，保留上一版"
-                : hasOverview
-                  ? "重新生成简报"
-                  : "按当前板块与时间范围生成简报"
+                : !hasRuleBound
+                  ? "请先为当前板块设置整理规则"
+                  : hasOverview
+                    ? "重新生成简报"
+                    : "按当前板块绑定的整理规则生成简报"
             }
           >
             {generating ? (
@@ -426,15 +672,26 @@ export default function ChatPage() {
               "生成简报"
             )}
           </button>
-          <span className="text-[var(--ink-muted)]">·</span>
-          <span
-            className={`text-sm ${
-              hasOverview ? "text-[var(--success)]" : "text-[var(--ink-muted)]"
-            }`}
-          >
-            {statusLine}
-          </span>
+          {statusLine ? (
+            <>
+              <span className="text-[var(--ink-muted)]">·</span>
+              <span
+                className={`text-sm ${
+                  statusLine === "未建索引" || statusLine === "需设置整理规则"
+                    ? "text-[var(--ink-muted)]"
+                    : "text-[var(--accent)]"
+                }`}
+              >
+                {statusLine}
+              </span>
+            </>
+          ) : null}
         </div>
+        {!hasOverview && !loadingSummary ? (
+          <p className="mt-2 text-xs leading-5 text-[var(--ink-muted)]">
+            添加源并更新列表后，须为每个板块手动设置整理规则，才能生成简报。
+          </p>
+        ) : null}
         {summaryError ? <p className="mt-2 text-xs text-red-700">{summaryError}</p> : null}
       </header>
 
@@ -473,9 +730,28 @@ export default function ChatPage() {
                     scrollParentRef={overviewScrollRef}
                     onAddArticle={addScopedArticle}
                     onAddArticles={addScopedArticles}
+                    exportAction={{
+                      done: exportDone,
+                      onClick: handleExportMarkdown,
+                    }}
                   />
                 </>
               ) : (
+                <div className="relative">
+                  <div className="relative z-[4] h-0">
+                    <button
+                      type="button"
+                      title={exportDone ? "已导出 Markdown" : "下载当前简报为 Markdown"}
+                      onClick={handleExportMarkdown}
+                      className={`absolute left-[0.85rem] top-[0.55rem] whitespace-nowrap rounded-[var(--radius-control)] border px-2.5 py-1 text-[0.8rem] transition-colors ${
+                        exportDone
+                          ? "border-[color-mix(in_srgb,var(--success)_40%,var(--rule))] bg-[var(--success-soft)] text-[var(--success)]"
+                          : "border-[var(--rule)] bg-[var(--paper-raised)] text-[var(--ink-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      }`}
+                    >
+                      {exportDone ? "已导出" : "导出为 Markdown"}
+                    </button>
+                  </div>
                 <div className="mx-auto min-w-0 max-w-[42rem] px-5 py-5 sm:px-8">
                   {thinking && !generating ? (
                     <details className="mb-3 border-l-2 border-[var(--rule)] pl-2">
@@ -502,13 +778,15 @@ export default function ChatPage() {
                     <span className="mt-1 inline-block animate-pulse text-[var(--ink-muted)]">▍</span>
                   ) : null}
                 </div>
+                </div>
               )
             ) : !generating ? (
               <div className="mx-auto max-w-[32rem] px-5 py-12 text-center sm:px-8">
-                <h3 className="text-lg font-medium text-[var(--ink)]">还没有这份简报</h3>
+                <h3 className="text-lg font-medium text-[var(--ink)]">{GETTING_STARTED_TITLE}</h3>
                 <p className="mt-2 text-sm leading-6 text-[var(--ink-muted)]">
-                  在上方选择板块与时间范围，点击「生成简报」即可开始阅读。也可从右侧拖入文章生成摘要。
+                  {GETTING_STARTED_INTRO}
                 </p>
+                <GettingStartedGuide onExplainRule={() => setRuleExplainOpen(true)} />
               </div>
             ) : null}
           </div>
@@ -577,9 +855,6 @@ export default function ChatPage() {
 
         <header className="border-b border-[var(--rule)] px-4 py-3">
           <h2 className="text-sm font-semibold tracking-tight text-[var(--ink)]">提问</h2>
-          <p className="mt-0.5 text-xs text-[var(--ink-muted)]">
-            可选 · 拖入章节/文章后直接生成摘要
-          </p>
         </header>
 
         {error ? (
@@ -605,68 +880,64 @@ export default function ChatPage() {
 
         <div className="flex-1 overflow-y-auto px-5 py-5">
           {messages.length === 0 ? (
-            emptyState?.kind === "no-overview" ? (
-              <div className="flex h-full flex-col items-center justify-center px-4 text-center">
-                <p className="text-sm font-medium tracking-tight text-[var(--ink)]">开始提问</p>
-                <ol className="mt-3 max-w-sm space-y-2 text-left text-xs leading-5 text-[var(--ink-muted)]">
-                  <li>
-                    <span className="mr-1.5 tabular-nums text-[var(--ink)]">1.</span>
-                    上方选板块与范围，点「生成简报」
-                  </li>
-                  <li>
-                    <span className="mr-1.5 tabular-nums text-[var(--ink)]">2.</span>
-                    拖章节/文章到此处，或直接提问
-                  </li>
-                  <li>
-                    <span className="mr-1.5 tabular-nums text-[var(--ink)]">3.</span>
-                    Enter 发送 · 点 [n] 看引用
-                  </li>
-                </ol>
-                <p className="mt-4 text-[11px] text-[var(--ink-muted)]">
-                  自由提问需先在{" "}
-                  <Link to="/sources" className="text-[var(--accent)] hover:underline">
-                    源
-                  </Link>{" "}
-                  建立索引；摘要不需要
-                </p>
-              </div>
-            ) : emptyState?.kind === "generating" ? (
+            emptyState?.kind === "generating" ? (
               <div className="flex h-full items-start justify-center pt-8">
-                <p className="text-sm text-[var(--ink-muted)]">
-                  简报生成中，完成后可拖标题到此处
-                </p>
+                <p className="text-sm text-[var(--ink-muted)]">简报生成中，完成后可拖标题到此处</p>
               </div>
             ) : emptyState?.kind === "scoped" ? (
-              <div className="flex h-full items-end justify-center pb-2">
-                  <p className="text-xs text-[var(--ink-muted)]/75">
-                  支持继续从左侧拖入章节或文章
+              <div className="mx-auto max-w-[40rem]">
+                <p className="text-sm font-medium tracking-tight text-[var(--ink)]">
+                  已加入 {scopedArticles.length} 篇
                 </p>
-              </div>
-            ) : emptyState?.kind === "ready" ? (
-              <div className="flex h-full flex-col">
-                <p className="text-sm text-[var(--ink-muted)]">
-                  基于简报与索引提问，或拖入指定文章缩小范围
-                </p>
-                <div className="flex flex-1 items-end justify-center pb-2">
-                  <p className="text-xs text-[var(--ink-muted)]/75">
-                    支持从左侧拖入章节或文章
-                  </p>
-                </div>
+                <ul className="mt-3 list-none space-y-2 text-xs leading-5 text-[var(--ink-muted)]">
+                  <li>
+                    <span className="font-medium text-[var(--ink)]">摘要</span>
+                    {" — 空内容回车"}
+                  </li>
+                  <li>
+                    <span className="font-medium text-[var(--ink)]">问答</span>
+                    {!effectiveRagReady ? (
+                      <>
+                        {" — 需先 "}
+                        <IndexBuildLink
+                          onClick={openIndexBuild}
+                          disabled={indexBuildBusy}
+                        />
+                        {"，再输入问题回车"}
+                      </>
+                    ) : (
+                      " — 输入问题回车，限定已加入的文章"
+                    )}
+                  </li>
+                  <li className="pt-0.5 text-[11px] text-[var(--ink-muted)]/80">
+                    可继续「加入对话」或拖标题到这里
+                  </li>
+                </ul>
               </div>
             ) : (
-              <div className="flex h-full flex-col">
-                <p className="text-sm text-[var(--ink-muted)]">
-                  从左侧拖入章节或文章，或在{" "}
-                  <Link to="/sources" className="text-[var(--accent)] hover:underline">
-                    源
-                  </Link>{" "}
-                  建立索引后提问
-                </p>
-                <div className="flex flex-1 items-end justify-center pb-2">
-                  <p className="text-xs text-[var(--ink-muted)]/75">
-                    支持从左侧拖入章节或文章
-                  </p>
-                </div>
+              <div className="mx-auto max-w-[40rem]">
+                <p className="text-sm font-medium tracking-tight text-[var(--ink)]">可以这样用</p>
+                <ul className="mt-3 list-none space-y-2 text-xs leading-5 text-[var(--ink-muted)]">
+                  <li>
+                    <span className="font-medium text-[var(--ink)]">摘要</span>
+                    {" — 先「加入对话」或拖标题限定范围，空内容回车"}
+                  </li>
+                  <li>
+                    <span className="font-medium text-[var(--ink)]">问答</span>
+                    {emptyState?.needIndex ? (
+                      <>
+                        {" — 需先 "}
+                        <IndexBuildLink
+                          onClick={openIndexBuild}
+                          disabled={indexBuildBusy}
+                        />
+                        {"，再输入问题回车"}
+                      </>
+                    ) : (
+                      " — 输入问题回车（不选文章则检索整份简报）"
+                    )}
+                  </li>
+                </ul>
               </div>
             )
           ) : (
@@ -796,6 +1067,11 @@ export default function ChatPage() {
             onRemove={removeScopedArticle}
             onClear={clearScopedArticles}
           />
+          {composerHint ? (
+            <p className="mx-auto mb-2 max-w-[40rem] text-xs leading-5 text-[var(--ink-muted)]">
+              {composerHint}
+            </p>
+          ) : null}
           <form
             className="mx-auto flex max-w-[40rem] items-end gap-2"
             onSubmit={(e) => {
@@ -814,19 +1090,7 @@ export default function ChatPage() {
               }}
               onKeyDown={handleInputKeyDown}
               rows={1}
-              placeholder={
-                scopedArticles.length > 0
-                  ? input.trim()
-                    ? `已加入 ${scopedArticles.length} 篇 · Enter 发送`
-                    : `已加入 ${scopedArticles.length} 篇 · Enter 生成摘要`
-                  : inputEnabled
-                    ? "输入问题，Enter 发送"
-                    : loadingStatus
-                      ? "正在同步索引…"
-                      : hasOverview
-                        ? "拖入左侧标题，或先去源页建立索引"
-                        : "请先建立索引，或从左侧加入文章"
-              }
+              placeholder={inputPlaceholder}
               disabled={sending}
               className="ui-textarea min-h-[2.5rem] max-h-36 min-w-0 flex-1 resize-none py-2 text-sm leading-6 disabled:opacity-50"
             />
@@ -861,15 +1125,9 @@ export default function ChatPage() {
               ) : (
                 <button
                   type="submit"
-                  disabled={!canSubmit}
-                  title={
-                    canSubmit
-                      ? undefined
-                      : inputEnabled
-                        ? "输入问题后发送"
-                        : "请先建立索引，或从左侧加入文章"
-                  }
-                  className="ui-btn ui-btn-primary shrink-0 disabled:opacity-50"
+                  disabled={sending}
+                  title={submitDisabledTitle}
+                  className={`ui-btn ui-btn-primary shrink-0 ${!canSubmit ? "opacity-50" : ""}`}
                 >
                   发送
                 </button>
@@ -887,6 +1145,12 @@ export default function ChatPage() {
         />
         </aside>
       </div>
+      <IndexBuildConfirmModal />
+      <RuleExplainModal
+        open={ruleExplainOpen}
+        onClose={() => setRuleExplainOpen(false)}
+        skills={digestSkills}
+      />
     </div>
   );
 }

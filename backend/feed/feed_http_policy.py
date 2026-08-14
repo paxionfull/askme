@@ -1,4 +1,4 @@
-"""数据源刷新 HTTP 策略（与 .cursor/skills/_lib/http_client.py 常量同步）。"""
+"""数据源刷新 HTTP 策略（与 skills/discovery/_lib/http_client.py 常量同步）。"""
 
 from __future__ import annotations
 

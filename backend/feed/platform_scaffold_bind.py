@@ -10,7 +10,7 @@ import importlib.util
 import sys
 from typing import Any
 
-from paths import SKILLS_LIB, SKILLS_ROOT
+from paths import DISCOVERY_SKILLS_ROOT, SKILLS_LIB
 
 _LIB = SKILLS_LIB
 
@@ -24,20 +24,7 @@ def _replacements(platform: str, account: dict[str, Any]) -> dict[str, str]:
     entry = str(account.get("entry_url") or "")
     posts = str(account.get("posts_url") or entry)
     user_type = str(account.get("user_type") or "people")
-    # xsec 等扩展字段可存在 account 或从 entry_url 解析
-    xsec = str(account.get("xsec_token") or "").strip()
-    if not xsec and "xsec_token=" in entry:
-        from urllib.parse import parse_qs, urlparse
 
-        xsec = (parse_qs(urlparse(entry).query).get("xsec_token") or [""])[0]
-
-    if platform == "xiaohongshu":
-        return {
-            "__ASKME_USER_ID__": key,
-            "__ASKME_XSEC_TOKEN__": xsec,
-            "__ASKME_FEED_ID__": feed_id,
-            "__ASKME_DISPLAY_NAME__": display,
-        }
     if platform == "x":
         return {
             "__ASKME_SCREEN_NAME__": key,
@@ -51,13 +38,6 @@ def _replacements(platform: str, account: dict[str, Any]) -> dict[str, str]:
             "__ASKME_PAGE_URL__": posts or entry,
             "__ASKME_FEED_ID__": feed_id,
             "__ASKME_DISPLAY_NAME__": display,
-        }
-    if platform == "weixin":
-        return {
-            "__ASKME_FAKEID__": key,
-            "__ASKME_FEED_ID__": feed_id,
-            "__ASKME_DISPLAY_NAME__": display,
-            "__ASKME_ENTRY_URL__": entry or "https://mp.weixin.qq.com/",
         }
     if platform == "reddit":
         return {
@@ -92,8 +72,8 @@ def compile_scaffold_adapter(platform: str, account: dict[str, Any]) -> Any:
     module_name = f"askme_bound_{feed_id.replace(':', '_').replace('-', '_')}"
     if str(_LIB) not in sys.path:
         sys.path.insert(0, str(_LIB))
-    if str(SKILLS_ROOT) not in sys.path:
-        sys.path.insert(0, str(SKILLS_ROOT))
+    if str(DISCOVERY_SKILLS_ROOT) not in sys.path:
+        sys.path.insert(0, str(DISCOVERY_SKILLS_ROOT))
 
     spec = importlib.util.spec_from_loader(module_name, loader=None)
     if spec is None:

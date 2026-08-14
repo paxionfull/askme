@@ -10,3 +10,11 @@ backend/__pycache__/
 frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+
+# 用户接入的 discovery skill（本地保留）；内置白名单除外
+skills/discovery/*-discovery/
+!skills/discovery/jiqizhixin-discovery/
+!skills/discovery/qbitai-discovery/
+!skills/discovery/reddit-platform-discovery/
+!skills/discovery/x-platform-discovery/
+!skills/discovery/zhihu-platform-discovery/

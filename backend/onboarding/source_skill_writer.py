@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from paths import SKILLS_ROOT
+from paths import DISCOVERY_SKILLS_ROOT
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 
@@ -18,7 +18,7 @@ def validate_slug(slug: str) -> str:
 
 
 def skill_dir_for(slug: str) -> Path:
-    return SKILLS_ROOT / f"{validate_slug(slug)}-discovery"
+    return DISCOVERY_SKILLS_ROOT / f"{validate_slug(slug)}-discovery"
 
 
 def is_complete_discovery_skill(slug: str) -> bool:
@@ -42,6 +42,12 @@ def remove_discovery_skill_dir(slug: str) -> bool:
     if not skill_dir.is_dir():
         return False
     shutil.rmtree(skill_dir)
+    try:
+        from onboarding.discovery_skill_catalog import write_discovery_skill_catalog
+
+        write_discovery_skill_catalog()
+    except Exception:
+        pass
     return True
 
 
@@ -115,7 +121,7 @@ def normalize_entry_url(url: str) -> str:
 
 
 def source_identity_key(url: str) -> str:
-    """用于判断「是否同一数据源」：host + path，忽略 query（小红书 token 会变）。"""
+    """用于判断「是否同一数据源」：host + path，忽略 query（部分平台带易变 token 参数）。"""
     from urllib.parse import urlparse
 
     parsed = urlparse(normalize_entry_url(url))
@@ -171,9 +177,9 @@ def _allocate_unique_slug(preferred: str, *, entry_url: str, display_name: str) 
 
 def _find_slug_by_identity(target_key: str) -> str | None:
     """若已有完整 discovery skill 指向同一入口，返回其 slug（含 hidden）。"""
-    if not SKILLS_ROOT.is_dir():
+    if not DISCOVERY_SKILLS_ROOT.is_dir():
         return None
-    for skill_dir in sorted(SKILLS_ROOT.iterdir()):
+    for skill_dir in sorted(DISCOVERY_SKILLS_ROOT.iterdir()):
         name = skill_dir.name
         if not skill_dir.is_dir() or not name.endswith("-discovery"):
             continue
@@ -211,14 +217,6 @@ def derive_source_identity(entry_url: str) -> tuple[str, str]:
         host = host[4:]
 
     path_parts = [part for part in parsed.path.split("/") if part]
-
-    # 小红书用户主页：同域名不同用户必须拆成独立 slug
-    if host.endswith("xiaohongshu.com") and len(path_parts) >= 3:
-        if path_parts[0].lower() == "user" and path_parts[1].lower() == "profile":
-            user_id = re.sub(r"[^a-z0-9]", "", path_parts[2].lower())
-            if user_id:
-                slug = validate_slug(f"xiaohongshu-{user_id}"[:62].rstrip("-"))
-                return slug, user_id
 
     # Reddit subreddit
     if host.endswith("reddit.com") and len(path_parts) >= 2 and path_parts[0].lower() == "r":
@@ -275,10 +273,6 @@ def resolve_onboard_target(
         final_slug = platform.slug
         if platform.platform == "zhihu":
             final_name = name.strip() if name and name.strip() else platform.user_id
-        elif platform.platform == "jin10":
-            final_name = name.strip() if name and name.strip() else "金十数据"
-        elif platform.platform == "xiaohongshu":
-            final_name = name.strip() if name and name.strip() else platform.user_id
         elif platform.platform == "reddit":
             from onboarding.source_platform_scaffold import format_reddit_source_name
 
@@ -293,24 +287,13 @@ def resolve_onboard_target(
             final_name = (
                 name.strip() if name and name.strip() else format_x_source_name(platform.user_id)
             )
-        elif platform.platform == "weixin":
-            from onboarding.source_platform_scaffold import format_weixin_source_name, weixin_name_hint_from_url
-
-            hint = weixin_name_hint_from_url(platform.entry_url)
-            final_name = (
-                name.strip()
-                if name and name.strip()
-                else format_weixin_source_name(hint)
-                or format_weixin_source_name(platform.user_id)
-                or platform.user_id
-            )
         else:
             final_name = name.strip() if name and name.strip() else platform.user_id
         if skill_dir_for(final_slug).exists() and not is_complete_discovery_skill(final_slug):
             remove_discovery_skill_dir(final_slug)
-        if platform.platform in {"zhihu", "jin10"}:
+        if platform.platform == "zhihu":
             entry = platform.posts_url
-        elif platform.platform in {"xiaohongshu", "reddit", "x", "weixin"}:
+        elif platform.platform in {"reddit", "x"}:
             entry = platform.entry_url
         else:
             entry = normalized_url
@@ -370,4 +353,10 @@ def write_skill_files(slug: str, files: dict[str, str]) -> Path:
     required = skill_dir / "scripts" / "discover.py"
     if not required.is_file():
         raise ValueError("缺少 scripts/discover.py")
+    try:
+        from onboarding.discovery_skill_catalog import write_discovery_skill_catalog
+
+        write_discovery_skill_catalog()
+    except Exception:
+        pass
     return skill_dir

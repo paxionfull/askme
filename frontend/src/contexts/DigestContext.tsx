@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  cancelBodiesJob,
   cancelSummarizeJob,
   fetchBodiesJobStatus,
   fetchCachedSummary,
@@ -29,6 +30,7 @@ import {
 } from "../api";
 import { getLlmConfigPayload, useSettings, type DefaultDays, normalizeDefaultDays } from "../hooks/useSettings";
 import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
+import { INDEX_RETENTION_DAYS } from "../utils/indexBuild";
 
 type SummaryPhase = "idle" | "loading_articles" | "generating";
 
@@ -36,6 +38,7 @@ export interface SummaryGroupOption {
   id: string;
   name: string;
   feedCount: number;
+  feedIds: string[];
   digestSkillId?: string | null;
 }
 
@@ -66,21 +69,23 @@ function notifySummarizeJobSync() {
 
 function buildSummaryGroupOptions(feeds: Feed[], groups: FeedGroup[]): SummaryGroupOption[] {
   const assigned = new Set(groups.flatMap((group) => group.feed_ids));
+  const ungroupedFeedIds = feeds.filter((feed) => !assigned.has(feed.id)).map((feed) => feed.id);
   const options: SummaryGroupOption[] = groups
     .map((group) => ({
       id: group.id,
       name: group.name,
       feedCount: group.feed_ids.length,
+      feedIds: [...group.feed_ids],
       digestSkillId: group.digest_skill_id,
     }))
     .filter((group) => group.feedCount > 0);
 
-  const ungroupedCount = feeds.filter((feed) => !assigned.has(feed.id)).length;
-  if (ungroupedCount > 0) {
+  if (ungroupedFeedIds.length > 0) {
     options.push({
       id: UNGROUPED_GROUP_ID,
       name: "未分组",
-      feedCount: ungroupedCount,
+      feedCount: ungroupedFeedIds.length,
+      feedIds: ungroupedFeedIds,
     });
   }
   return options;
@@ -163,9 +168,10 @@ interface DigestContextValue {
     cached_count?: number;
     fetched_count?: number;
   } | null>;
-  buildIndex: () => Promise<void>;
+  buildIndex: (feedIds?: string[]) => Promise<void>;
   startSummarize: () => Promise<void>;
   stopSummarize: () => void;
+  stopBodies: () => void;
   clearErrors: () => void;
 }
 
@@ -340,6 +346,21 @@ export function DigestProvider({ children }: { children: ReactNode }) {
 
   const applyBodiesDone = useCallback(
     async (status: ContentJobStatus, scoped: boolean) => {
+      if (status.status === "cancelled") {
+        const data = (status.result || null) as RecentArticlesResponse | null;
+        if (data && !scoped) {
+          setTruncated(data.truncated);
+          setMetaCount(data.meta_count ?? data.article_count);
+          setBodyCount(data.article_count);
+          setCachedCount(data.cached_count ?? 0);
+          setFetchedCount(data.fetched_count ?? 0);
+          if (data.article_count > 0) {
+            setBodiesLoadedForDays(days);
+          }
+        }
+        setLoadError("");
+        return data;
+      }
       if (status.status === "error") {
         if (!scoped) {
           setBodiesLoadedForDays(null);
@@ -500,10 +521,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     setLoadingIndex(false);
   }, [days]);
 
-  /** 索引按可选最大时间范围（近 3 天）维护；无新正文时按 0 篇增量处理 */
-  const INDEX_RETENTION_DAYS = 3;
-
-  const buildIndex = useCallback(async () => {
+  const buildIndex = useCallback(async (feedIds?: string[]) => {
     if (indexBuildInFlightRef.current) return;
 
     ++indexBuildGenerationRef.current;
@@ -515,9 +533,19 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     try {
       const llmConfig = getLlmConfigPayload();
       if (!llmConfig.embedding_model?.trim()) {
-        throw new Error("请先在设置页选择并保存 Embedding 模型");
+        throw new Error("请先在设置配置 Embedding 模型与 API Key");
       }
-      await startIndexJob(INDEX_RETENTION_DAYS, llmConfig);
+      const hasEmbeddingKey =
+        llmConfig.embedding_api_key?.trim() || llmConfig.api_key?.trim();
+      if (!hasEmbeddingKey) {
+        throw new Error("请先在设置配置 Embedding API Key（或配置对话模型 Key 以复用）");
+      }
+      const scopedIds = (feedIds ?? []).map((id) => id.trim()).filter(Boolean);
+      await startIndexJob(
+        INDEX_RETENTION_DAYS,
+        llmConfig,
+        scopedIds.length > 0 ? scopedIds : undefined,
+      );
       await watchIndexJob();
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "建立索引失败");
@@ -675,9 +703,18 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     void cancelSummarizeJob().catch(() => {});
   }, []);
 
+  const stopBodies = useCallback(() => {
+    void cancelBodiesJob().catch(() => {});
+  }, []);
+
   const startSummarize = useCallback(async () => {
     if (selectedGroupIds.length === 0) {
       setSummaryError("请先选择一个分组");
+      return;
+    }
+    const selected = summaryGroupOptions.find((group) => group.id === selectedGroupIds[0]);
+    if (!selected?.digestSkillId) {
+      setSummaryError("当前板块尚未设置整理规则，无法生成简报");
       return;
     }
     if (summarizeInFlightRef.current) {
@@ -795,6 +832,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     loadCachedSummary,
     resetSummarizeUi,
     selectedGroupIds,
+    summaryGroupOptions,
     watchSummarizeJob,
   ]);
 
@@ -885,6 +923,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         buildIndex,
         startSummarize,
         stopSummarize,
+        stopBodies,
         clearErrors,
       }}
     >

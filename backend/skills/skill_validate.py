@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 
-from paths import SKILLS_LIB, SKILLS_ROOT
+from paths import SKILLS_LIB
 
 VALIDATE_SCRIPT = SKILLS_LIB / "discovery_validate.py"
 if str(SKILLS_LIB) not in sys.path:
@@ -29,8 +29,6 @@ def run_validation_for_account(account: dict, *, min_items: int = 1) -> dict:
     from skills.skill_registry import platform_skill_slug
 
     slug = platform_skill_slug(platform) if platform else str(account.get("slug") or "")
-    if platform == "jin10":
-        slug = "jin10"
     with platform_account_scope(account):
         return run_validation(slug, min_items=min_items)
 

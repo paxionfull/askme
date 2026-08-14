@@ -50,6 +50,39 @@ from auth.credential_store import (
 MAX_BATCH_SIZE = 20
 DEFAULT_MAX_CONCURRENCY = 5
 RELOAD_DEBOUNCE_SECONDS = 1.5
+_DEBUG_LOG_PATH = "/Users/zhuyuyao/Documents/llm应用/askme/.cursor/debug-fed963.log"
+
+
+def _agent_log(
+    location: str,
+    message: str,
+    data: dict[str, Any],
+    *,
+    hypothesis_id: str,
+) -> None:
+    # region agent log
+    try:
+        import json
+        import time
+
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "sessionId": "fed963",
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "hypothesisId": hypothesis_id,
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # endregion
 
 ItemStatus = Literal[
     "queued",
@@ -94,6 +127,7 @@ class BatchItem:
     auth_slot: str | None = None
     login_url: str | None = None
     cookie_hint: str | None = None
+    group_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,6 +145,7 @@ class BatchItem:
             "auth_slot": self.auth_slot,
             "login_url": self.login_url,
             "cookie_hint": self.cookie_hint,
+            "group_id": self.group_id,
         }
 
 
@@ -131,7 +166,37 @@ def _user_facing_failure_message(exc: BaseException, *, is_platform: bool = Fals
     )
 
 
+def _user_facing_refresh_failure_message(exc: BaseException) -> str:
+    """首拉失败给用户看的话术（隐藏内部状态错误）。"""
+    text = str(exc).strip() or "首次拉取失败"
+    lowered = text.lower()
+    if "数据源已移除" in text or "skill 未装载" in text:
+        return (
+            "接入流程异常，未能完成首次拉取；半成品 skill 已清理，请稍后重试添加。"
+        )
+    if "name '" in lowered and "is not defined" in lowered:
+        return (
+            "接入后自动修复过程出错；半成品 skill 已清理，请稍后重试添加。"
+        )
+    if "首拉失败且自动修复异常" in text or "自动修复后仍拉取失败" in text:
+        return (
+            f"首次拉取未成功：{text}。"
+            "半成品 skill 已从技能库移除，可稍后重试或换一个入口 URL。"
+        )
+    return (
+        f"首次拉取失败：{text}。"
+        "半成品 skill 已清理；缺登录时会单独提示授权，否则请稍后重试。"
+    )
+
+
 def _mark_needs_auth(item: BatchItem, message: str, *, slot: str | None = None) -> None:
+    platform_match = detect_platform(item.entry_url)
+    if platform_match and not platform_match.requires_cookie:
+        item.status = "failed"
+        item.phase = "failed"
+        item.error = message
+        item.message = _user_facing_failure_message(Exception(message), is_platform=True)
+        return
     item.status = "needs_auth"
     item.phase = "needs_auth"
     resolved = (
@@ -172,6 +237,19 @@ def _mark_needs_auth(item: BatchItem, message: str, *, slot: str | None = None) 
     item.message = (
         f"需要登录授权（{meta.get('label') or item.auth_slot}）：请完成 Cookie 授权后重试。"
     )
+    # region agent log
+    _agent_log(
+        "source_onboarding_batch.py:_mark_needs_auth",
+        "marked needs_auth",
+        {
+            "entry_url": item.entry_url,
+            "slot": item.auth_slot,
+            "slot_configured": slot_configured(str(item.auth_slot or "")),
+            "message": message[:300],
+        },
+        hypothesis_id="B,E",
+    )
+    # endregion
 
 
 def _refresh_indicates_auth(refresh_result: dict[str, Any], entry_url: str, slug: str) -> str | None:
@@ -180,8 +258,25 @@ def _refresh_indicates_auth(refresh_result: dict[str, Any], entry_url: str, slug
     new_count = int(refresh_result.get("new_article_count") or 0)
     if article_count > 0 or new_count > 0:
         return None
+    platform_match = detect_platform(entry_url)
+    if platform_match and not platform_match.requires_cookie:
+        return None
     slot = resolve_slot_from_url(entry_url)
     if slot:
+        # region agent log
+        _agent_log(
+            "source_onboarding_batch.py:_refresh_indicates_auth",
+            "auth from dynamic/known slot mapping",
+            {
+                "entry_url": entry_url,
+                "slug": slug,
+                "slot": slot,
+                "article_count": article_count,
+                "new_count": new_count,
+            },
+            hypothesis_id="B,D",
+        )
+        # endregion
         return slot
     # source.yaml requires_cookie
     source_yaml = skill_dir_for(slug) / "source.yaml"
@@ -191,7 +286,36 @@ def _refresh_indicates_auth(refresh_result: dict[str, Any], entry_url: str, slug
             import re
 
             m = re.search(r"auth_slot:\s*([a-z0-9_-]+)", text, re.I)
-            return (m.group(1).lower() if m else slot) or "unknown"
+            resolved = (m.group(1).lower() if m else slot) or "unknown"
+            # region agent log
+            _agent_log(
+                "source_onboarding_batch.py:_refresh_indicates_auth",
+                "auth from source.yaml requires_cookie",
+                {
+                    "entry_url": entry_url,
+                    "slug": slug,
+                    "slot": resolved,
+                    "article_count": article_count,
+                    "new_count": new_count,
+                },
+                hypothesis_id="A,D",
+            )
+            # endregion
+            return resolved
+    # region agent log
+    _agent_log(
+        "source_onboarding_batch.py:_refresh_indicates_auth",
+        "no auth slot inferred",
+        {
+            "entry_url": entry_url,
+            "slug": slug,
+            "article_count": article_count,
+            "new_count": new_count,
+            "resolved_slot": slot,
+        },
+        hypothesis_id="D",
+    )
+    # endregion
     return None
 
 
@@ -209,31 +333,47 @@ def _empty_refresh_auth_decision(
     sync_runtime_cookies()
     cookie = get_cookie_for_slot(slot)
     if not cookie_satisfies_slot(slot, cookie):
-        return True, "未配置有效 Cookie，请完成登录授权后重试"
+        result = (True, "未配置有效 Cookie，请完成登录授权后重试")
+        # region agent log
+        _agent_log(
+            "source_onboarding_batch.py:_empty_refresh_auth_decision",
+            "empty refresh auth decision",
+            {
+                "slot": slot.strip().lower(),
+                "entry_url": entry_url,
+                "cookie_present": bool((cookie or "").strip()),
+                "cookie_satisfies": False,
+                "slot_configured": slot_configured(slot.strip().lower()),
+                "needs_auth": result[0],
+                "detail": result[1],
+            },
+            hypothesis_id="A,E",
+        )
+        # endregion
+        return result
 
     slot_id = slot.strip().lower()
-    if slot_id == "xiaohongshu":
-        try:
-            from auth.xiaohongshu_auth import verify_xiaohongshu_cookie
-
-            result = verify_xiaohongshu_cookie(cookie, probe_url=entry_url)
-            notes = int(result.get("notes_with_id") or 0)
-            nick = str(
-                result.get("profile_nickname") or result.get("nickname") or ""
-            ).strip()
-            if notes <= 0:
-                return (
-                    False,
-                    f"登录有效{f'（{nick}）' if nick else ''}，但主页暂未解析到笔记"
-                    "（常见原因：分享链接 xsec_token 过期，可稍后在库页刷新）",
-                )
-            return False, f"登录有效（{nick or '已登录'}），首拉暂无入库文章"
-        except ValueError as exc:
-            return True, str(exc)
-
     if not slot_configured(slot_id):
-        return True, "未配置有效 Cookie，请完成登录授权后重试"
-    return False, "授权已配置，首拉暂无文章（可稍后在库页刷新）"
+        result = (True, "未配置有效 Cookie，请完成登录授权后重试")
+    else:
+        result = (False, "授权已配置，首拉暂无文章（可稍后在库页刷新）")
+    # region agent log
+    _agent_log(
+        "source_onboarding_batch.py:_empty_refresh_auth_decision",
+        "empty refresh auth decision",
+        {
+            "slot": slot_id,
+            "entry_url": entry_url,
+            "cookie_present": bool((cookie or "").strip()),
+            "cookie_satisfies": cookie_satisfies_slot(slot_id, cookie),
+            "slot_configured": slot_configured(slot_id),
+            "needs_auth": result[0],
+            "detail": result[1],
+        },
+        hypothesis_id="A,E",
+    )
+    # endregion
+    return result
 
 
 def _apply_empty_refresh_outcome(
@@ -252,6 +392,20 @@ def _apply_empty_refresh_outcome(
             detail={**result_detail, "refresh": refresh_result, "needs_auth": True},
         )
         return
+    # region agent log
+    _agent_log(
+        "source_onboarding_batch.py:_apply_empty_refresh_outcome",
+        "marking done despite zero articles (cookie configured)",
+        {
+            "entry_url": item.entry_url,
+            "slot": slot,
+            "feed_id": item.feed_id,
+            "detail": detail,
+            "article_count": int(refresh_result.get("article_count") or 0),
+        },
+        hypothesis_id="A",
+    )
+    # endregion
     item.status = "done"
     item.phase = "done"
     base = str(refresh_result.get("message") or f"已接入 {item.feed_id}")
@@ -262,7 +416,10 @@ def _apply_empty_refresh_outcome(
     )
 
 
-def _exception_needs_auth(exc: BaseException) -> dict[str, Any] | None:
+def _exception_needs_auth(exc: BaseException, *, entry_url: str = "") -> dict[str, Any] | None:
+    platform_match = detect_platform(entry_url) if entry_url else None
+    if platform_match and not platform_match.requires_cookie:
+        return None
     info = classify_exception_as_auth(exc)
     if not info:
         return None
@@ -330,12 +487,9 @@ def _refresh_reused_platform_display_name(item: BatchItem) -> str | None:
 
 
 async def _refresh_onboarded_feed(feed_client, feed_id: str) -> dict[str, Any]:
-    feed_client.ensure_feed_visible(feed_id)
-    # 首拉用近 3 天：默认「今天」对小红书等更新频率不均的源过窄，易得到 0 篇
-    # 微信：限制页数并加大 page size，减少 list_ex 次数
-    if str(feed_id).startswith("website:weixin:"):
-        return await feed_client.refresh_feed(feed_id, days=3, max_pages=3, per=20)
-    return await feed_client.refresh_feed(feed_id, days=3)
+    from onboarding.source_onboarding_refresh import refresh_onboarded_feed
+
+    return await refresh_onboarded_feed(feed_client, feed_id)
 
 
 @dataclass
@@ -350,6 +504,8 @@ class OnboardingBatch:
     group_id: str | None = None
     auto_repair: bool = True
     _task: asyncio.Task | None = field(default=None, repr=False)
+    _sem: asyncio.Semaphore | None = field(default=None, repr=False)
+    _wake: asyncio.Event | None = field(default=None, repr=False)
 
     @property
     def total(self) -> int:
@@ -424,6 +580,7 @@ class OnboardingBatch:
 
 _batches: dict[str, OnboardingBatch] = {}
 _batch_lock = Lock()
+_active_batch_id: str | None = None
 _reload_task: asyncio.Task | None = None
 _reload_lock = asyncio.Lock()
 
@@ -549,12 +706,18 @@ async def _run_item(
             )
             item.job_id = session.job_id
             try:
-                display_name = _refresh_reused_platform_display_name(item)
+                from onboarding.async_blocking import run_blocking
+
+                display_name = await run_blocking(
+                    _refresh_reused_platform_display_name, item
+                )
+                if batch.cancelled or session.cancelled:
+                    raise OnboardingCancelled("接入任务已取消")
                 if display_name:
                     session.name = display_name
                     item.message = f"数据源已存在，已更新显示名为「{display_name}」，正在刷新…"
                     session.log("display_name", name=display_name)
-                attach_msg = _attach_existing_feed(feed_id=feed_id, group_id=batch.group_id)
+                attach_msg = _attach_existing_feed(feed_id=feed_id, group_id=item.group_id or batch.group_id)
                 sync_runtime_cookies()
                 refresh_result: dict[str, Any] | None = None
                 async for refresh_event in refresh_with_auto_repair(
@@ -613,7 +776,7 @@ async def _run_item(
                 if batch.reload:
                     await _schedule_reload(feed_client)
             except Exception as exc:
-                auth = _exception_needs_auth(exc)
+                auth = _exception_needs_auth(exc, entry_url=item.entry_url)
                 if auth:
                     _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
                     session.finish(
@@ -650,7 +813,7 @@ async def _run_item(
                 if kind == "result":
                     data = event.get("data") or {}
                     item.feed_id = str(data.get("feed_id") or f"website:{item.slug}")
-                    _assign_feed_group(item.feed_id, batch.group_id)
+                    _assign_feed_group(item.feed_id, item.group_id or batch.group_id)
                     try:
                         refresh_result: dict[str, Any] | None = None
                         async for refresh_event in refresh_with_auto_repair(
@@ -711,7 +874,7 @@ async def _run_item(
                         if batch.reload:
                             await _schedule_reload(feed_client)
                     except FeedError as exc:
-                        auth = _exception_needs_auth(exc)
+                        auth = _exception_needs_auth(exc, entry_url=item.entry_url)
                         if auth:
                             _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
                             session.finish(
@@ -724,13 +887,11 @@ async def _run_item(
                         item.status = "failed"
                         item.phase = "refresh_failed"
                         item.error = str(exc)
-                        item.message = (
-                            f"skill 已写入，但首次拉取失败（适配器/网络）：{exc}。"
-                            "缺登录时会提示授权；否则请检查 discovery 实现或稍后重试。"
-                        )
+                        item.message = _user_facing_refresh_failure_message(exc)
+                        session.cleanup_partial_skill(feed_id=item.feed_id)
                         session.finish(
                             success=False,
-                            detail={**data, "refresh_error": str(exc)},
+                            detail={**data, "refresh_error": str(exc), "cleaned": True},
                         )
                         if batch.reload:
                             await _schedule_reload(feed_client)
@@ -745,16 +906,17 @@ async def _run_item(
                     raise OnboardingCancelled("接入已取消")
                 item.status = "failed"
                 item.error = "Agent 未返回结果"
-                item.message = item.error
-                session.finish(success=False, detail={"error": item.error})
+                item.message = "接入未完成（Agent 未返回结果）；半成品已清理，请重试。"
+                session.cleanup_partial_skill(feed_id=item.feed_id)
+                session.finish(success=False, detail={"error": item.error, "cleaned": True})
         except OnboardingCancelled:
             item.status = "cancelled"
             item.phase = "cancelled"
             item.message = "已取消"
-            session.cleanup_partial_skill()
+            session.cleanup_partial_skill(feed_id=item.feed_id)
             session.finish(success=False, detail={"cancelled": True})
         except LLMError as exc:
-            auth = _exception_needs_auth(exc)
+            auth = _exception_needs_auth(exc, entry_url=item.entry_url)
             is_platform = bool(detect_platform(item.entry_url))
             if auth:
                 _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
@@ -766,10 +928,10 @@ async def _run_item(
                 item.error = str(exc)
                 item.message = _user_facing_failure_message(exc, is_platform=is_platform)
                 session.log("error", detail=str(exc))
-                session.cleanup_partial_skill()
-                session.finish(success=False, detail={"error": str(exc)})
+                session.cleanup_partial_skill(feed_id=item.feed_id)
+                session.finish(success=False, detail={"error": str(exc), "cleaned": True})
         except Exception as exc:
-            auth = _exception_needs_auth(exc)
+            auth = _exception_needs_auth(exc, entry_url=item.entry_url)
             is_platform = bool(detect_platform(item.entry_url))
             if auth:
                 _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
@@ -780,22 +942,73 @@ async def _run_item(
                 item.error = str(exc) or "接入失败"
                 item.message = _user_facing_failure_message(exc, is_platform=is_platform)
                 session.log("error", detail=item.error)
-                session.cleanup_partial_skill()
-                session.finish(success=False, detail={"error": item.error})
+                session.cleanup_partial_skill(feed_id=item.feed_id)
+                session.finish(success=False, detail={"error": item.error, "cleaned": True})
         finally:
             unregister_session(session.job_id)
 
 
 async def _run_batch(batch: OnboardingBatch, feed_client) -> None:
-    queued = [item for item in batch.items if item.status == "queued"]
-    sem = asyncio.Semaphore(batch.max_concurrency)
+    """共享并发池调度；中途 append 的 queued item 会继续被派发。"""
+    global _active_batch_id
+    batch._sem = asyncio.Semaphore(batch.max_concurrency)
+    batch._wake = asyncio.Event()
+    spawned: set[int] = set()
+    tasks: set[asyncio.Task] = set()
+
+    def _spawn_queued() -> None:
+        for item in batch.items:
+            if item.status != "queued":
+                continue
+            key = id(item)
+            if key in spawned:
+                continue
+            spawned.add(key)
+            tasks.add(
+                asyncio.create_task(
+                    _run_item(batch, item, sem=batch._sem, feed_client=feed_client)
+                )
+            )
+
     try:
-        await asyncio.gather(
-            *[
-                _run_item(batch, item, sem=sem, feed_client=feed_client)
-                for item in queued
-            ]
-        )
+        while True:
+            if batch.cancelled:
+                for item in batch.items:
+                    if item.status == "queued":
+                        item.status = "cancelled"
+                        item.message = "已取消"
+                for task in list(tasks):
+                    if not task.done():
+                        task.cancel()
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                break
+
+            _spawn_queued()
+            live = {task for task in tasks if not task.done()}
+            unspawned = any(
+                item.status == "queued" and id(item) not in spawned for item in batch.items
+            )
+            if unspawned:
+                continue
+            if not live:
+                break
+
+            assert batch._wake is not None
+            batch._wake.clear()
+            wake_task = asyncio.create_task(batch._wake.wait())
+            try:
+                await asyncio.wait(
+                    live | {wake_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                if not wake_task.done():
+                    wake_task.cancel()
+                    try:
+                        await wake_task
+                    except asyncio.CancelledError:
+                        pass
     finally:
         if batch.reload and batch.completed > 0:
             await _schedule_reload(feed_client)
@@ -810,11 +1023,98 @@ async def _run_batch(batch: OnboardingBatch, feed_client) -> None:
             batch.status = "needs_auth"
         else:
             batch.status = "done"
+        with _batch_lock:
+            if _active_batch_id == batch.batch_id:
+                _active_batch_id = None
+        batch._wake = None
 
 
 def get_batch(batch_id: str) -> OnboardingBatch | None:
     with _batch_lock:
         return _batches.get(batch_id)
+
+
+def get_active_batch() -> OnboardingBatch | None:
+    with _batch_lock:
+        if not _active_batch_id:
+            return None
+        batch = _batches.get(_active_batch_id)
+        if batch is None or batch.status != "running" or batch.cancelled:
+            return None
+        return batch
+
+
+def _existing_identity_keys(batch: OnboardingBatch) -> set[str]:
+    keys: set[str] = set()
+    for item in batch.items:
+        url = (item.entry_url or "").strip()
+        if not url:
+            continue
+        try:
+            keys.add(source_identity_key(url))
+        except Exception:
+            keys.add(url)
+    return keys
+
+
+async def append_to_batch(
+    batch: OnboardingBatch,
+    entry_urls: list[str],
+    *,
+    feed_client,
+    group_id: str | None = None,
+) -> OnboardingBatch:
+    if batch.status != "running" or batch.cancelled or batch._wake is None:
+        raise ValueError("当前接入任务已结束，请重试")
+
+    urls = parse_entry_urls(entry_urls)
+    if not urls:
+        raise ValueError("请至少提供一个有效链接")
+
+    seen_slugs = {item.slug for item in batch.items if item.slug}
+    existing_keys = _existing_identity_keys(batch)
+    gid = (group_id or "").strip() or None
+
+    for url in urls:
+        try:
+            key = source_identity_key(url)
+        except Exception:
+            key = url
+        if key in existing_keys:
+            batch.items.append(
+                BatchItem(
+                    entry_url=url,
+                    status="skipped",
+                    skip_reason="已在当前接入任务中",
+                    message="已在当前接入任务中",
+                    group_id=gid,
+                )
+            )
+            continue
+        item = _prepare_item(url, seen_slugs)
+        item.group_id = gid
+        if item.entry_url:
+            try:
+                existing_keys.add(source_identity_key(item.entry_url))
+            except Exception:
+                existing_keys.add(item.entry_url)
+        batch.items.append(item)
+
+    needs_cursor = any(
+        item.status == "queued"
+        and not item.reuse_existing
+        and _needs_cursor_agent(item.entry_url)
+        for item in batch.items
+    )
+    if needs_cursor and not load_cursor_api_key():
+        raise LLMError(
+            "请先在设置页配置 Cursor API Key（Dashboard → Integrations）",
+            status_code=400,
+        )
+
+    if batch._wake is not None:
+        batch._wake.set()
+    return batch
 
 
 async def start_batch(
@@ -827,12 +1127,31 @@ async def start_batch(
     group_id: str | None = None,
     auto_repair: bool = True,
 ) -> OnboardingBatch:
+    global _active_batch_id
+
+    active = get_active_batch()
+    if active is not None:
+        try:
+            return await append_to_batch(
+                active,
+                entry_urls,
+                feed_client=feed_client,
+                group_id=group_id,
+            )
+        except ValueError as exc:
+            if "已结束" not in str(exc):
+                raise
+            # 活跃 batch 刚收尾：继续走新建
+
     urls = parse_entry_urls(entry_urls)
     if not urls:
         raise ValueError("请至少提供一个有效链接")
 
     seen_slugs: set[str] = set()
+    gid = (group_id or "").strip() or None
     items = [_prepare_item(url, seen_slugs) for url in urls]
+    for item in items:
+        item.group_id = gid
     queued = [item for item in items if item.status == "queued"]
 
     if queued and not load_cursor_api_key():
@@ -849,15 +1168,19 @@ async def start_batch(
         auto_validate=auto_validate,
         reload=reload,
         max_concurrency=min(10, max(1, max_concurrency or DEFAULT_MAX_CONCURRENCY)),
-        group_id=(group_id or "").strip() or None,
+        group_id=gid,
         auto_repair=auto_repair,
     )
 
     with _batch_lock:
         _batches[batch.batch_id] = batch
+        _active_batch_id = batch.batch_id
 
     if not queued:
         batch.status = "done"
+        with _batch_lock:
+            if _active_batch_id == batch.batch_id:
+                _active_batch_id = None
         return batch
 
     batch._task = asyncio.create_task(_run_batch(batch, feed_client))
@@ -865,11 +1188,17 @@ async def start_batch(
 
 
 async def cancel_batch(batch_id: str) -> bool:
+    global _active_batch_id
+
     batch = get_batch(batch_id)
     if batch is None or batch.status != "running":
         return False
 
     batch.cancelled = True
+    # 立刻腾出「活跃 batch」槽位，避免终止后新接入仍挂到旧任务上
+    with _batch_lock:
+        if _active_batch_id == batch.batch_id:
+            _active_batch_id = None
     for item in batch.items:
         if item.status == "queued":
             item.status = "cancelled"
@@ -879,4 +1208,6 @@ async def cancel_batch(batch_id: str) -> bool:
             from onboarding.source_onboarding_log import cancel_job
 
             cancel_job(item.job_id)
+    if batch._wake is not None:
+        batch._wake.set()
     return True

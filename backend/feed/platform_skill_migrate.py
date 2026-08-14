@@ -6,20 +6,18 @@ import re
 import shutil
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 
 from feed.feed_registry import PLATFORM_IDS, feed_registry
-from skills.skill_registry import PLATFORM_SKILL_SLUGS, SKILLS_ROOT
+from paths import DISCOVERY_SKILLS_ROOT
+from skills.skill_registry import PLATFORM_SKILL_SLUGS
 
 _FEED_ID_RE = re.compile(r'^FEED_ID\s*=\s*["\']([^"\']+)["\']', re.M)
 _CONST_RE = {
     "FEED_ID": re.compile(r'^FEED_ID\s*=\s*["\']([^"\']+)["\']', re.M),
     "USER_ID": re.compile(r'^USER_ID\s*=\s*["\']([^"\']*)["\']', re.M),
     "USER_TYPE": re.compile(r'^USER_TYPE\s*=\s*["\']([^"\']*)["\']', re.M),
-    "FAKEID": re.compile(r'^FAKEID\s*=\s*["\']([^"\']*)["\']', re.M),
     "SCREEN_NAME": re.compile(r'^SCREEN_NAME\s*=\s*["\']([^"\']*)["\']', re.M),
     "SUBREDDIT": re.compile(r'^SUBREDDIT\s*=\s*["\']([^"\']*)["\']', re.M),
-    "XSEC_TOKEN": re.compile(r'^XSEC_TOKEN\s*=\s*["\']([^"\']*)["\']', re.M),
     "ENTRY_URL": re.compile(r'^ENTRY_URL\s*=\s*["\']([^"\']*)["\']', re.M),
     "PAGE_URL": re.compile(r'^PAGE_URL\s*=\s*["\']([^"\']*)["\']', re.M),
     "mpName": re.compile(r'["\']mpName["\']\s*:\s*["\']([^"\']*)["\']'),
@@ -58,7 +56,7 @@ def _detect_platform_from_feed_id(feed_id: str) -> str | None:
         if platform == "reddit" and len(parts) == 2:
             # website:reddit 可能是 indiehackers 兼容 id
             return "reddit"
-        if platform in {"weixin", "xiaohongshu", "x"} and len(parts) < 3:
+        if platform == "x" and len(parts) < 3:
             return None
         return platform
     return None
@@ -71,8 +69,6 @@ def _account_from_skill_dir(skill_dir: Path) -> dict[str, Any] | None:
     slug = name[: -len("-discovery")]
     # 跳过平台级 skill 与非账号目录
     if slug.endswith("-platform") or slug in PLATFORM_SKILL_SLUGS.values():
-        return None
-    if slug in {"jin10"}:
         return None
 
     discover = skill_dir / "scripts" / "discover.py"
@@ -100,10 +96,8 @@ def _account_from_skill_dir(skill_dir: Path) -> dict[str, Any] | None:
         return None
 
     account_key = (
-        _yaml_field(source_yaml, "fakeid")
-        or _yaml_field(source_yaml, "user_id")
+        _yaml_field(source_yaml, "user_id")
         or _yaml_field(source_yaml, "subreddit")
-        or _const(text, "FAKEID")
         or _const(text, "USER_ID")
         or _const(text, "SCREEN_NAME")
         or _const(text, "SUBREDDIT")
@@ -127,9 +121,6 @@ def _account_from_skill_dir(skill_dir: Path) -> dict[str, Any] | None:
         or ""
     )
     user_type = _yaml_field(source_yaml, "user_type") or _const(text, "USER_TYPE") or ""
-    xsec = _yaml_field(source_yaml, "xsec_token") or _const(text, "XSEC_TOKEN")
-    if not xsec and entry and "xsec_token=" in entry:
-        xsec = (parse_qs(urlparse(entry).query).get("xsec_token") or [""])[0]
 
     posts = entry
     if platform == "zhihu" and entry and not entry.rstrip("/").endswith("/posts"):
@@ -148,7 +139,6 @@ def _account_from_skill_dir(skill_dir: Path) -> dict[str, Any] | None:
             f"/api/v4/members/{account_key}/articles" if platform == "zhihu" else ""
         ),
         "slug": slug,
-        "xsec_token": xsec,
         "_skill_dir": str(skill_dir),
     }
 
@@ -158,10 +148,10 @@ def migrate_per_user_platform_skills(*, delete_dirs: bool = True) -> dict[str, A
     migrated: list[str] = []
     skipped: list[str] = []
     deleted: list[str] = []
-    if not SKILLS_ROOT.is_dir():
+    if not DISCOVERY_SKILLS_ROOT.is_dir():
         return {"migrated": [], "skipped": [], "deleted": []}
 
-    for skill_dir in sorted(SKILLS_ROOT.iterdir()):
+    for skill_dir in sorted(DISCOVERY_SKILLS_ROOT.iterdir()):
         if not skill_dir.is_dir() or not skill_dir.name.endswith("-discovery"):
             continue
         account = _account_from_skill_dir(skill_dir)

@@ -118,10 +118,7 @@ export default function SkillDetailModal({
             ) : null}
           </h2>
           {detail ? (
-            <p className="ui-modal-desc">
-              {detail.description || "无描述"}
-              {detail.path ? ` · ${detail.path}` : ""}
-            </p>
+            detail.path ? <p className="ui-modal-desc">{detail.path}</p> : null
           ) : null}
         </div>
 

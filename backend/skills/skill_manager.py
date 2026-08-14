@@ -9,7 +9,7 @@ from pathlib import Path
 from chat.chat_skill_registry import CHAT_SKILL_ID, get_chat_skill as load_chat_skill, save_chat_skill as persist_chat_skill
 from digest.digest_skill_registry import list_digest_skills
 from skills.skill_md import parse_skill_frontmatter, skill_meta_from_md
-from skills.skill_registry import SKILLS_ROOT
+from paths import DISCOVERY_SKILLS_ROOT, ONBOARDING_SKILLS_ROOT, PROJECT_ROOT
 TEXT_SKILL_SUFFIXES = {".md", ".yaml", ".yml", ".py", ".txt", ".json"}
 MAX_SKILL_FILE_BYTES = 512_000
 _SAFE_SKILL_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
@@ -61,12 +61,12 @@ def _collect_skill_files(skill_dir: Path) -> list[dict[str, str]]:
 
 def _skill_dir_for_discovery(skill_id: str) -> Path:
     skill_id = _validate_skill_id(skill_id)
-    return SKILLS_ROOT / f"{skill_id}-discovery"
+    return DISCOVERY_SKILLS_ROOT / f"{skill_id}-discovery"
 
 
 def _skill_dir_for_other(skill_id: str) -> Path:
     skill_id = _validate_skill_id(skill_id)
-    return SKILLS_ROOT / skill_id
+    return ONBOARDING_SKILLS_ROOT / skill_id
 
 
 def _extract_feed_id(skill_dir: Path) -> str | None:
@@ -108,6 +108,12 @@ def delete_discovery_skill(skill_id: str) -> dict[str, str | None]:
     from skills.skill_registry import clear_loaded_skill_modules
 
     clear_loaded_skill_modules()
+    try:
+        from onboarding.discovery_skill_catalog import write_discovery_skill_catalog
+
+        write_discovery_skill_catalog()
+    except Exception:
+        pass
     return {"id": skill_id, "feed_id": feed_id}
 
 
@@ -126,10 +132,10 @@ def delete_discovery_skill_by_feed_id(feed_id: str) -> dict[str, str | None]:
         clear_loaded_skill_modules()
         return {"id": None, "feed_id": target}
 
-    if not SKILLS_ROOT.is_dir():
+    if not DISCOVERY_SKILLS_ROOT.is_dir():
         raise ValueError("未找到对应的 discovery skill")
 
-    for skill_dir in sorted(SKILLS_ROOT.iterdir()):
+    for skill_dir in sorted(DISCOVERY_SKILLS_ROOT.iterdir()):
         if not skill_dir.is_dir() or not skill_dir.name.endswith("-discovery"):
             continue
         resolved_feed_id = _extract_feed_id(skill_dir)
@@ -188,7 +194,7 @@ def get_discovery_skill_detail(skill_id: str) -> dict:
         "builtin": True,
         "readonly": True,
         "deletable": True,
-        "path": str(skill_dir.relative_to(SKILLS_ROOT.parent)),
+        "path": str(skill_dir.relative_to(PROJECT_ROOT)),
         "skill_md": skill_md,
         "source_yaml": source_yaml,
         "files": _collect_skill_files(skill_dir),
@@ -220,7 +226,7 @@ def get_other_skill_detail(skill_id: str) -> dict:
         "builtin": True,
         "readonly": True,
         "deletable": True,
-        "path": str(skill_dir.relative_to(SKILLS_ROOT.parent)),
+        "path": str(skill_dir.relative_to(PROJECT_ROOT)),
         "skill_md": skill_md,
         "source_yaml": source_yaml,
         "files": _collect_skill_files(skill_dir),
@@ -229,15 +235,16 @@ def get_other_skill_detail(skill_id: str) -> dict:
 
 def list_discovery_skills() -> list[dict]:
     items: list[dict] = []
-    if not SKILLS_ROOT.is_dir():
+    if not DISCOVERY_SKILLS_ROOT.is_dir():
         return items
-    for skill_dir in sorted(SKILLS_ROOT.iterdir()):
+    for skill_dir in sorted(DISCOVERY_SKILLS_ROOT.iterdir()):
         if not skill_dir.is_dir() or not skill_dir.name.endswith("-discovery"):
             continue
         slug = skill_dir.name[: -len("-discovery")]
         skill_md_path = skill_dir / "SKILL.md"
         source_yaml = skill_dir / "source.yaml"
         fm_name, description, _ = _skill_md_meta(skill_md_path, fallback_id=slug)
+        feed_id = _extract_feed_id(skill_dir) or f"website:{slug}"
         items.append(
             {
                 "id": slug,
@@ -247,8 +254,9 @@ def list_discovery_skills() -> list[dict]:
                 "builtin": True,
                 "readonly": True,
                 "deletable": True,
-                "path": str(skill_dir.relative_to(SKILLS_ROOT.parent)),
+                "path": str(skill_dir.relative_to(PROJECT_ROOT)),
                 "has_source_yaml": source_yaml.is_file(),
+                "feed_id": feed_id,
             }
         )
     return items
@@ -256,9 +264,9 @@ def list_discovery_skills() -> list[dict]:
 
 def list_other_skills() -> list[dict]:
     items: list[dict] = []
-    if not SKILLS_ROOT.is_dir():
+    if not ONBOARDING_SKILLS_ROOT.is_dir():
         return items
-    for skill_dir in sorted(SKILLS_ROOT.iterdir()):
+    for skill_dir in sorted(ONBOARDING_SKILLS_ROOT.iterdir()):
         if not skill_dir.is_dir():
             continue
         name = skill_dir.name
@@ -280,7 +288,7 @@ def list_other_skills() -> list[dict]:
                 "builtin": True,
                 "readonly": True,
                 "deletable": True,
-                "path": str(skill_dir.relative_to(SKILLS_ROOT.parent)),
+                "path": str(skill_dir.relative_to(PROJECT_ROOT)),
             }
         )
     return items

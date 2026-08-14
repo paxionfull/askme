@@ -45,10 +45,6 @@ def _normalize_article_url(url: str) -> str:
         scheme = parsed.scheme.lower()
         netloc = parsed.netloc.lower()
         path = parsed.path.rstrip("/") or "/"
-        query = parsed.query or ""
-        # 微信公众号列表链身份在 query（__biz/mid/idx/sn），去掉 query 会把全部收成 /s
-        if "mp.weixin.qq.com" in netloc and path == "/s" and query:
-            return urlunparse((scheme, netloc, path, "", query, ""))
         return urlunparse((scheme, netloc, path, "", "", ""))
     except ValueError:
         return raw
@@ -393,7 +389,7 @@ class ArticleService:
         batches = await asyncio.gather(*[_articles_for_feed(feed) for feed in feeds])
         all_articles = [article for batch in batches for article in batch]
         all_articles.sort(key=lambda item: item.get("published_at", ""), reverse=True)
-        # 拉正文时不要跨源去重：否则同题转载/微信 query URL 会被丢掉，侧栏仍显示无正文
+        # 拉正文时不要跨源去重：否则同题转载会被丢掉，侧栏仍显示无正文
         return _dedupe_articles(all_articles) if dedupe else all_articles
 
     async def _collect_list_meta(
@@ -444,6 +440,7 @@ class ArticleService:
         feed_articles: list[dict],
         *,
         sem: asyncio.Semaphore,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> tuple[list[dict], int, int]:
         enriched: list[dict] = []
         need_network: list[dict] = []
@@ -451,6 +448,8 @@ class ArticleService:
         known_body_ids = self.client.body_store.body_ids_with_text(feed_id)
 
         for article in feed_articles:
+            if is_cancelled and is_cancelled():
+                raise asyncio.CancelledError()
             article_id = article.get("id", "")
             if article_id and article_id in known_body_ids:
                 cached = self.client.get_cached_body(feed_id, article_id)
@@ -468,12 +467,16 @@ class ArticleService:
 
         async def _fetch_one(article: dict) -> dict:
             async with sem:
+                if is_cancelled and is_cancelled():
+                    raise asyncio.CancelledError()
                 content_html = ""
                 plain_text = ""
                 last_error = ""
                 last_raised = False
                 # 偶发超时/空正文：最多再试 1 次；异常失败写入 fetch_error，避免看起来像「从未拉取」
                 for attempt in range(2):
+                    if is_cancelled and is_cancelled():
+                        raise asyncio.CancelledError()
                     last_raised = False
                     try:
                         content_html, plain_text = await self._fetch_and_persist_body(
@@ -482,6 +485,8 @@ class ArticleService:
                         if str(plain_text).strip():
                             break
                         last_error = "正文为空"
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as exc:
                         last_raised = True
                         content_html = ""
@@ -515,7 +520,29 @@ class ArticleService:
                     "plain_text": plain_text,
                 }
 
-        fetched_results = await asyncio.gather(*[_fetch_one(article) for article in need_network])
+        fetch_tasks = [
+            asyncio.create_task(_fetch_one(article)) for article in need_network
+        ]
+        fetched_results: list[dict] = []
+        try:
+            for done in asyncio.as_completed(fetch_tasks):
+                if is_cancelled and is_cancelled():
+                    for task in fetch_tasks:
+                        if not task.done():
+                            task.cancel()
+                    raise asyncio.CancelledError()
+                try:
+                    fetched_results.append(await done)
+                except asyncio.CancelledError:
+                    for task in fetch_tasks:
+                        if not task.done():
+                            task.cancel()
+                    raise
+        except asyncio.CancelledError:
+            for task in fetch_tasks:
+                if not task.done():
+                    task.cancel()
+            raise
         fetched_count = sum(
             1 for item in fetched_results if str(item.get("plain_text", "")).strip()
         )
@@ -539,6 +566,7 @@ class ArticleService:
         self,
         articles: list[dict],
         on_progress: Callable[[int, int, int, int, str], Awaitable[None]] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> tuple[list[dict], int, int]:
         if not articles:
             return [], 0, 0
@@ -550,7 +578,12 @@ class ArticleService:
         sem = asyncio.Semaphore(self._body_fetch_concurrency())
 
         async def _enrich_one(feed_id: str, feed_articles: list[dict]):
-            return await self._enrich_feed_articles(feed_id, feed_articles, sem=sem)
+            return await self._enrich_feed_articles(
+                feed_id,
+                feed_articles,
+                sem=sem,
+                is_cancelled=is_cancelled,
+            )
 
         enriched: list[dict] = []
         cached_total = 0
@@ -563,12 +596,38 @@ class ArticleService:
         total_feeds = len(tasks)
         completed_feeds = 0
 
-        for done in asyncio.as_completed(tasks):
-            completed_feeds += 1
-            feed_name = ""
-            try:
-                feed_enriched, cached_count, fetched_count = await done
-            except Exception:
+        try:
+            for done in asyncio.as_completed(tasks):
+                if is_cancelled and is_cancelled():
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    raise asyncio.CancelledError()
+                completed_feeds += 1
+                feed_name = ""
+                try:
+                    feed_enriched, cached_count, fetched_count = await done
+                except asyncio.CancelledError:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    raise
+                except Exception:
+                    if on_progress:
+                        await on_progress(
+                            completed_feeds,
+                            total_feeds,
+                            cached_total,
+                            fetched_total,
+                            feed_name,
+                        )
+                    continue
+
+                enriched.extend(feed_enriched)
+                cached_total += cached_count
+                fetched_total += fetched_count
+                if feed_enriched:
+                    feed_name = str(feed_enriched[0].get("feed_name", ""))
                 if on_progress:
                     await on_progress(
                         completed_feeds,
@@ -577,21 +636,11 @@ class ArticleService:
                         fetched_total,
                         feed_name,
                     )
-                continue
-
-            enriched.extend(feed_enriched)
-            cached_total += cached_count
-            fetched_total += fetched_count
-            if feed_enriched:
-                feed_name = str(feed_enriched[0].get("feed_name", ""))
-            if on_progress:
-                await on_progress(
-                    completed_feeds,
-                    total_feeds,
-                    cached_total,
-                    fetched_total,
-                    feed_name,
-                )
+        except asyncio.CancelledError:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            raise
 
         enriched.sort(key=lambda item: item.get("published_at", ""), reverse=True)
         return enriched, cached_total, fetched_total
@@ -632,7 +681,10 @@ class ArticleService:
         enrich: bool = False,
         list_limit: int | None = None,
         on_progress: Callable[[int, int, int, int, str], Awaitable[None]] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> dict:
+        if is_cancelled and is_cancelled():
+            raise asyncio.CancelledError()
         if list_limit and list_limit > 0:
             meta = await self._collect_list_meta(
                 feed_ids, limit=list_limit, days=days, dedupe=not enrich
@@ -642,9 +694,12 @@ class ArticleService:
         meta_count = len(meta)
 
         if enrich:
+            if is_cancelled and is_cancelled():
+                raise asyncio.CancelledError()
             enriched, cached_count, fetched_count = await self._enrich_with_content_progress(
                 meta,
                 on_progress=on_progress,
+                is_cancelled=is_cancelled,
             )
             articles = _articles_with_body(enriched)
             context_text, truncated = self._build_context(articles, days=days)

@@ -441,31 +441,12 @@ function normalizeUrl(url: string): string {
   }
 }
 
-function extractWeixinArticleId(url: string): string | null {
-  const match = /mp\.weixin\.qq\.com\/s\/([^/?#]+)/i.exec(url);
-  return match?.[1] ?? null;
-}
-
 function buildRefLookup(refs: ArticleRef[]) {
   const byUrl = new Map<string, ArticleRef>();
   const byTitle = new Map<string, ArticleRef>();
-  const byWeixinId = new Map<string, ArticleRef>();
   for (const ref of refs) {
     if (ref.url) {
       byUrl.set(normalizeUrl(ref.url), ref);
-      const weixinId = extractWeixinArticleId(ref.url);
-      if (weixinId) {
-        byWeixinId.set(weixinId, ref);
-      }
-      const weixinIdFromArticle = extractWeixinArticleId(
-        `https://mp.weixin.qq.com/s/${ref.article_id}`,
-      );
-      if (weixinIdFromArticle) {
-        byWeixinId.set(weixinIdFromArticle, ref);
-      }
-    }
-    if (ref.article_id && ref.feed_id.startsWith("MP_")) {
-      byWeixinId.set(ref.article_id, ref);
     }
     if (ref.title) {
       byTitle.set(ref.title.trim(), ref);
@@ -475,11 +456,6 @@ function buildRefLookup(refs: ArticleRef[]) {
     if (href) {
       const match = byUrl.get(normalizeUrl(href));
       if (match) return match;
-      const weixinId = extractWeixinArticleId(href);
-      if (weixinId) {
-        const byWx = byWeixinId.get(weixinId);
-        if (byWx) return byWx;
-      }
     }
     const title = extractLinkText(children);
     if (title) {

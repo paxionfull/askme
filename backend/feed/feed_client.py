@@ -54,11 +54,59 @@ class FeedClient:
             self._feeds = feeds
         else:
             self._feeds = _build_feeds(self.store)
+            self.sync_website_skill_visibility()
 
     def reload_skills(self) -> int:
         reload_skill_adapters()
         self._feeds = _build_feeds(self.store)
+        self.sync_website_skill_visibility()
+        try:
+            from onboarding.discovery_skill_catalog import write_discovery_skill_catalog
+
+            write_discovery_skill_catalog()
+        except Exception:
+            pass
         return len(self._feeds)
+
+    def sync_website_skill_visibility(self) -> int:
+        """网站类内置 skill 进技能库，但不自动进入用户源。
+
+        - 一次性迁移：把历史上自动进源的网站类 skill 全部 hide，并从分组移除。
+        - 之后仅对新出现的 website feed_id 默认 hide。
+        - 用户通过「添加源」unhide 后才会重新出现在源列表。
+        """
+        adapters = load_skill_adapters()
+        current_ids: set[str] = set()
+        for adapter in adapters:
+            feed_id = str(getattr(adapter, "FEED_ID", "") or "").strip()
+            if feed_id:
+                current_ids.add(feed_id)
+
+        hidden_count = 0
+        if not feed_registry.website_skills_detached_v1:
+            for feed_id in sorted(current_ids):
+                # hide_feed 会同时从分组移除
+                if not feed_registry.is_hidden(feed_id):
+                    feed_registry.hide_feed(feed_id)
+                    hidden_count += 1
+                else:
+                    # 已隐藏但仍可能残留在分组里（历史数据）
+                    feed_registry.assign_feed_to_group(feed_id, None)
+            feed_registry.set_known_website_feed_ids(current_ids)
+            feed_registry.mark_website_skills_detached_v1()
+            return hidden_count
+
+        known = feed_registry.known_website_feed_ids
+        new_ids = current_ids - known
+        for feed_id in sorted(new_ids):
+            if feed_registry.is_hidden(feed_id):
+                continue
+            feed_registry.hide_feed(feed_id)
+            hidden_count += 1
+
+        if current_ids != known:
+            feed_registry.set_known_website_feed_ids(current_ids)
+        return hidden_count
 
     def _get_feed(self, feed_id: str, *, allow_hidden: bool = False) -> WebsiteFeed:
         if not allow_hidden and feed_registry.is_hidden(feed_id):
@@ -74,13 +122,17 @@ class FeedClient:
         feed_registry.hide_feed(feed_id)
 
     def ensure_feed_visible(self, feed_id: str) -> None:
-        """重新接入后恢复可见性，并确保 skill / 平台账号已装载。"""
-        if feed_registry.is_hidden(feed_id):
-            feed_registry.unhide_feed(feed_id)
+        """重新接入后恢复可见性，并确保 skill / 平台账号已装载。
+
+        必须先 reload 再 unhide：reload 时 sync_website_skill_visibility
+        可能把「新出现的网站 skill」默认 hide，若先 unhide 会被盖掉。
+        """
         if feed_id not in self._feeds:
             self.reload_skills()
         if feed_id not in self._feeds:
             raise FeedError(f"skill 未装载: {feed_id}", status_code=404)
+        if feed_registry.is_hidden(feed_id):
+            feed_registry.unhide_feed(feed_id)
 
     def rename_feed(self, feed_id: str, name: str) -> str:
         if feed_id not in self._feeds and not feed_registry.get_platform_account(feed_id):
@@ -119,6 +171,7 @@ class FeedClient:
                     if fid in visible_ids
                 ],
                 "digest_skill_id": str(group.get("digest_skill_id") or "").strip() or None,
+                "auto_refresh": bool(group.get("auto_refresh", True)),
             }
             for group in groups
             if str(group.get("name", "")).strip()
@@ -324,7 +377,7 @@ class FeedClient:
                     "body_detail": stored.get("body_detail", ""),
                 }
             return None
-        # 库页点开正文时常只传 id：从文章表补齐 url，供小红书等需要笔记级 token 的源使用
+        # 库页点开正文时常只传 id：从文章表补齐 url，供需要完整链接才能取详情的源使用
         if not (url and title and published_at):
             row = self.store.get_article(feed_id, article_id)
             if row:

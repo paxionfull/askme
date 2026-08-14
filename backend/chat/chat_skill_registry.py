@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from paths import DATA_DIR, PROJECT_ROOT, SKILLS_ROOT
+from paths import CHAT_SKILLS_BUILTIN_ROOT, DATA_DIR, PROJECT_ROOT
 
 from pathlib import Path
 from typing import Any
 
-from skills.skill_config import DEFAULT_CHAT_PROMPT, load_skill_config
+from skills.skill_config import builtin_chat_role_prompt, load_skill_config
 from skills.skill_md import (
     is_stub_skill_body,
     resolve_skill_instructions,
@@ -16,7 +16,7 @@ from skills.skill_md import (
 )
 
 CHAT_SKILL_ID = "chat-rag"
-BUILTIN_DIR = SKILLS_ROOT / CHAT_SKILL_ID
+BUILTIN_DIR = CHAT_SKILLS_BUILTIN_ROOT / CHAT_SKILL_ID
 USER_DIR = DATA_DIR / "chat-skills" / CHAT_SKILL_ID
 DEFAULT_DESCRIPTION = "对话时的角色 system prompt（问答与选定文章摘要共用；引用硬性规则由系统在问答时自动追加）"
 
@@ -27,14 +27,18 @@ def _build_skill_md(name: str, description: str, body: str) -> str:
 
 
 def _legacy_prompt_from_config() -> str:
-    return str(load_skill_config().get("chat_system_prompt") or DEFAULT_CHAT_PROMPT).strip()
+    return str(
+        load_skill_config().get("chat_system_prompt") or builtin_chat_role_prompt()
+    ).strip()
 
 
 def _read_builtin_skill_md() -> str:
     path = BUILTIN_DIR / "SKILL.md"
     if path.is_file():
         return path.read_text(encoding="utf-8")
-    return _build_skill_md(CHAT_SKILL_ID, "对话 RAG", DEFAULT_DESCRIPTION, DEFAULT_CHAT_PROMPT)
+    return _build_skill_md(
+        CHAT_SKILL_ID, DEFAULT_DESCRIPTION, builtin_chat_role_prompt()
+    )
 
 
 def _read_user_skill_md() -> str | None:
@@ -54,7 +58,7 @@ def get_chat_skill_md() -> str:
     instructions = resolve_skill_instructions(
         builtin_md,
         legacy_prompt=legacy,
-        fallback=DEFAULT_CHAT_PROMPT,
+        fallback=builtin_chat_role_prompt(),
     )
     body = strip_frontmatter(builtin_md).strip()
     if is_stub_skill_body(body, legacy) and legacy:
@@ -69,7 +73,7 @@ def get_chat_instructions() -> str:
     return resolve_skill_instructions(
         get_chat_skill_md(),
         legacy_prompt=legacy,
-        fallback=DEFAULT_CHAT_PROMPT,
+        fallback=builtin_chat_role_prompt(),
     )
 
 

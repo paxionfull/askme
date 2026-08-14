@@ -206,6 +206,23 @@ async def get_index_job_status():
     return content_job_manager.get_index_status()
 
 
+@router.get("/api/rag/index/preview")
+async def preview_rag_index(
+    days: int = Query(3, ge=1, le=14),
+    feed_ids: list[str] = Query(default=[]),
+):
+    resolved = feed_ids if feed_ids else None
+    data = await article_service.get_cached_context_for_llm(days, resolved)
+    articles = data.get("articles") or []
+    indexable = article_service._indexable_articles(articles)
+    return {
+        "days": days,
+        "feed_count": len(feed_ids) if feed_ids else None,
+        "meta_count": int(data.get("meta_count") or 0),
+        "article_count": len(indexable),
+    }
+
+
 async def _sse_rag_index_stream(body: BuildIndexRequest):
     try:
         llm_config = body.llm_config.model_dump() if body.llm_config else None

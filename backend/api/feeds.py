@@ -1,8 +1,6 @@
 """数据源列表、分组、刷新与文章。"""
 from __future__ import annotations
 
-import asyncio
-
 from fastapi import APIRouter, HTTPException, Query
 
 from api.deps import feed_client
@@ -20,7 +18,16 @@ router = APIRouter(tags=["feeds"])
 async def refresh_all_feeds(body: RefreshAllRequest | None = None):
     try:
         days = body.days if body is not None else 1
-        return feed_scheduler.start_refresh_all(feed_client, days=days)
+        feed_ids = [fid.strip() for fid in (body.feed_ids if body is not None else []) if fid.strip()]
+        if feed_ids:
+            return await feed_scheduler.start_refresh_feeds(
+                feed_client,
+                feed_ids=feed_ids,
+                days=days,
+            )
+        return await feed_scheduler.start_refresh_all(feed_client, days=days)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except FeedError as exc:
@@ -45,7 +52,7 @@ async def refresh_group_feeds(body: RefreshGroupRequest):
                 if str(group.get("id", "")) == group_id:
                     group_name = str(group.get("name", "")).strip() or group_id
                     break
-        return feed_scheduler.start_refresh_group(
+        return await feed_scheduler.start_refresh_group(
             feed_client,
             group_id=group_id,
             group_name=group_name,
@@ -182,6 +189,10 @@ async def get_feed_groups():
 @router.put("/api/feeds/groups")
 async def save_feed_groups(body: FeedGroupsRequest):
     try:
+        previous_group_ids = {str(group.get("id", "")).strip() for group in feed_client.list_groups()}
+        next_group_ids = {group.id.strip() for group in body.groups if group.id.strip()}
+        removed_group_ids = sorted(previous_group_ids - next_group_ids)
+
         groups, group_order = feed_client.set_layout(
             [
                 {
@@ -189,6 +200,7 @@ async def save_feed_groups(body: FeedGroupsRequest):
                     "name": group.name,
                     "feed_ids": group.feed_ids,
                     "digest_skill_id": group.digest_skill_id,
+                    "auto_refresh": group.auto_refresh,
                 }
                 for group in body.groups
             ],
@@ -196,6 +208,8 @@ async def save_feed_groups(body: FeedGroupsRequest):
         )
         if body.default_digest_skill:
             feed_registry.set_default_digest_skill(body.default_digest_skill)
+        if removed_group_ids:
+            feed_scheduler.prune_deleted_groups(removed_group_ids)
         return {
             "ok": True,
             "groups": groups,
@@ -208,31 +222,29 @@ async def save_feed_groups(body: FeedGroupsRequest):
         raise HTTPException(status_code=502, detail=f"保存分组失败: {exc}") from exc
 
 
+@router.post("/api/feeds/refresh/cancel")
+async def cancel_refresh_feeds():
+    """停止正在进行的批量更新（全部/分组）。"""
+    ok = feed_scheduler.request_refresh_cancel()
+    return {"ok": ok, "message": "已请求停止更新" if ok else "当前没有进行中的更新"}
+
+
 @router.post("/api/feeds/{feed_id:path}/refresh")
 async def refresh_feed(
     feed_id: str,
     days: int = Query(default=1, ge=1, le=30),
 ):
-    from feed.feed_scheduler import DEFAULT_FEED_REFRESH_TIMEOUT, humanize_refresh_error
-
-    task = asyncio.create_task(feed_client.refresh_feed(feed_id, days=days))
+    """将单源刷新并入共享更新队列（可与全部/分组刷新合并）。"""
     try:
-        done, _pending = await asyncio.wait({task}, timeout=DEFAULT_FEED_REFRESH_TIMEOUT)
-        if task not in done:
-            def _swallow(done_task: asyncio.Task) -> None:
-                try:
-                    done_task.result()
-                except Exception:
-                    pass
-
-            task.add_done_callback(_swallow)
-            detail = humanize_refresh_error(
-                f"刷新超时（>{int(DEFAULT_FEED_REFRESH_TIMEOUT)}s）"
-            )
-            raise HTTPException(status_code=504, detail=detail)
-        return task.result()
-    except HTTPException:
-        raise
+        return await feed_scheduler.start_refresh_feed(
+            feed_client,
+            feed_id=feed_id,
+            days=days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except FeedError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except Exception as exc:

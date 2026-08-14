@@ -8,41 +8,29 @@ from feed.article_service import ARTICLE_CHAR_LIMIT, _format_publish_time_displa
 from core.llm import LlmStreamPart, sse_event, stream_llm
 from chat.query_service import QueryPlan, generate_queries
 from chat.rag_service import RagChunk, RagService
+from prompts import load_prompt
 
 HISTORY_TURN_LIMIT = 10
 
-RAG_CITATION_RULES = """【回答硬性要求 — 必须遵守】
-1. 紧扣用户问题中的核心实体与主题作答；禁止把检索片段或概览里其他无关产品/事件单独成节
-2. 引用格式（NotebookLM / Perplexity 风格）：凡陈述来自「检索片段」的事实，在该句末尾紧跟内联编号 [1]、[2] 等；编号只能使用本轮用户消息中已给出的片段编号。禁止改成文末来源列表或脚注清单
-3. 只引用与用户问题直接相关的片段；相关片段不足时引用全部可用编号，禁止为凑数引用无关片段
-4. 概览仅作背景理解；具体事实与对比关系必须来自检索片段。概览有但检索片段未支持的内容不得写入；禁止给概览内容标注 [n]
-5. 若检索片段无法支撑回答，明确说明「根据已检索资料，未找到与…相关的信息」，不要展开其他话题
-6. 使用中文 Markdown（## 小标题、列表），不要输出思考过程"""
-
-SCOPED_SUMMARIZE_CITATION_RULES = """【摘要引用硬性要求 — 必须遵守】
-1. 关键事实、数据与结论在句末内联标注 [1]、[2] 等，编号对应本轮「选定正文」中的文章编号（NotebookLM / Perplexity 风格）
-2. 禁止改成文末来源列表；只使用已给出的编号，不编造编号
-3. 仅使用原文信息，不编造"""
-
-# 无 skill 时的角色正文；与 chat-rag skill / skill_config.DEFAULT_CHAT_PROMPT 保持语义一致
-DEFAULT_CHAT_ROLE_PROMPT = """你是 Askme 助手。本轮用户消息提供任务所需语料。语气：专业、清晰、中文 Markdown。
-
-按本轮用户消息中的任务形态作答：
-
-【问答】用户对照日报概览提问，消息中含「检索片段」。回复要求：
-  - 请详细、有据地回答
-  - 具体引用与忠实度要求见下文硬性规则
-  - 关键陈述后以内联编号标注出处（如 …[1][2]），风格类似 NotebookLM / Perplexity；禁止改成文末来源列表
-
-【摘要】用户选定文章，消息中以 XML 提供「选定正文」，让你生成摘要。回复要求：
-  - 紧扣正文，提炼关键事实、数据与结论；删去冗余背景与空话
-  - 多篇若报道同一事件或主题，融合整理为连贯叙述，不要按文章逐篇复述
-  - 仅使用原文信息，不编造
-  - 关键陈述后以内联编号标注出处（如 …[1][2]），编号对应选定正文中的文章编号，风格同 NotebookLM / Perplexity；禁止改成文末来源列表"""
-
-DEFAULT_ANSWER_SYSTEM_PROMPT = DEFAULT_CHAT_ROLE_PROMPT + "\n\n" + RAG_CITATION_RULES
+RAG_CITATION_RULES = load_prompt("chat_rag_citation_rules")
+SCOPED_SUMMARIZE_CITATION_RULES = load_prompt("chat_scoped_summarize_citation_rules")
 
 SCOPED_SUMMARIZE_DEFAULT_QUESTION = "请对选定文章的正文生成精简摘要。"
+
+
+def _default_chat_role_prompt() -> str:
+    """无传入 system_prompt 时的角色层；真源为 chat-rag skill。"""
+    from skills.skill_runtime import get_chat_role_prompt
+
+    return get_chat_role_prompt()
+
+
+def _default_answer_system_prompt() -> str:
+    return f"{_default_chat_role_prompt()}\n\n{RAG_CITATION_RULES}"
+
+
+def _default_scoped_summarize_system_prompt() -> str:
+    return f"{_default_chat_role_prompt()}\n\n{SCOPED_SUMMARIZE_CITATION_RULES}"
 
 
 def _xml_escape(text: str) -> str:
@@ -158,7 +146,7 @@ def build_scoped_summarize_messages(
     resolved = (question or SCOPED_SUMMARIZE_DEFAULT_QUESTION).strip()
     system = _compose_system_prompt(
         system_prompt,
-        default=DEFAULT_CHAT_ROLE_PROMPT + "\n\n" + SCOPED_SUMMARIZE_CITATION_RULES,
+        default=_default_scoped_summarize_system_prompt(),
         rules=SCOPED_SUMMARIZE_CITATION_RULES if system_prompt.strip() else "",
     )
     strip_q = (original_question or question or resolved).strip()
@@ -262,7 +250,7 @@ def build_answer_messages(
     """system 仅含角色/skill/规则；概览与片段进本轮 user。question 应为消解后的问题。"""
     system = _compose_system_prompt(
         system_prompt,
-        default=DEFAULT_ANSWER_SYSTEM_PROMPT,
+        default=_default_answer_system_prompt(),
         rules=RAG_CITATION_RULES if system_prompt.strip() else "",
     )
     strip_q = (original_question or question).strip()

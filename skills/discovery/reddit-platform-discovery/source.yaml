@@ -1,0 +1,14 @@
+id: reddit-platform
+name: Reddit
+homepage: https://www.reddit.com
+platform: reddit
+platform_skill: true
+
+discovery:
+  type: reddit_json
+  requires_cookie: false
+  # 无 Cookie：arctic-shift → pullpush 公开归档；已删帖在 reddit_common 过滤
+
+validation:
+  expected_min_items: 1
+  min_body_chars: 40

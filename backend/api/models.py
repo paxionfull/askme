@@ -5,9 +5,12 @@ from pydantic import BaseModel, Field
 
 
 class ScheduleTimeRequest(BaseModel):
-    hour: int = Field(ge=0, le=23)
-    minute: int = Field(ge=0, le=59)
-    second: int = Field(ge=0, le=59)
+    kind: str = "daily"
+    hour: int = Field(default=8, ge=0, le=23)
+    minute: int = Field(default=0, ge=0, le=59)
+    second: int = Field(default=0, ge=0, le=59)
+    every_hours: int = Field(default=6, ge=1, le=24)
+    group_ids: list[str] = Field(default_factory=list)
 
 
 class FeedSchedulerConfigRequest(BaseModel):

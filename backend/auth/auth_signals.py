@@ -10,10 +10,9 @@ from urllib.parse import urlparse
 DOMAIN_AUTH_SLOTS: dict[str, str] = {
     "zhihu.com": "zhihu",
     "zhimg.com": "zhihu",
-    "xiaohongshu.com": "xiaohongshu",
-    "xhscdn.com": "xiaohongshu",
-    "xhslink.com": "xiaohongshu",
-    "mp.weixin.qq.com": "weixin",
+    "goofish.com": "goofish-com",
+    "x.com": "x",
+    "twitter.com": "x",
 }
 
 # Agent / 接入中途登记的动态 slot（域名 → slot）；由 register_auth_slot 维护
@@ -194,10 +193,7 @@ def is_auth_gate_error(message: str) -> bool:
         "请先完成登录授权",
         "未配置有效 cookie",
         "请先在设置页或添加源弹窗登录",
-        "微信接入需要公众号后台登录",
         "知乎接入需要登录授权",
-        "小红书接入需要登录授权",
-        "需要公众号后台登录授权",
     )
     low = text.lower()
     return any(g.lower() in low for g in gates)
@@ -231,12 +227,44 @@ def classify_exception_as_auth(exc: BaseException | str) -> dict[str, Any] | Non
     message = str(exc)
     slot = parse_auth_required_slot(message)
     if is_auth_gate_error(message) or slot or looks_like_auth_error(message):
-        return {
+        result = {
             "auth_required": True,
             "slot": slot,
             "message": message,
             "gate": is_auth_gate_error(message) or bool(slot),
         }
+        # region agent log
+        try:
+            import json
+            import time
+
+            with open(
+                "/Users/zhuyuyao/Documents/llm应用/askme/.cursor/debug-fed963.log",
+                "a",
+                encoding="utf-8",
+            ) as fh:
+                fh.write(
+                    json.dumps(
+                        {
+                            "sessionId": "fed963",
+                            "location": "auth_signals.py:classify_exception_as_auth",
+                            "message": "classified as auth error",
+                            "data": {
+                                "slot": slot,
+                                "gate": result["gate"],
+                                "snippet": message[:240],
+                            },
+                            "hypothesisId": "C",
+                            "timestamp": int(time.time() * 1000),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # endregion
+        return result
     return None
 
 

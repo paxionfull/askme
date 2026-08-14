@@ -6,16 +6,14 @@ from typing import Any
 
 from skills.skill_runtime import get_digest_profile
 from feed.feed_registry import UNGROUPED_GROUP_ID, feed_registry
-from skills.skill_config import get_default_digest_skill
 from digest.digest_pipeline import generate_structured_digest
 
 
 def resolve_digest_skill_for_group(group: dict[str, Any] | None) -> str:
-    if group:
-        skill_id = str(group.get("digest_skill_id") or "").strip()
-        if skill_id:
-            return skill_id
-    return get_default_digest_skill()
+    """仅返回分组显式绑定的整理规则；无绑定则空串（无系统默认）。"""
+    if not group:
+        return ""
+    return str(group.get("digest_skill_id") or "").strip()
 
 
 def partition_articles_by_groups(
@@ -25,14 +23,17 @@ def partition_articles_by_groups(
     groups: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     group_map = {str(group["id"]): group for group in groups}
-    selected = set(selected_group_ids)
     partitions: list[dict[str, Any]] = []
 
     for group_id in selected_group_ids:
         if group_id == UNGROUPED_GROUP_ID:
+            # 未分组无整理规则，不可生成简报
             continue
         group = group_map.get(group_id)
         if not group:
+            continue
+        skill_id = resolve_digest_skill_for_group(group)
+        if not skill_id:
             continue
         feed_ids = set(group.get("feed_ids") or [])
         group_articles = [article for article in articles if article.get("feed_id") in feed_ids]
@@ -42,23 +43,10 @@ def partition_articles_by_groups(
             {
                 "group_id": group_id,
                 "group_name": str(group.get("name") or group_id),
-                "digest_skill_id": resolve_digest_skill_for_group(group),
+                "digest_skill_id": skill_id,
                 "articles": group_articles,
             }
         )
-
-    if UNGROUPED_GROUP_ID in selected:
-        assigned = {fid for group in groups for fid in (group.get("feed_ids") or [])}
-        ungrouped = [article for article in articles if article.get("feed_id") not in assigned]
-        if ungrouped:
-            partitions.append(
-                {
-                    "group_id": UNGROUPED_GROUP_ID,
-                    "group_name": "未分组",
-                    "digest_skill_id": get_default_digest_skill(),
-                    "articles": ungrouped,
-                }
-            )
 
     return partitions
 

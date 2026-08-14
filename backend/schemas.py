@@ -100,6 +100,7 @@ class RefreshGroupRequest(BaseModel):
 
 class RefreshAllRequest(BaseModel):
     days: int = Field(default=1, ge=1, le=30)
+    feed_ids: list[str] = Field(default_factory=list)
 
 
 class FeedRenameRequest(BaseModel):
@@ -120,6 +121,7 @@ class FeedGroupInput(BaseModel):
     name: str = Field(..., min_length=1, max_length=40)
     feed_ids: list[str] = Field(default_factory=list)
     digest_skill_id: str | None = None
+    auto_refresh: bool = True
 
 
 class FeedGroupsRequest(BaseModel):
@@ -132,6 +134,49 @@ class DigestSkillInput(BaseModel):
     id: str = Field(..., min_length=1)
     skill_md: str | None = None
     profile: dict | None = None
+
+class DiscoverySkillExportInput(BaseModel):
+    skill_ids: list[str] = Field(default_factory=list, max_length=50)
+    platform_feed_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+class PlatformAccountImportItem(BaseModel):
+    feed_id: str = ""
+    platform: str = ""
+    account_key: str = ""
+    user_type: str = ""
+    entry_url: str = ""
+    posts_url: str = ""
+    display_name: str = ""
+    list_api_path: str = ""
+    slug: str = ""
+    xsec_token: str = ""
+    group_id: str | None = None
+
+
+class DiscoverySkillFileInput(BaseModel):
+    path: str = Field(..., min_length=1)
+    content: str = ""
+
+
+class DiscoverySkillImportItem(BaseModel):
+    skill_id: str = ""
+    slug: str = ""
+    feed_id: str = ""
+    name: str = ""
+    files: list[DiscoverySkillFileInput] = Field(default_factory=list)
+
+
+class DiscoverySkillImportInput(BaseModel):
+    skills: list[DiscoverySkillImportItem] = Field(default_factory=list, max_length=50)
+    platform_accounts: list[PlatformAccountImportItem] = Field(default_factory=list, max_length=50)
+    overwrite: bool = False
+    group_id: str | None = None
+
+
+class DiscoverySkillZipParseInput(BaseModel):
+    zip_base64: str = Field(..., min_length=1)
+
 
 class ChatSkillInput(BaseModel):
     skill_md: str = Field(..., min_length=1)

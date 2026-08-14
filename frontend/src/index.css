@@ -35,6 +35,7 @@
   --radius-panel: 0.625rem;
   --app-content-max-medium: 1200px;
   --app-content-max-wide: 1500px;
+  --app-content-max-narrow: 44rem;
 }
 
 body {
@@ -135,6 +136,11 @@ body {
   margin-inline: auto;
 }
 
+.app-content-narrow {
+  width: min(96vw, var(--app-content-max-narrow));
+  margin-inline: auto;
+}
+
 .app-content-wide {
   width: min(97vw, var(--app-content-max-wide));
   margin-inline: auto;
@@ -150,6 +156,12 @@ body {
 .ui-textarea:focus {
   outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
   outline-offset: 1px;
+}
+
+.ui-input::placeholder,
+.ui-textarea::placeholder {
+  color: var(--ink-muted);
+  opacity: 0.72;
 }
 
 .ui-field {
@@ -199,6 +211,85 @@ body {
 
 .digest-progress-dot {
   animation: digest-progress-pulse 1.2s ease-in-out infinite;
+}
+
+/* —— 简报空状态引导步骤 —— */
+.guide-steps {
+  counter-reset: guide;
+  list-style: none;
+  margin: 1.5rem auto 0;
+  max-width: 26rem;
+  padding: 0;
+  text-align: left;
+}
+
+.guide-steps li {
+  counter-increment: guide;
+  position: relative;
+  border-bottom: 1px solid var(--rule);
+  padding: 0.65rem 0 0.65rem 2rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.guide-steps li:last-child {
+  border-bottom: 0;
+}
+
+.guide-steps li::before {
+  content: counter(guide);
+  position: absolute;
+  left: 0;
+  top: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 1px solid var(--rule);
+  border-radius: 50%;
+  background: var(--paper-raised);
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.guide-steps li strong {
+  display: block;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.guide-steps li span {
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+}
+
+.guide-steps .guide-step-link,
+.guide-steps .guide-step-hint {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.guide-steps .guide-step-hint {
+  margin-left: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.guide-steps .guide-step-link:hover,
+.guide-steps .guide-step-link:focus-visible,
+.guide-steps .guide-step-hint:hover,
+.guide-steps .guide-step-hint:focus-visible {
+  opacity: 0.8;
 }
 
 /* —— Modal shell —— */

@@ -1,4 +1,5 @@
 import { streamPost, type SseCitationItem, type SseStatus } from "./utils/sse";
+import { UNGROUPED_GROUP_ID } from "./utils/feedLayout";
 
 export const FEEDS_NEED_RELOAD_KEY = "askme.feedsNeedReload";
 
@@ -13,7 +14,7 @@ export interface Feed {
   sync_time?: number;
   status?: number;
   group_id?: string;
-  /** 平台多账号数据源（微信/知乎等），删除时不会移除平台 skill */
+  /** 平台多账号数据源，删除时不会移除平台 skill */
   platform_account?: boolean;
   platform?: string;
 }
@@ -23,6 +24,8 @@ export interface FeedGroup {
   name: string;
   feed_ids: string[];
   digest_skill_id?: string | null;
+  /** 是否参与定时自动更新；缺省 true 兼容旧数据 */
+  auto_refresh?: boolean;
 }
 
 export interface FeedsResponse {
@@ -161,18 +164,15 @@ export function saveFeedGroups(
   });
 }
 
-export function refreshFeed(feedId: string, days = 1) {
+export function refreshFeed(feedId: string, days = 1, signal?: AbortSignal) {
   const params = new URLSearchParams({ days: String(days) });
-  return request<{
-    ok: boolean;
-    article_count: number;
-    new_article_count?: number;
-    has_new_content?: boolean;
-    fetching_history?: boolean;
-    message: string;
-  }>(`/api/feeds/${encodeURIComponent(feedId)}/refresh?${params}`, {
-    method: "POST",
-  });
+  return request<RefreshAllFeedsResponse>(
+    `/api/feeds/${encodeURIComponent(feedId)}/refresh?${params}`,
+    {
+      method: "POST",
+      signal,
+    },
+  );
 }
 
 export interface RefreshAllFeedsResponse {
@@ -182,13 +182,18 @@ export interface RefreshAllFeedsResponse {
   group_id?: string;
   group_name?: string;
   feed_count?: number;
+  feed_id?: string;
   days?: number;
+  merged?: boolean;
+  added?: number;
+  queued?: number;
+  total?: number;
 }
 
-export function refreshAllFeeds(days = 1) {
+export function refreshAllFeeds(days = 1, feedIds?: string[]) {
   return request<RefreshAllFeedsResponse>("/api/feeds/refresh-all", {
     method: "POST",
-    body: JSON.stringify({ days }),
+    body: JSON.stringify({ days, feed_ids: feedIds ?? [] }),
   });
 }
 
@@ -196,6 +201,12 @@ export function refreshGroupFeeds(groupId: string, days = 1) {
   return request<RefreshAllFeedsResponse>("/api/feeds/refresh-group", {
     method: "POST",
     body: JSON.stringify({ group_id: groupId, days }),
+  });
+}
+
+export function cancelRefreshFeeds() {
+  return request<{ ok: boolean; message: string }>("/api/feeds/refresh/cancel", {
+    method: "POST",
   });
 }
 
@@ -342,6 +353,12 @@ export function fetchBodiesJobStatus() {
   return request<ContentJobStatus>("/api/articles/bodies/jobs/current");
 }
 
+export function cancelBodiesJob() {
+  return request<{ ok: boolean; message: string }>("/api/articles/bodies/jobs/cancel", {
+    method: "POST",
+  });
+}
+
 export function startIndexJob(days: number, llmConfig: LlmConfigPayload, feedIds?: string[]) {
   return request<ContentJobStatus>("/api/rag/index/jobs", {
     method: "POST",
@@ -355,6 +372,21 @@ export function startIndexJob(days: number, llmConfig: LlmConfigPayload, feedIds
 
 export function fetchIndexJobStatus() {
   return request<ContentJobStatus>("/api/rag/index/jobs/current");
+}
+
+export interface IndexBuildPreviewResponse {
+  days: number;
+  feed_count: number | null;
+  meta_count: number;
+  article_count: number;
+}
+
+export function fetchIndexBuildPreview(days: number, feedIds?: string[]) {
+  const params = new URLSearchParams({ days: String(days) });
+  for (const id of feedIds ?? []) {
+    params.append("feed_ids", id);
+  }
+  return request<IndexBuildPreviewResponse>(`/api/rag/index/preview?${params}`);
 }
 
 export function fetchSummarizeJobStatus() {
@@ -549,9 +581,12 @@ export function clearCachedSummary(days: number, feedIds?: string[]) {
 }
 
 export interface ScheduleTime {
+  kind?: "daily" | "interval";
   hour: number;
   minute: number;
   second: number;
+  every_hours?: number;
+  group_ids?: string[];
 }
 
 export interface ScheduleNextRun extends ScheduleTime {
@@ -565,6 +600,7 @@ export interface RefreshProgress {
   feed_name: string;
   last_completed_feed_id?: string;
   completed_feed_ids?: string[];
+  queued?: number;
   scope?: string;
   group_id?: string;
   group_name?: string;
@@ -587,6 +623,7 @@ export interface FeedSchedulerConfig {
   last_feed_count?: number;
   last_refresh_message?: string | null;
   last_refresh_failed?: RefreshFeedFailure[];
+  last_refresh_cancelled?: boolean;
 }
 
 export interface ZhihuCookieStatus {
@@ -631,64 +668,6 @@ export interface AuthPrecheckResult {
   missing_slots: string[];
   can_proceed: boolean;
   slots: AuthSlot[];
-}
-
-export interface WeixinSearchAccount {
-  fakeid: string;
-  nickname: string;
-  alias?: string;
-  round_head_img?: string;
-  signature?: string;
-  service_type?: number | string;
-  verify_status?: number | string;
-}
-
-export interface WeixinSearchResult {
-  ok: boolean;
-  query: string;
-  accounts: WeixinSearchAccount[];
-}
-
-export function searchWeixinAccounts(query: string) {
-  const q = query.trim();
-  return request<WeixinSearchResult>(
-    `/api/sources/weixin/search?q=${encodeURIComponent(q)}`,
-  );
-}
-
-export interface WeixinResolveResult {
-  ok: boolean;
-  url: string;
-  fakeid: string;
-  nickname: string;
-  entry_url: string;
-}
-
-/** 从文章/带 __biz 链接解析公众号（不走 searchbiz） */
-export function resolveWeixinAccountUrl(url: string) {
-  const u = url.trim();
-  return request<WeixinResolveResult>(
-    `/api/sources/weixin/resolve?url=${encodeURIComponent(u)}`,
-  );
-}
-
-/** 微信按名称接入用的合成入口 URL（detect 认 __biz，askme_name 作显示名） */
-export function buildWeixinOnboardUrl(fakeid: string, nickname?: string) {
-  const params = new URLSearchParams({
-    action: "home",
-    __biz: fakeid,
-  });
-  const name = (nickname || "").trim();
-  if (name) params.set("askme_name", name);
-  return `https://mp.weixin.qq.com/mp/profile_ext?${params.toString()}`;
-}
-
-/** 是否看起来像微信公众号链接（文章 / profile / __biz） */
-export function looksLikeWeixinUrl(text: string): boolean {
-  const raw = text.trim();
-  if (!raw) return false;
-  if (/__biz=/i.test(raw) || /fakeid=/i.test(raw)) return true;
-  return /mp\.weixin\.qq\.com/i.test(raw);
 }
 
 export interface LoginSessionStatus {
@@ -819,6 +798,7 @@ export function saveCursorApiKey(apiKey: string) {
 
 export interface LlmSettingsResponse {
   configured: boolean;
+  persisted?: boolean;
   model: string;
   embedding_model: string;
   api_key: string;
@@ -847,6 +827,12 @@ export function saveLlmSettings(payload: {
   return request<LlmSettingsResponse & { ok: boolean }>("/api/settings/llm", {
     method: "PUT",
     body: JSON.stringify(payload),
+  });
+}
+
+export function clearLlmSettings() {
+  return request<LlmSettingsResponse & { ok: boolean }>("/api/settings/llm", {
+    method: "DELETE",
   });
 }
 
@@ -1010,26 +996,6 @@ export function parseOnboardUrls(text: string): string[] {
   return urls;
 }
 
-/** 解析公众号名称：每行一个，或逗号分隔；去重保序。 */
-export function parseWeixinNames(text: string): string[] {
-  return parseOnboardUrls(text);
-}
-
-/** 从搜索结果中挑最匹配项：仅精确昵称/微信号；否则视为未命中（避免误接后反复重搜）。 */
-export function pickWeixinAccount(
-  query: string,
-  accounts: WeixinSearchAccount[],
-): WeixinSearchAccount | null {
-  const q = query.trim().toLowerCase();
-  if (!accounts.length) return null;
-  const exact = accounts.find((item) => {
-    const nick = (item.nickname || "").trim().toLowerCase();
-    const alias = (item.alias || "").trim().toLowerCase();
-    return nick === q || alias === q;
-  });
-  return exact || null;
-}
-
 export const ONBOARD_BATCH_MAX_SIZE = 20;
 
 export interface OnboardLogSummary {
@@ -1149,6 +1115,7 @@ export interface SkillItem {
   default_prompt?: string;
   has_source_yaml?: boolean;
   has_profile?: boolean;
+  feed_id?: string;
 }
 
 export interface SkillsCatalog {
@@ -1213,6 +1180,145 @@ export function deleteDiscoverySkill(skillId: string) {
   );
 }
 
+export interface DiscoverySkillImportResult {
+  ok: boolean;
+  imported: Array<{
+    slug: string;
+    skill_id: string;
+    feed_id: string;
+    name: string;
+    overwritten: boolean;
+  }>;
+  imported_platform_accounts?: Array<{
+    feed_id: string;
+    platform?: string;
+    account_key?: string;
+    name?: string;
+    overwritten: boolean;
+  }>;
+  group_id: string;
+  needs_auth?: string[];
+}
+
+export interface PlatformAccountImportPayload {
+  feed_id: string;
+  platform?: string;
+  account_key?: string;
+  user_type?: string;
+  entry_url?: string;
+  posts_url?: string;
+  display_name?: string;
+  list_api_path?: string;
+  slug?: string;
+  xsec_token?: string;
+  group_id?: string | null;
+}
+
+export interface DiscoverySkillZipPackage {
+  skills: DiscoverySkillImportPayload[];
+  platform_accounts: PlatformAccountImportPayload[];
+  count: number;
+  platform_account_count: number;
+}
+
+export async function exportDiscoverySkills(
+  skillIds: string[],
+  platformFeedIds: string[] = [],
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch("/api/skills/discovery/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      skill_ids: skillIds,
+      platform_feed_ids: platformFeedIds,
+    }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const detail = data.detail;
+    throw new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : "导出失败");
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const filename = match?.[1] || "askme-skills.zip";
+  return { blob, filename };
+}
+
+export function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+export interface DiscoverySkillImportPayload {
+  skill_id: string;
+  slug?: string;
+  feed_id?: string;
+  name?: string;
+  files: Array<{ path: string; content: string }>;
+}
+
+export async function importDiscoverySkills(
+  skills: DiscoverySkillImportPayload[],
+  overwrite = false,
+  groupId?: string,
+  platformAccounts: PlatformAccountImportPayload[] = [],
+) {
+  const response = await fetch("/api/skills/discovery/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      skills,
+      platform_accounts: platformAccounts,
+      overwrite,
+      group_id: groupId && groupId !== UNGROUPED_GROUP_ID ? groupId : null,
+    }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const detail = data.detail;
+    throw new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : "导入失败");
+  }
+  return response.json() as Promise<DiscoverySkillImportResult>;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary);
+}
+
+export async function parseDiscoverySkillZip(file: File): Promise<DiscoverySkillZipPackage> {
+  const buffer = await file.arrayBuffer();
+  const response = await fetch("/api/skills/discovery/parse-zip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ zip_base64: arrayBufferToBase64(buffer) }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const detail = data.detail;
+    throw new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : "解析 zip 失败");
+  }
+  const data = (await response.json()) as DiscoverySkillZipPackage;
+  return {
+    skills: data.skills || [],
+    platform_accounts: data.platform_accounts || [],
+    count: data.count ?? (data.skills || []).length,
+    platform_account_count: data.platform_account_count ?? (data.platform_accounts || []).length,
+  };
+}
+
 export function deleteOtherSkill(skillId: string) {
   return request<{ ok: boolean; id: string }>(`/api/skills/other/${encodeURIComponent(skillId)}`, {
     method: "DELETE",
@@ -1256,6 +1362,12 @@ export function createDigestSkill(skill: {
 export function deleteDigestSkill(skillId: string) {
   return request<{ ok: boolean }>(`/api/skills/digest/${encodeURIComponent(skillId)}`, {
     method: "DELETE",
+  });
+}
+
+export function restoreDigestSkill(skillId: string) {
+  return request<{ ok: boolean }>(`/api/skills/digest/${encodeURIComponent(skillId)}/restore`, {
+    method: "POST",
   });
 }
 

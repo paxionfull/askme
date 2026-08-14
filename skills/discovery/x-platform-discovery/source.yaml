@@ -1,0 +1,17 @@
+id: x-platform
+name: X
+homepage: https://x.com
+platform: x
+platform_skill: true
+
+discovery:
+  type: x_timeline
+  requires_cookie: true
+  auth_slot: x
+  login_url: https://x.com/i/flow/login
+  required_token: auth_token=
+  cookie_hint: 须浏览器登录 x.com 后的完整 Cookie（至少含 auth_token 与 ct0）
+
+validation:
+  expected_min_items: 1
+  min_body_chars: 40

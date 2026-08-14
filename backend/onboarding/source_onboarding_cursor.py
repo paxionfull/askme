@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -14,6 +15,7 @@ from onboarding.onboarding_prompt_config import (
     DEFAULT_MAX_REPAIR_ATTEMPTS,
     PROMPT_CURSOR_RESULT_PREVIEW_CHARS,
 )
+from onboarding.async_blocking import run_blocking
 from onboarding.source_onboarding_log import OnboardingCancelled, OnboardingSession
 from onboarding.source_platform_scaffold import detect_platform
 from onboarding.source_skill_writer import (
@@ -29,8 +31,93 @@ VALIDATE_SCRIPT = SKILLS_LIB / "discovery_validate.py"
 INTEGRATIONS_PATH = DATA_DIR / "integrations.json"
 CURSOR_API_KEY = "cursor_api_key"
 
+# cursor-sdk bridge argv 解析会把以 "-" 开头的值当成缺失参数；
+# token_urlsafe 约 1.5% 会踩中（上游已知问题，修复前本地规避）。
+_BRIDGE_AUTH_TOKEN_DASH_ERR = "Missing value for --tool-callback-auth-token"
+_BRIDGE_LAUNCH_RETRIES = 3
+_bridge_auth_token_patched = False
+
+# Cursor SDK 基建抖动（502 / internal error 等）：整任务重试直到成功或取消。
+_CURSOR_SDK_TASK_RETRY_BASE_DELAY_S = 2.0
+_CURSOR_SDK_TASK_RETRY_MAX_DELAY_S = 60.0
+
 _active_cursor_runs: dict[str, Any] = {}
 _run_lock = asyncio.Lock()
+
+
+def _safe_bridge_auth_token() -> str:
+    for _ in range(32):
+        token = secrets.token_urlsafe(32)
+        if token and not token.startswith("-"):
+            return token
+    return "x" + secrets.token_urlsafe(32).lstrip("-")
+
+
+def _patch_bridge_auth_token_generators() -> None:
+    """避免 cursor-sdk 生成以 '-' 开头的 callback auth token。"""
+    global _bridge_auth_token_patched
+    if _bridge_auth_token_patched:
+        return
+    try:
+        from cursor_sdk import _store_callback, _tool_callback
+    except ImportError:
+        return
+    _tool_callback._new_auth_token = _safe_bridge_auth_token  # type: ignore[attr-defined]
+    _store_callback._new_auth_token = _safe_bridge_auth_token  # type: ignore[attr-defined]
+    _bridge_auth_token_patched = True
+
+
+def _is_bridge_auth_token_argv_error(exc: BaseException) -> bool:
+    return _BRIDGE_AUTH_TOKEN_DASH_ERR in str(exc)
+
+
+def _cursor_sdk_error_text(exc: BaseException) -> str:
+    message = getattr(exc, "message", None)
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    return str(exc).strip()
+
+
+def _is_cursor_sdk_infra_error(exc: BaseException) -> bool:
+    """判定是否为可整任务重试的 Cursor SDK / Bridge 基建错误。"""
+    if getattr(exc, "is_retryable", False):
+        return True
+    text = _cursor_sdk_error_text(exc).lower()
+    if not text:
+        return False
+    needles = (
+        "internal error",
+        "bridge request failed with http 5",
+        "bridge request failed with http 502",
+        "bridge request failed with http 503",
+        "bridge request failed with http 500",
+        "bridge request failed with http 504",
+        "bridge exited before discovery",
+        "missing value for --tool-callback-auth-token",
+        "timed out waiting for bridge",
+        "bridge process",
+        "connecterror",
+        "remoteprotocolerror",
+        "server disconnected",
+        "connection reset",
+    )
+    return any(n in text for n in needles)
+
+
+def _cursor_sdk_retry_delay_s(attempt: int) -> float:
+    """attempt 从 1 起：第 2 次任务起开始退避。"""
+    delay = _CURSOR_SDK_TASK_RETRY_BASE_DELAY_S * (2 ** max(0, attempt - 2))
+    return min(delay, _CURSOR_SDK_TASK_RETRY_MAX_DELAY_S)
+
+
+def _cleanup_incomplete_skill_after_infra_error(slug: str) -> bool:
+    """基建中断后若留下半残 skill，删掉以便下一轮干净重写。"""
+    try:
+        if skill_dir_for(slug).exists() and not is_complete_discovery_skill(slug):
+            return remove_discovery_skill_dir(slug)
+    except Exception:
+        return False
+    return False
 
 
 def load_cursor_api_key() -> str:
@@ -125,28 +212,26 @@ def _build_cursor_prompt(
     hints: str,
     list_api_hint: str,
 ) -> str:
-    return f"""你是 Askme 数据源接入 Agent。请在当前仓库内为以下网站创建 discovery skill，并验证通过。
+    from onboarding.discovery_skill_catalog import catalog_for_onboarding_prompt
+    from prompts import render_prompt
 
-## 必须使用的项目 skill（强制）
-1. **第一步**使用 `/source-onboarding`（打开并遵循 `.cursor/skills/source-onboarding/SKILL.md`）
-2. **动手前**阅读 `.cursor/skills/source-onboarding/CONTRACT.md`
-3. 参考哪些已有 `*-discovery`、如何选 ≥2 个样例：以 source-onboarding skill 为准（勿照搬 URL/字段）
+    catalog = catalog_for_onboarding_prompt(exclude_slug=slug)
+    catalog_md = str(catalog.get("markdown") or "").strip()
+    catalog_path = str(catalog.get("catalog_path") or "")
+    catalog_count = int(catalog.get("count") or 0)
 
-## 目标
-- entry_url: {entry_url}
-- slug: {slug}
-- name: {name}
-- feed_id: website:{slug}
-- skill 目录: .cursor/skills/{slug}-discovery/
-
-## 用户提示
-- hints: {hints or "(无)"}
-- list_api_hint: {list_api_hint or "(无)"}
-
-## 完成标准
-- `python .cursor/skills/_lib/discovery_validate.py {slug}` 必须通过
-- 可用 `{PROJECT_ROOT}/backend/.venv/bin/python` 或 `python3`
-- 完成后一句话说明 feed_id 与验证结果（若停在 ASKME_AUTH_REQUIRED，写出 slot）"""
+    return render_prompt(
+        "onboarding_create",
+        catalog_path=catalog_path,
+        catalog_count=catalog_count,
+        entry_url=entry_url,
+        slug=slug,
+        name=name,
+        hints=hints or "(无)",
+        list_api_hint=list_api_hint or "(无)",
+        catalog_md=catalog_md,
+        project_root=str(PROJECT_ROOT),
+    )
 
 
 async def run_cursor_skill_task(
@@ -160,7 +245,11 @@ async def run_cursor_skill_task(
     auto_repair: bool = True,
     max_repair_attempts: int = DEFAULT_MAX_REPAIR_ATTEMPTS,
 ) -> AsyncIterator[dict[str, Any]]:
-    """运行 Cursor Agent 任务（接入或修复），完成后可选验证；验证失败可自动修复重试。"""
+    """运行 Cursor Agent 任务（接入或修复），完成后可选验证；验证失败可自动修复重试。
+
+    对 Cursor SDK / Bridge 基建错误（502、internal error 等）会整任务重试，
+    直到成功或任务被取消；校验失败、授权错误不会走此重试。
+    """
     api_key = load_cursor_api_key()
     if not api_key:
         raise LLMError(
@@ -188,170 +277,317 @@ async def run_cursor_skill_task(
     if session:
         session.log_prompt(prompt, slug=safe_slug)
 
-    yield _emit_status(session, phase="cursor", message="正在启动 Cursor Agent（auto）…")
+    _patch_bridge_auth_token_generators()
 
-    try:
-        async with await AsyncClient.launch_bridge(workspace=str(PROJECT_ROOT)) as client:
-            async with await client.agents.create(
-                model="auto",
-                api_key=api_key,
-                local=LocalAgentOptions(
-                    cwd=str(PROJECT_ROOT),
-                    setting_sources=["project"],
+    task_attempt = 0
+    while True:
+        task_attempt += 1
+        if session:
+            session.check_cancelled()
+
+        if task_attempt == 1:
+            yield _emit_status(
+                session, phase="cursor", message="正在启动 Cursor Agent（auto）…"
+            )
+        else:
+            delay = _cursor_sdk_retry_delay_s(task_attempt)
+            yield _emit_status(
+                session,
+                phase="cursor_retry",
+                message=(
+                    f"Cursor SDK 基建错误，{delay:.0f}s 后整任务重试"
+                    f"（第 {task_attempt} 次）…"
                 ),
-            ) as agent:
-                if session:
-                    session.log("cursor_agent", agent_id=agent.agent_id)
+            )
+            if session:
+                session.log(
+                    "cursor_sdk_retry",
+                    attempt=task_attempt,
+                    delay_s=delay,
+                )
+            await asyncio.sleep(delay)
+            if session:
+                session.check_cancelled()
+            yield _emit_status(
+                session,
+                phase="cursor",
+                message=f"正在重新启动 Cursor Agent（第 {task_attempt} 次）…",
+            )
 
-                run = await agent.send(prompt)
-                async with _run_lock:
-                    _active_cursor_runs[session.job_id if session else ""] = {"run": run}
-
+        try:
+            client = None
+            launch_error: BaseException | None = None
+            for launch_attempt in range(1, _BRIDGE_LAUNCH_RETRIES + 1):
                 try:
-                    async for message in run.messages():
-                        if session:
-                            session.check_cancelled()
+                    client = await AsyncClient.launch_bridge(
+                        workspace=str(PROJECT_ROOT)
+                    )
+                    break
+                except Exception as exc:
+                    launch_error = exc
+                    if launch_attempt < _BRIDGE_LAUNCH_RETRIES and (
+                        _is_bridge_auth_token_argv_error(exc)
+                        or _is_cursor_sdk_infra_error(exc)
+                    ):
+                        continue
+                    raise
+            if client is None:
+                raise launch_error or RuntimeError("Cursor bridge launch failed")
 
-                        msg_type = getattr(message, "type", "")
-                        if msg_type == "tool_call":
-                            tool_name = str(getattr(message, "name", "tool") or "tool")
-                            tool_status = str(getattr(message, "status", "running") or "running")
-                            yield _emit_status(
-                                session,
-                                phase="cursor_tool",
-                                message=_tool_message(tool_name, tool_status),
-                            )
+            async with client:
+                async with await client.agents.create(
+                    model="auto",
+                    api_key=api_key,
+                    local=LocalAgentOptions(
+                        cwd=str(PROJECT_ROOT),
+                        setting_sources=["project"],
+                    ),
+                ) as agent:
+                    if session:
+                        session.log(
+                            "cursor_agent",
+                            agent_id=agent.agent_id,
+                            attempt=task_attempt,
+                        )
+
+                    run = await agent.send(prompt)
+                    async with _run_lock:
+                        _active_cursor_runs[session.job_id if session else ""] = {
+                            "run": run
+                        }
+
+                    try:
+                        async for message in run.messages():
                             if session:
-                                session.log_tool(
-                                    tool_name,
-                                    tool_status,
-                                    summary=_tool_call_summary(message),
+                                session.check_cancelled()
+
+                            msg_type = getattr(message, "type", "")
+                            if msg_type == "tool_call":
+                                tool_name = str(
+                                    getattr(message, "name", "tool") or "tool"
                                 )
-                        elif msg_type == "assistant":
-                            # 流式正文不落盘；结果见 cursor_finish.result_preview
-                            pass
-                        elif msg_type == "status":
-                            status_text = getattr(message, "message", "") or getattr(
-                                message, "status", ""
-                            )
-                            if status_text:
+                                tool_status = str(
+                                    getattr(message, "status", "running") or "running"
+                                )
                                 yield _emit_status(
                                     session,
-                                    phase="cursor",
-                                    message=str(status_text),
+                                    phase="cursor_tool",
+                                    message=_tool_message(tool_name, tool_status),
                                 )
+                                if session:
+                                    session.log_tool(
+                                        tool_name,
+                                        tool_status,
+                                        summary=_tool_call_summary(message),
+                                    )
+                            elif msg_type == "assistant":
+                                # 流式正文不落盘；结果见 cursor_finish.result_preview
+                                pass
+                            elif msg_type == "status":
+                                status_text = getattr(message, "message", "") or getattr(
+                                    message, "status", ""
+                                )
+                                if status_text:
+                                    yield _emit_status(
+                                        session,
+                                        phase="cursor",
+                                        message=str(status_text),
+                                    )
 
-                    result = await run.wait()
-                finally:
-                    async with _run_lock:
-                        _active_cursor_runs.pop(session.job_id if session else "", None)
+                        result = await run.wait()
+                    finally:
+                        async with _run_lock:
+                            _active_cursor_runs.pop(
+                                session.job_id if session else "", None
+                            )
 
-                if session:
-                    session.log(
-                        "cursor_finish",
-                        status=result.status,
-                        duration_ms=result.duration_ms,
-                        tools_logged=session.tools_logged,
-                        result_preview=(result.result or "")[:2000],
-                    )
-
-                if session and session.cancelled:
-                    raise OnboardingCancelled("任务已取消")
-
-                if result.status == "cancelled":
-                    raise OnboardingCancelled("Cursor Agent 已取消")
-                if result.status != "finished":
-                    detail = (result.result or result.status or "unknown").strip()
-                    raise LLMError(f"Cursor Agent 未完成: {detail}", status_code=502)
-
-                if mark_files_written and session and skill_dir_for(safe_slug).exists():
-                    session.mark_files_written()
-
-                validation: dict[str, Any] | None = None
-                if auto_validate:
-                    from auth.auth_signals import auth_error_should_skip_repair
-                    from onboarding.source_skill_repair import (
-                        build_validation_failure_feedback,
-                        iter_auto_repair_agent,
-                    )
-
-                    last_error = ""
-                    attempts = max(1, int(max_repair_attempts))
-                    for attempt in range(attempts):
-                        yield _emit_status(
-                            session,
-                            phase="validate" if attempt == 0 else "auto_repair",
-                            message="正在验证 skill…"
-                            if attempt == 0
-                            else f"验证失败，正在根据报错自动修复（{attempt}/{attempts - 1}）…",
+                    if session:
+                        session.log(
+                            "cursor_finish",
+                            status=result.status,
+                            duration_ms=result.duration_ms,
+                            tools_logged=session.tools_logged,
+                            result_preview=(result.result or "")[:2000],
+                            attempt=task_attempt,
                         )
-                        try:
-                            validation = run_validation(safe_slug)
-                            if session:
-                                session.log("validation", ok=True, result=validation)
-                            break
-                        except Exception as exc:
-                            last_error = str(exc)
-                            if session:
-                                session.log(
-                                    "validation",
-                                    ok=False,
-                                    error=last_error,
-                                    attempt=attempt + 1,
-                                )
-                            if auth_error_should_skip_repair(last_error):
-                                raise LLMError(
-                                    last_error
-                                    if last_error.startswith("ASKME_AUTH_REQUIRED")
-                                    else f"ASKME_AUTH_REQUIRED 验证需登录授权: {last_error}",
-                                    status_code=400,
-                                ) from exc
-                            if attempt >= attempts - 1:
-                                raise LLMError(
-                                    f"Cursor 已执行但 skill 验证失败: {last_error}",
-                                    status_code=502,
-                                ) from exc
-                            if not auto_repair:
-                                raise LLMError(
-                                    f"Cursor 已执行但 skill 验证失败（未开启自动修复）: {last_error}",
-                                    status_code=502,
-                                ) from exc
-                            async for event in iter_auto_repair_agent(
-                                slug=safe_slug,
-                                feedback=build_validation_failure_feedback(
-                                    last_error, slug=safe_slug
-                                ),
-                                error=last_error,
-                                issue_types=["wrong_fields", "other"],
-                                auto_validate=False,
-                                session=session,
-                            ):
-                                if event.get("event") == "auto_repair_succeeded":
-                                    continue
-                                yield event
 
-                result_data = {
-                    "ok": True,
-                    "slug": safe_slug,
-                    "feed_id": f"website:{safe_slug}",
-                    "skill_dir": f"{safe_slug}-discovery",
-                    "analysis": {
-                        "engine": result_engine,
-                        "agent_id": agent.agent_id,
-                        "run_id": run.id,
-                        "cursor_result": (result.result or "")[:PROMPT_CURSOR_RESULT_PREVIEW_CHARS],
-                    },
-                    "validation": validation,
-                }
-                if session:
-                    session.log("result", data=result_data)
-                yield {
-                    "event": "result",
-                    "data": result_data,
-                    **({"job_id": session.job_id} if session else {}),
-                }
-    except CursorAgentError as exc:
-        raise LLMError(f"Cursor SDK 错误: {exc.message}", status_code=502) from exc
+                    if session and session.cancelled:
+                        raise OnboardingCancelled("任务已取消")
+
+                    if result.status == "cancelled":
+                        raise OnboardingCancelled("Cursor Agent 已取消")
+                    if result.status != "finished":
+                        detail = (result.result or result.status or "unknown").strip()
+                        raise LLMError(
+                            f"Cursor Agent 未完成: {detail}", status_code=502
+                        )
+
+                    if mark_files_written and session and skill_dir_for(safe_slug).exists():
+                        session.mark_files_written()
+
+                    validation: dict[str, Any] | None = None
+                    if auto_validate:
+                        from auth.auth_signals import auth_error_should_skip_repair
+                        from onboarding.source_skill_repair import (
+                            build_validation_failure_feedback,
+                            iter_auto_repair_agent,
+                        )
+
+                        last_error = ""
+                        attempts = max(1, int(max_repair_attempts))
+                        for attempt in range(attempts):
+                            if session:
+                                session.check_cancelled()
+                            yield _emit_status(
+                                session,
+                                phase="validate" if attempt == 0 else "auto_repair",
+                                message="正在验证 skill…"
+                                if attempt == 0
+                                else (
+                                    f"验证失败，正在根据报错自动修复"
+                                    f"（{attempt}/{attempts - 1}）…"
+                                ),
+                            )
+                            try:
+                                validation = await run_blocking(
+                                    run_validation, safe_slug
+                                )
+                                if session:
+                                    session.check_cancelled()
+                                    session.log(
+                                        "validation", ok=True, result=validation
+                                    )
+                                break
+                            except OnboardingCancelled:
+                                raise
+                            except Exception as exc:
+                                last_error = str(exc)
+                                if session:
+                                    session.log(
+                                        "validation",
+                                        ok=False,
+                                        error=last_error,
+                                        attempt=attempt + 1,
+                                    )
+                                if session and session.cancelled:
+                                    raise OnboardingCancelled("接入任务已取消") from exc
+                                if auth_error_should_skip_repair(last_error):
+                                    raise LLMError(
+                                        last_error
+                                        if last_error.startswith("ASKME_AUTH_REQUIRED")
+                                        else (
+                                            "ASKME_AUTH_REQUIRED 验证需登录授权: "
+                                            f"{last_error}"
+                                        ),
+                                        status_code=400,
+                                    ) from exc
+                                if attempt >= attempts - 1:
+                                    raise LLMError(
+                                        f"Cursor 已执行但 skill 验证失败: {last_error}",
+                                        status_code=502,
+                                    ) from exc
+                                if not auto_repair:
+                                    raise LLMError(
+                                        "Cursor 已执行但 skill 验证失败"
+                                        f"（未开启自动修复）: {last_error}",
+                                        status_code=502,
+                                    ) from exc
+                                async for event in iter_auto_repair_agent(
+                                    slug=safe_slug,
+                                    feedback=build_validation_failure_feedback(
+                                        last_error, slug=safe_slug
+                                    ),
+                                    error=last_error,
+                                    issue_types=["wrong_fields", "other"],
+                                    auto_validate=False,
+                                    session=session,
+                                ):
+                                    if event.get("event") == "auto_repair_succeeded":
+                                        continue
+                                    yield event
+
+                    result_data = {
+                        "ok": True,
+                        "slug": safe_slug,
+                        "feed_id": f"website:{safe_slug}",
+                        "skill_dir": f"{safe_slug}-discovery",
+                        "analysis": {
+                            "engine": result_engine,
+                            "agent_id": agent.agent_id,
+                            "run_id": run.id,
+                            "cursor_attempts": task_attempt,
+                            "cursor_result": (result.result or "")[
+                                :PROMPT_CURSOR_RESULT_PREVIEW_CHARS
+                            ],
+                        },
+                        "validation": validation,
+                    }
+                    if session:
+                        session.log("result", data=result_data)
+                    yield {
+                        "event": "result",
+                        "data": result_data,
+                        **({"job_id": session.job_id} if session else {}),
+                    }
+                    return
+        except OnboardingCancelled:
+            raise
+        except CursorAgentError as exc:
+            if not _is_cursor_sdk_infra_error(exc):
+                raise LLMError(
+                    f"Cursor SDK 错误: {exc.message}", status_code=502
+                ) from exc
+            cleaned = _cleanup_incomplete_skill_after_infra_error(safe_slug)
+            if session:
+                session.log(
+                    "cursor_sdk_infra_error",
+                    attempt=task_attempt,
+                    error=_cursor_sdk_error_text(exc),
+                    cleaned_incomplete_skill=cleaned,
+                )
+            continue
+        except LLMError as exc:
+            # 仅重试 SDK 基建类；校验失败 / 授权等直接抛出
+            detail = str(exc)
+            retryable = False
+            if detail.startswith("Cursor SDK 错误:") and _is_cursor_sdk_infra_error(exc):
+                retryable = True
+            elif detail.startswith("Cursor Agent 未完成:"):
+                # 仅当收尾状态像基建瞬断时重试，避免业务失败死循环
+                retryable = _is_cursor_sdk_infra_error(exc) or any(
+                    n in detail.lower()
+                    for n in (
+                        "internal error",
+                        "http 502",
+                        "http 503",
+                        "http 500",
+                        "http 504",
+                        "bridge",
+                    )
+                )
+            if not retryable:
+                raise
+            cleaned = _cleanup_incomplete_skill_after_infra_error(safe_slug)
+            if session:
+                session.log(
+                    "cursor_sdk_infra_error",
+                    attempt=task_attempt,
+                    error=detail,
+                    cleaned_incomplete_skill=cleaned,
+                )
+            continue
+        except Exception as exc:
+            if not _is_cursor_sdk_infra_error(exc):
+                raise
+            cleaned = _cleanup_incomplete_skill_after_infra_error(safe_slug)
+            if session:
+                session.log(
+                    "cursor_sdk_infra_error",
+                    attempt=task_attempt,
+                    error=_cursor_sdk_error_text(exc),
+                    cleaned_incomplete_skill=cleaned,
+                )
+            continue
 
 
 async def _run_cursor_onboarding(

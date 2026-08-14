@@ -22,10 +22,14 @@ DEFAULT_REGISTRY: dict[str, Any] = {
     "feed_display_names": {},
     "platform_accounts": {},
     "default_digest_skill": "general-digest",
+    # 已见过的网站类 skill feed_id；新出现的默认 hide，不自动进用户源
+    "known_website_feed_ids": [],
+    # 一次性：把历史上自动出现的网站类内置源从用户源/分组拆掉
+    "website_skills_detached_v1": False,
 }
 
 # 已知多账号平台：一平台一 skill，账号参数存在 platform_accounts
-PLATFORM_IDS = frozenset({"zhihu", "weixin", "xiaohongshu", "reddit", "x"})
+PLATFORM_IDS = frozenset({"zhihu", "reddit", "x"})
 
 
 def _normalize_platform_account(raw: dict[str, Any]) -> dict[str, Any] | None:
@@ -103,6 +107,8 @@ def _normalize_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         feed_ids: list[str] = []
         digest_skill_id = str(raw.get("digest_skill_id") or "").strip()
+        # 缺省 True：兼容旧数据，避免定时刷新突然停掉；新建分组由前端显式传 false
+        auto_refresh = True if "auto_refresh" not in raw else bool(raw.get("auto_refresh"))
         for feed_id in raw.get("feed_ids") or []:
             fid = _normalize_feed_id(str(feed_id))
             if fid in assigned_feeds:
@@ -116,6 +122,7 @@ def _normalize_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "name": name,
                 "feed_ids": feed_ids,
                 "digest_skill_id": digest_skill_id or None,
+                "auto_refresh": auto_refresh,
             }
         )
     return normalized
@@ -164,6 +171,13 @@ class FeedRegistry:
                 name = str(value).strip()
                 if fid and name:
                     display_names[fid] = name
+        raw_known = data.get("known_website_feed_ids")
+        known_website: list[str] = []
+        if isinstance(raw_known, list):
+            for item in raw_known:
+                value = str(item).strip()
+                if value:
+                    known_website.append(_normalize_feed_id(value))
         return {
             "hidden_feed_ids": [
                 _normalize_feed_id(str(item))
@@ -178,6 +192,8 @@ class FeedRegistry:
             "feed_display_names": display_names,
             "platform_accounts": _normalize_platform_accounts(data.get("platform_accounts")),
             "default_digest_skill": str(data.get("default_digest_skill") or "general-digest").strip(),
+            "known_website_feed_ids": known_website,
+            "website_skills_detached_v1": bool(data.get("website_skills_detached_v1")),
         }
 
     def reload(self) -> None:
@@ -196,6 +212,30 @@ class FeedRegistry:
 
     def is_hidden(self, feed_id: str) -> bool:
         return _normalize_feed_id(feed_id) in self.hidden_feed_ids
+
+    @property
+    def known_website_feed_ids(self) -> set[str]:
+        return set(self._data.get("known_website_feed_ids") or [])
+
+    def set_known_website_feed_ids(self, feed_ids: set[str] | list[str]) -> None:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in feed_ids:
+            fid = _normalize_feed_id(str(item))
+            if fid in seen:
+                continue
+            seen.add(fid)
+            normalized.append(fid)
+        self._data["known_website_feed_ids"] = normalized
+        self.save()
+
+    @property
+    def website_skills_detached_v1(self) -> bool:
+        return bool(self._data.get("website_skills_detached_v1"))
+
+    def mark_website_skills_detached_v1(self) -> None:
+        self._data["website_skills_detached_v1"] = True
+        self.save()
 
     def hide_feed(self, feed_id: str) -> None:
         fid = _normalize_feed_id(feed_id)
@@ -227,6 +267,8 @@ class FeedRegistry:
         accounts = dict(self._data.get("platform_accounts") or {})
         accounts.pop(fid, None)
         self._data["platform_accounts"] = accounts
+        known = [item for item in (self._data.get("known_website_feed_ids") or []) if item != fid]
+        self._data["known_website_feed_ids"] = known
         self.save()
 
     def list_platform_accounts(self) -> dict[str, dict[str, Any]]:

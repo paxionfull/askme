@@ -9,6 +9,8 @@ import {
 } from "react";
 import {
   FEEDS_NEED_RELOAD_KEY,
+  cancelBodiesJob,
+  cancelRefreshFeeds,
   fetchFeedSchedulerConfig,
   refreshAllFeeds,
   refreshFeed,
@@ -18,6 +20,7 @@ import {
   type RefreshFeedFailure,
   type RefreshProgress,
 } from "../api";
+import { collectAuthSlotsFromMessages, parseAuthRequiredSlot } from "../utils/authSlot";
 
 function formatFailures(failures: RefreshFeedFailure[]): string {
   return [
@@ -36,8 +39,6 @@ export function isRefreshAuthError(message: string): boolean {
     text.includes("重新登录授权") ||
     text.includes("重新登录") ||
     text.includes("会话失效") ||
-    text.includes("公众号后台") ||
-    text.includes("slave_sid") ||
     (text.includes("cookie") && (text.includes("授权") || text.includes("访客")))
   );
 }
@@ -69,16 +70,18 @@ function writeDismissedRunAt(runAt: number | null | undefined) {
 
 function formatProgressMessage(status: FeedSchedulerConfig): string {
   const item = status.refresh_progress;
+  const queued = item?.queued ?? 0;
+  const queueHint = queued > 0 ? `（排队 ${queued}）` : "";
   if (!item || item.total <= 0) {
     return status.refresh_progress?.scope === "group"
-      ? `正在更新分组「${status.refresh_progress.group_name || ""}」…`
-      : "正在更新全部数据源…";
+      ? `正在更新分组「${status.refresh_progress.group_name || ""}」…${queueHint}`
+      : `正在更新数据源…${queueHint}`;
   }
   if (item.scope === "group") {
     const label = item.group_name || "分组";
-    return `正在更新「${label}」${item.current}/${item.total}：${item.feed_name || "…"}`;
+    return `正在更新「${label}」${item.current}/${item.total}：${item.feed_name || "…"}${queueHint}`;
   }
-  return `正在更新 ${item.current}/${item.total}：${item.feed_name || "…"}`;
+  return `正在更新 ${item.current}/${item.total}：${item.feed_name || "…"}${queueHint}`;
 }
 
 interface FeedRefreshContextValue {
@@ -94,16 +97,28 @@ interface FeedRefreshContextValue {
   bannerTitle: string;
   /** 刷新因鉴权失败时，可供「去授权」重开添加源弹窗的入口 URL */
   authFailureUrls: string[];
-  /** 批量刷新鉴权失败但无 entry_url 时，引导去设置页 */
+  /** 从 ASKME_AUTH_REQUIRED:slot=… 解析出的授权槽，优先跳转设置页打开引导 */
+  authFailureSlots: string[];
+  /** 批量刷新鉴权失败但无 entry_url / slot 时，引导去设置页 */
   authFailureDetected: boolean;
-  startRefreshAll: (days?: number) => Promise<void>;
-  startRefreshGroup: (groupId: string, groupName: string, days?: number) => Promise<void>;
+  startRefreshAll: (days?: number) => Promise<{ cancelled: boolean }>;
+  startRefreshSelected: (
+    feedIds: string[],
+    days?: number,
+    label?: string,
+  ) => Promise<{ cancelled: boolean }>;
+  startRefreshGroup: (
+    groupId: string,
+    groupName: string,
+    days?: number,
+  ) => Promise<{ cancelled: boolean }>;
   startRefreshFeed: (
     feedId: string,
     feedName?: string,
     days?: number,
     entryUrl?: string,
-  ) => Promise<void>;
+  ) => Promise<{ cancelled: boolean }>;
+  stopRefresh: () => void;
   clearResult: () => void;
 }
 
@@ -120,14 +135,22 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
   const [failures, setFailures] = useState<RefreshFeedFailure[]>([]);
   const [bannerTitle, setBannerTitle] = useState("更新数据源");
   const [authFailureUrls, setAuthFailureUrls] = useState<string[]>([]);
+  const [authFailureSlots, setAuthFailureSlots] = useState<string[]>([]);
   const [authFailureDetected, setAuthFailureDetected] = useState(false);
 
   const jobInFlightRef = useRef(false);
   const generationRef = useRef(0);
   const lastShownRunAtRef = useRef<number | null>(null);
+  const stopRequestedRef = useRef(false);
   const applyFinishedStatusRef = useRef<(status: FeedSchedulerConfig, fallback: string) => void>(
     () => {},
   );
+
+  const isCancelledStatus = useCallback((status: FeedSchedulerConfig) => {
+    if (status.last_refresh_cancelled) return true;
+    const msg = status.last_refresh_message || "";
+    return msg.includes("已停止");
+  }, []);
 
   const refreshBusy =
     refreshingAll || Boolean(refreshingGroupId) || Boolean(refreshingFeedId);
@@ -137,6 +160,21 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
       sessionStorage.setItem(FEEDS_NEED_RELOAD_KEY, "1");
     } catch {
       // ignore
+    }
+  }, []);
+
+  const applyAuthFailures = useCallback((nextFailures: RefreshFeedFailure[], extraMessages: string[] = []) => {
+    const messages = [
+      ...nextFailures.map((item) => item.error || ""),
+      ...extraMessages,
+    ];
+    const slots = collectAuthSlotsFromMessages(messages);
+    const hasAuth = slots.length > 0 || messages.some((msg) => isRefreshAuthError(msg));
+    setAuthFailureSlots(slots);
+    setAuthFailureDetected(hasAuth);
+    // 批量失败通常没有 entry_url；有 slot 时走设置页引导，不必填 urls
+    if (slots.length === 0) {
+      setAuthFailureUrls([]);
     }
   }, []);
 
@@ -158,7 +196,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         setStatusMessage("");
         setError(failureDetail || summary);
         setAuthFailureUrls([]);
-        setAuthFailureDetected(nextFailures.some((item) => isRefreshAuthError(item.error || "")));
+        applyAuthFailures(nextFailures, [summary, failureDetail]);
         return;
       }
 
@@ -166,80 +204,125 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
       setStatusMessage("");
       setError(failureDetail);
       setAuthFailureUrls([]);
-      setAuthFailureDetected(nextFailures.some((item) => isRefreshAuthError(item.error || "")));
+      applyAuthFailures(nextFailures, [summary, failureDetail]);
     },
-    [markFeedsNeedReload],
+    [applyAuthFailures, markFeedsNeedReload],
   );
 
   applyFinishedStatusRef.current = applyFinishedStatus;
 
-  const watchUntilComplete = useCallback(async (fallbackMessage: string, generation: number) => {
-    const status = await waitForRefreshAllComplete((current) => {
-      if (generation !== generationRef.current) return;
-      setProgress(current.refresh_progress ?? null);
-      if (current.refresh_running) {
-        setStatusMessage(formatProgressMessage(current));
-        setRefreshingAll(true);
-        const item = current.refresh_progress;
-        if (item?.scope === "group" && item.group_id) {
-          setRefreshingGroupId(item.group_id);
+  const watchUntilComplete = useCallback(
+    async (fallbackMessage: string, generation: number) => {
+      const status = await waitForRefreshAllComplete((current) => {
+        if (generation !== generationRef.current) return;
+        setProgress(current.refresh_progress ?? null);
+        if (current.refresh_running) {
+          setStatusMessage(formatProgressMessage(current));
+          const item = current.refresh_progress;
+          if (item?.scope === "group" && item.group_id) {
+            setRefreshingAll(false);
+            setRefreshingFeedId(null);
+            setRefreshingGroupId(item.group_id);
+          } else if (item?.scope === "feed" && item.feed_id) {
+            setRefreshingAll(false);
+            setRefreshingGroupId(null);
+            setRefreshingFeedId(item.feed_id);
+          } else {
+            setRefreshingGroupId(null);
+            setRefreshingFeedId(null);
+            setRefreshingAll(true);
+          }
         }
+      });
+      if (generation !== generationRef.current) {
+        return { cancelled: stopRequestedRef.current };
       }
-    });
-    if (generation !== generationRef.current) return;
-    applyFinishedStatusRef.current(status, fallbackMessage);
-  }, []);
+      applyFinishedStatusRef.current(status, fallbackMessage);
+      return {
+        cancelled: stopRequestedRef.current || isCancelledStatus(status),
+      };
+    },
+    [isCancelledStatus],
+  );
 
   const beginWatch = useCallback(
     async (options: {
-      scope: "all" | "group";
+      scope: "all" | "group" | "feed";
       groupId?: string;
+      feedId?: string;
       start: () => Promise<{ message: string }>;
       startingMessage: string;
       title: string;
-    }) => {
-      if (jobInFlightRef.current) {
-        throw new Error("已有更新任务进行中，请稍后再试");
-      }
+      /** 鉴权失败时可选回填的入口 URL（单源） */
+      authRetryUrl?: string;
+    }): Promise<{ cancelled: boolean }> => {
+      const alreadyWatching = jobInFlightRef.current;
+      const generation = alreadyWatching ? generationRef.current : ++generationRef.current;
 
-      const generation = ++generationRef.current;
-      jobInFlightRef.current = true;
-      setError("");
-      setResultMessage("");
-      setFailures([]);
-      setAuthFailureUrls([]);
-      setAuthFailureDetected(false);
-      setBannerTitle(options.title);
-      setStatusMessage(options.startingMessage);
-      setProgress(null);
-      setRefreshingFeedId(null);
+      if (!alreadyWatching) {
+        jobInFlightRef.current = true;
+        stopRequestedRef.current = false;
+        setError("");
+        setResultMessage("");
+        setFailures([]);
+        setAuthFailureUrls([]);
+        setAuthFailureSlots([]);
+        setAuthFailureDetected(false);
+        setBannerTitle(options.title);
+        setStatusMessage(options.startingMessage);
+        setProgress(null);
+      } else {
+        setBannerTitle(options.title);
+        setStatusMessage(options.startingMessage);
+      }
 
       if (options.scope === "group" && options.groupId) {
         setRefreshingAll(false);
+        setRefreshingFeedId(null);
         setRefreshingGroupId(options.groupId);
+      } else if (options.scope === "feed" && options.feedId) {
+        setRefreshingAll(false);
+        setRefreshingGroupId(null);
+        setRefreshingFeedId(options.feedId);
       } else {
         setRefreshingGroupId(null);
+        setRefreshingFeedId(null);
         setRefreshingAll(true);
       }
 
       try {
         const start = await options.start();
-        if (generation !== generationRef.current) return;
+        if (generation !== generationRef.current) {
+          return { cancelled: stopRequestedRef.current };
+        }
         setStatusMessage(start.message || options.startingMessage);
-        await watchUntilComplete(start.message || options.startingMessage, generation);
+        // 追加入队后也等到本轮结束，便于调用方接着拉正文
+        return await watchUntilComplete(start.message || options.startingMessage, generation);
       } catch (err) {
-        if (generation !== generationRef.current) return;
+        if (generation !== generationRef.current) {
+          return { cancelled: stopRequestedRef.current };
+        }
         const message = err instanceof Error ? err.message : "更新失败";
+        if (alreadyWatching) {
+          setError(message);
+          return { cancelled: stopRequestedRef.current };
+        }
         setStatusMessage("");
         setResultMessage("");
         setError(message);
         if (isRefreshAuthError(message)) {
+          const slot = parseAuthRequiredSlot(message);
           setAuthFailureDetected(true);
+          setAuthFailureSlots(slot ? [slot] : []);
+          const retryUrl = (options.authRetryUrl || "").trim();
+          setAuthFailureUrls(slot ? [] : retryUrl ? [retryUrl] : []);
         }
+        return { cancelled: stopRequestedRef.current };
       } finally {
-        if (generation === generationRef.current) {
+        if (!alreadyWatching && generation === generationRef.current) {
           setRefreshingAll(false);
           setRefreshingGroupId(null);
+          setRefreshingFeedId(null);
           jobInFlightRef.current = false;
         }
       }
@@ -247,18 +330,39 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
     [watchUntilComplete],
   );
 
-  const startRefreshAll = useCallback(async (days = 1) => {
-    await beginWatch({
-      scope: "all",
-      start: () => refreshAllFeeds(days),
-      startingMessage: "正在启动更新全部数据源…",
-      title: "更新全部",
-    });
-  }, [beginWatch]);
+  const startRefreshAll = useCallback(
+    async (days = 1) => {
+      return beginWatch({
+        scope: "all",
+        start: () => refreshAllFeeds(days),
+        startingMessage: "正在启动更新全部数据源…",
+        title: "更新全部",
+      });
+    },
+    [beginWatch],
+  );
+
+  const startRefreshSelected = useCallback(
+    async (feedIds: string[], days = 1, label = "") => {
+      const ids = feedIds.map((id) => id.trim()).filter(Boolean);
+      if (ids.length === 0) {
+        return { cancelled: false };
+      }
+      return beginWatch({
+        scope: "all",
+        start: () => refreshAllFeeds(days, ids),
+        startingMessage: label
+          ? `正在启动更新「${label}」…`
+          : `正在启动更新所选 ${ids.length} 个源…`,
+        title: "更新所选",
+      });
+    },
+    [beginWatch],
+  );
 
   const startRefreshGroup = useCallback(
     async (groupId: string, groupName: string, days = 1) => {
-      await beginWatch({
+      return beginWatch({
         scope: "group",
         groupId,
         start: () => refreshGroupFeeds(groupId, days),
@@ -270,52 +374,31 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
   );
 
   const startRefreshFeed = useCallback(
-    async (feedId: string, feedName?: string, days = 1, entryUrl?: string) => {
-      if (jobInFlightRef.current) {
-        throw new Error("已有更新任务进行中，请稍后再试");
-      }
-
-      const generation = ++generationRef.current;
-      jobInFlightRef.current = true;
+    async (
+      feedId: string,
+      feedName?: string,
+      days = 1,
+      entryUrl?: string,
+    ): Promise<{ cancelled: boolean }> => {
       const label = (feedName || "").trim() || feedId;
-      const retryUrl = (entryUrl || "").trim();
-      setError("");
-      setResultMessage("");
-      setFailures([]);
-      setAuthFailureUrls([]);
-      setAuthFailureDetected(false);
-      setProgress(null);
-      setRefreshingAll(false);
-      setRefreshingGroupId(null);
-      setRefreshingFeedId(feedId);
-      setBannerTitle("刷新数据源");
-      setStatusMessage(`正在从官网拉取「${label}」最新文章…`);
-
-      try {
-        const result = await refreshFeed(feedId, days);
-        if (generation !== generationRef.current) return;
-        markFeedsNeedReload();
-        setStatusMessage("");
-        setResultMessage(result.message || `「${label}」刷新完成`);
-      } catch (err) {
-        if (generation !== generationRef.current) return;
-        const message = err instanceof Error ? err.message : "刷新失败";
-        setStatusMessage("");
-        setResultMessage("");
-        setError(message);
-        if (isRefreshAuthError(message)) {
-          setAuthFailureDetected(true);
-          setAuthFailureUrls(retryUrl ? [retryUrl] : []);
-        }
-      } finally {
-        if (generation === generationRef.current) {
-          setRefreshingFeedId(null);
-          jobInFlightRef.current = false;
-        }
-      }
+      return beginWatch({
+        scope: "feed",
+        feedId,
+        start: () => refreshFeed(feedId, days),
+        startingMessage: `正在启动更新「${label}」…`,
+        title: "刷新数据源",
+        authRetryUrl: entryUrl,
+      });
     },
-    [markFeedsNeedReload],
+    [beginWatch],
   );
+
+  const stopRefresh = useCallback(() => {
+    stopRequestedRef.current = true;
+    // 批量列表刷新 + 正文拉取一并停
+    void cancelRefreshFeeds().catch(() => {});
+    void cancelBodiesJob().catch(() => {});
+  }, []);
 
   const clearResult = useCallback(() => {
     setResultMessage("");
@@ -323,6 +406,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
     setFailures([]);
     setStatusMessage("");
     setAuthFailureUrls([]);
+    setAuthFailureSlots([]);
     setAuthFailureDetected(false);
     writeDismissedRunAt(lastShownRunAtRef.current);
   }, []);
@@ -407,10 +491,13 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         failures,
         bannerTitle,
         authFailureUrls,
+        authFailureSlots,
         authFailureDetected,
         startRefreshAll,
+        startRefreshSelected,
         startRefreshGroup,
         startRefreshFeed,
+        stopRefresh,
         clearResult,
       }}
     >

@@ -44,9 +44,9 @@ def build_refresh_failure_feedback(error: str, *, slug: str = "") -> str:
     sample_line = f"\n样例 URL（请单独验证能否解析为 article id）: {sample}" if sample else ""
     safe_slug = (slug or "SLUG").strip() or "SLUG"
     discover_cmd = (
-        f"python .cursor/skills/{safe_slug}-discovery/scripts/discover.py --page 1 --per 20"
+        f"python skills/discovery/{safe_slug}-discovery/scripts/discover.py --page 1 --per 20"
     )
-    validate_cmd = f"python .cursor/skills/_lib/discovery_validate.py {safe_slug}"
+    validate_cmd = f"python skills/discovery/_lib/discovery_validate.py {safe_slug}"
     return f"""接入后首次 refresh（拉取文章列表）失败，请修复已有 discovery skill。
 
 错误原文：
@@ -64,8 +64,8 @@ def build_refresh_failure_feedback(error: str, *, slug: str = "") -> str:
 4. 确保个别解析失败不应拖垮整次 refresh（过滤不可解析项或记录 skip）
 
 只修改本 skill 目录内文件，不要改 slug / FEED_ID。
-若本 skill 为平台级（slug 以 `-platform` 结尾），还可修改对应 `.cursor/skills/_lib/{platform}_common.py`
-与 `_lib/{platform}_scaffold/`（多账号共用逻辑）；禁止新建 per-account skill 目录。"""
+若本 skill 为平台级（slug 以 `-platform` 结尾），还可修改对应 `skills/discovery/_lib/{{platform}}_common.py`
+与 `_lib/{{platform}}_scaffold/`（多账号共用逻辑）；禁止新建 per-account skill 目录。"""
 
 
 def build_probe_failure_feedback(
@@ -81,12 +81,12 @@ def build_probe_failure_feedback(
     """平台 API 探测失败时的修复反馈（账号已登记 / 平台 skill 已就绪）。"""
     safe_slug = (slug or "SLUG").strip() or "SLUG"
     discover_cmd = (
-        f"python .cursor/skills/{safe_slug}-discovery/scripts/discover.py --page 1 --per 20"
+        f"python skills/discovery/{safe_slug}-discovery/scripts/discover.py --page 1 --per 20"
     )
-    validate_cmd = f"python .cursor/skills/_lib/discovery_validate.py {safe_slug}"
+    validate_cmd = f"python skills/discovery/_lib/discovery_validate.py {safe_slug}"
     platform_hint = (platform or "").strip().lower()
     lib_hint = (
-        f"`.cursor/skills/_lib/{platform_hint}_common.py` 与 `_lib/{platform_hint}_scaffold/`"
+        f"`skills/discovery/_lib/{platform_hint}_common.py` 与 `_lib/{platform_hint}_scaffold/`"
         if platform_hint
         else "对应 `_lib/*_common.py` / `_lib/*_scaffold/`"
     )
@@ -108,7 +108,7 @@ platform skill slug: {safe_slug}
 3. 公共库解析逻辑过严
 
 请按以下步骤修复：
-1. 阅读 {lib_hint} 与 `.cursor/skills/{safe_slug}-discovery/scripts/discover.py`
+1. 阅读 {lib_hint} 与 `skills/discovery/{safe_slug}-discovery/scripts/discover.py`
 2. 复现：`{discover_cmd}`
 3. 优先改公共库（多账号受益）；仅当平台 skill 自身有误时改其目录
 4. `{validate_cmd}` 直至通过
@@ -118,9 +118,9 @@ platform skill slug: {safe_slug}
 
 def build_validation_failure_feedback(error: str, *, slug: str = "") -> str:
     safe_slug = (slug or "SLUG").strip() or "SLUG"
-    validate_cmd = f"python .cursor/skills/_lib/discovery_validate.py {safe_slug}"
+    validate_cmd = f"python skills/discovery/_lib/discovery_validate.py {safe_slug}"
     discover_cmd = (
-        f"python .cursor/skills/{safe_slug}-discovery/scripts/discover.py --page 1 --per 20"
+        f"python skills/discovery/{safe_slug}-discovery/scripts/discover.py --page 1 --per 20"
     )
     platform_note = ""
     if safe_slug.endswith("-platform"):
@@ -279,6 +279,8 @@ def build_repair_prompt(
     issue_types: list[str],
     sample_url: str,
 ) -> str:
+    from prompts import render_prompt
+
     skill_dir = skill_dir_for(slug)
     discover_py = _read_skill_file(
         skill_dir, "scripts/discover.py", limit=PROMPT_REPAIR_DISCOVER_MAX_CHARS
@@ -294,71 +296,39 @@ def build_repair_prompt(
     is_platform = str(slug).endswith("-platform")
     platform_id = str(slug)[: -len("-platform")] if is_platform else ""
     scope_rule = (
-        f"3. **可修改** `.cursor/skills/{slug}-discovery/` 以及 "
-        f"`.cursor/skills/_lib/{platform_id}_common.py`、"
+        f"3. **可修改** `skills/discovery/{slug}-discovery/` 以及 "
+        f"`skills/discovery/_lib/{platform_id}_common.py`、"
         f"`_lib/{platform_id}_scaffold/`（多账号共用）；"
         f"禁止新建 per-account skill；禁止改 slug / 平台占位 FEED_ID"
         if is_platform
-        else f"3. **只修改** `.cursor/skills/{slug}-discovery/` 内文件；禁止改 slug、FEED_ID、feed 目录名"
+        else f"3. **只修改** `skills/discovery/{slug}-discovery/` 内文件；禁止改 slug、FEED_ID、feed 目录名"
     )
     extra_constraint = (
         f"- 平台 skill：优先修 `_lib/{platform_id}_common.py`；不要为单个账号建目录\n"
         if is_platform
         else ""
     )
+    platform_type_line = (
+        "- 类型: 平台级 skill（多账号共用）\n" if is_platform else ""
+    )
 
-    return f"""你是 Askme 数据源 skill 修复 Agent。请根据用户反馈修复**已有** discovery skill，不要新建目录或修改 slug。
-
-## 必须使用的项目 skill
-1. **先**使用 `/source-onboarding`（阅读 `.cursor/skills/source-onboarding/SKILL.md`「修复」节）
-2. **遵守** `.cursor/skills/source-onboarding/CONTRACT.md`
-3. **不要**用其它 `*-discovery` 当通用修复手册；只改当前目标 skill
-
-## 目标 skill（已存在，禁止改名/删目录）
-- slug: {slug}
-- name: {name}
-- feed_id: website:{slug}
-- entry_url: {entry_url or "(见 FEED_META)"}
-- skill 目录: .cursor/skills/{slug}-discovery/
-{"- 类型: 平台级 skill（多账号共用）" if is_platform else ""}
-
-## 用户反馈
-问题类型：
-{_format_issue_types(issue_types)}
-
-详细描述：
-{feedback.strip()}
-
-样例链接：{sample_url.strip() or "(无)"}
-
-## 当前验证错误（若有）
-{validation_error or "（当前可通过 discovery_validate，但仍需按用户反馈改进）"}
-
-## 当前 source.yaml
-```yaml
-{source_yaml or "(无)"}
-```
-
-## 当前 discover.py
-```python
-{discover_py or "(缺失)"}
-```
-
-## 当前 SKILL.md（节选）
-{skill_md[:2000] or "(无)"}
-
-## 任务
-1. 阅读用户反馈，定位 discover.py / source.yaml / 公共库中的问题
-2. 必要时用 curl/Python 重新侦察目标站 API
-{scope_rule}
-4. 运行验证直至通过:
-   `python .cursor/skills/_lib/discovery_validate.py {slug}`
-5. 若验证失败，根据报错继续修复并重跑
-
-## 范围约束
-- 不要删除 skill 目录；不要创建 `{slug}-discovery` 以外的目录（平台公共库除外）
-{extra_constraint}
-完成后用一句话说明修复内容与验证结果。"""
+    return render_prompt(
+        "onboarding_repair",
+        slug=slug,
+        name=name,
+        entry_url=entry_url or "(见 FEED_META)",
+        platform_type_line=platform_type_line,
+        issue_types_block=_format_issue_types(issue_types),
+        feedback=feedback.strip(),
+        sample_url=sample_url.strip() or "(无)",
+        validation_error=validation_error
+        or "（当前可通过 discovery_validate，但仍需按用户反馈改进）",
+        source_yaml=source_yaml or "(无)",
+        discover_py=discover_py or "(缺失)",
+        skill_md_excerpt=skill_md[:2000] or "(无)",
+        scope_rule=scope_rule,
+        extra_constraint=extra_constraint,
+    )
 
 
 async def run_skill_repair_agent(

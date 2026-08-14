@@ -1,0 +1,1001 @@
+#!/usr/bin/env python3
+"""X (Twitter) 平台发现层 — 多账号共用，screen_name 来自 platform_accounts。"""
+
+from __future__ import annotations
+
+from platform_account_ctx import require_account
+
+import argparse
+import html
+import json
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo
+
+from auth_cookie import get_request_cookie
+from http_client import fetch_bytes, fetch_json, fetch_text, sleep_between_pages
+
+SHANGHAI = ZoneInfo("Asia/Shanghai")
+BASE_URL = "https://x.com"
+API_BASE = "https://api.x.com"
+TWEET_RESULT_API = "https://cdn.syndication.twimg.com/tweet-result"
+AUTH_SLOT = "x"
+
+PLATFORM = "x"
+DEFAULT_COVER = "https://abs.twimg.com/favicons/twitter.3.ico"
+FEED_ID = "website:x:__platform__"
+FEED_META = {
+    "id": FEED_ID,
+    "mpName": "X",
+    "mpCover": DEFAULT_COVER,
+    "mpIntro": "X（多账号）",
+    "status": 1,
+    "source": "website",
+    "entryUrl": BASE_URL,
+}
+REFRESH_DEFAULTS = {"max_pages": 3, "per": 50}
+
+
+def _screen() -> str:
+    return str(require_account().get("account_key") or "").strip()
+
+
+def _entry_url() -> str:
+    return f"{BASE_URL}/{_screen()}"
+
+
+def _syndication_timeline() -> str:
+    return (
+        "https://syndication.twitter.com/srv/timeline-profile/screen-name/"
+        + _screen()
+    )
+
+# Nitter 系镜像：只抓主页时间线（不含 /with_replies）
+NITTER_MIRRORS = (
+    "https://xcancel.com",
+    "https://nitter.poast.org",
+    "https://nitter.privacyredirect.com",
+)
+
+# 公开 Web client bearer（guest 激活用）；queryId 随前端版本可能变化
+BEARER_TOKEN = (
+    "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs"
+    "%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+)
+USER_BY_SCREEN_NAME_ID = "sLVLhk0bGj3MVFEKTdax1w"
+USER_TWEETS_QUERY_IDS = (
+    "6r5OLCC_wFH4CpRyXKuAmQ",
+    "E3opETHurmVJflFsUBVuUQ",
+    "HuTx3Meb4alJIJadoiNf1A",
+    "V1ze5v3EAAi3RqJTUn70jg",
+)
+
+
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+USER_FEATURES = {
+    "hidden_profile_subscriptions_enabled": True,
+    "responsive_web_graphql_exclude_directive_enabled": True,
+    "verified_phone_label_enabled": False,
+    "subscriptions_verification_info_is_identity_verified_enabled": True,
+    "subscriptions_verification_info_verified_since_enabled": True,
+    "highlights_tweets_tab_ui_enabled": True,
+    "responsive_web_twitter_article_notes_tab_enabled": True,
+    "subscriptions_feature_can_gift_premium": True,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+}
+
+TIMELINE_FEATURES = {
+    "rweb_tipjar_consumption_enabled": True,
+    "responsive_web_graphql_exclude_directive_enabled": True,
+    "verified_phone_label_enabled": False,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+    "communities_web_enable_tweet_community_results_fetch": True,
+    "c9s_tweet_anatomy_moderator_badge_enabled": True,
+    "articles_preview_enabled": True,
+    "responsive_web_edit_tweet_api_enabled": True,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+    "view_counts_everywhere_api_enabled": True,
+    "longform_notetweets_consumption_enabled": True,
+    "responsive_web_twitter_article_tweet_consumption_enabled": True,
+    "tweet_awards_web_tipping_enabled": False,
+    "creator_subscriptions_quote_tweet_preview_enabled": False,
+    "freedom_of_speech_not_reach_fetch_enabled": True,
+    "standardized_nudges_misinfo": True,
+    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+    "rweb_video_timestamps_enabled": True,
+    "longform_notetweets_rich_text_read_enabled": True,
+    "longform_notetweets_inline_media_enabled": True,
+    "responsive_web_enhance_cards_enabled": False,
+}
+
+# 公开样本兜底（无网络数据时）；通用模板为空
+FALLBACK_TWEETS: list[dict] = []
+
+_NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+    re.DOTALL,
+)
+_TIMELINE_ITEM_RE = re.compile(
+    r'<div class="timeline-item\s*"[^>]*data-username="([^"]+)"[^>]*>(.*?)'
+    r'(?=<div class="timeline-item\s*"|<div class="show-more"|$)',
+    re.DOTALL,
+)
+_STRIP_TAG_RE = re.compile(r"<[^>]+>")
+_NITTER_DATE_RE = re.compile(
+    r"^([A-Za-z]{3}\s+\d{1,2},\s+\d{4})\s*[·•]\s*(\d{1,2}:\d{2}\s*[AP]M)\s*UTC$",
+    re.IGNORECASE,
+)
+
+
+def _request(
+    url: str,
+    *,
+    data: bytes | None = None,
+    headers: dict[str, str] | None = None,
+    method: str | None = None,
+    retries: int = 1,
+) -> bytes:
+    base = {
+        "User-Agent": USER_AGENT,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if headers:
+        base.update(headers)
+    return fetch_bytes(url, headers=base, data=data, method=method, retries=retries)
+
+
+def _to_iso_shanghai(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(SHANGHAI).isoformat()
+    except ValueError:
+        pass
+    try:
+        return parsedate_to_datetime(raw).astimezone(SHANGHAI).isoformat()
+    except (TypeError, ValueError):
+        pass
+    m = _NITTER_DATE_RE.match(raw)
+    if m:
+        try:
+            dt = datetime.strptime(
+                f"{m.group(1)} {m.group(2).upper().replace(' ', '')}",
+                "%b %d, %Y %I:%M%p",
+            ).replace(tzinfo=timezone.utc)
+            return dt.astimezone(SHANGHAI).isoformat()
+        except ValueError:
+            try:
+                dt = datetime.strptime(
+                    f"{m.group(1)} {m.group(2)}",
+                    "%b %d, %Y %I:%M %p",
+                ).replace(tzinfo=timezone.utc)
+                return dt.astimezone(SHANGHAI).isoformat()
+            except ValueError:
+                pass
+    return raw
+
+
+def _strip_html(text: str) -> str:
+    return html.unescape(_STRIP_TAG_RE.sub("", text or "")).strip()
+
+
+def _title_from_text(text: str, *, max_len: int = 100) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if not cleaned:
+        return "(media)"
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[: max_len - 1].rstrip() + "…"
+
+
+def _is_reply_fields(
+    *,
+    in_reply_to_status_id: object = None,
+    in_reply_to_status_id_str: object = None,
+    in_reply_to_screen_name: object = None,
+    conversation_id_str: object = None,
+    tweet_id: object = None,
+) -> bool:
+    """是否为回复贴（含对他人与对自己线程的后续楼）。"""
+    if str(in_reply_to_status_id_str or "").strip():
+        return True
+    if in_reply_to_status_id not in (None, "", 0, "0"):
+        return True
+    if str(in_reply_to_screen_name or "").strip():
+        return True
+    # 会话根帖 conversation_id == id；后续楼/回复不等
+    conv = str(conversation_id_str or "").strip()
+    tid = str(tweet_id or "").strip()
+    if conv and tid and conv != tid:
+        return True
+    return False
+
+
+def _has_nested_result(node: object) -> bool:
+    if not isinstance(node, dict):
+        return False
+    result = node.get("result")
+    return isinstance(result, dict) and bool(result)
+
+
+def _is_retweet_or_quote(
+    tweet: dict,
+    legacy: dict,
+    *,
+    text: str = "",
+) -> bool:
+    """转推 / 引用转发（只要用户原创主帖）。"""
+    if _has_nested_result(legacy.get("retweeted_status_result")):
+        return True
+    if _has_nested_result(tweet.get("retweeted_status_result")):
+        return True
+    if isinstance(legacy.get("retweeted_status"), dict):
+        return True
+    if legacy.get("is_quote_status") in (True, 1, "true", "True"):
+        return True
+    if _has_nested_result(tweet.get("quoted_status_result")):
+        return True
+    if isinstance(legacy.get("quoted_status"), dict):
+        return True
+    stripped = (text or "").lstrip()
+    if stripped.upper().startswith("RT @"):
+        return True
+    return False
+
+
+def _item_not_original_post(item: dict) -> bool:
+    """列表最终闸门：回复 / RT / QT 一律排除。"""
+    if str(item.get("reply_to") or "").strip():
+        return True
+    if str(item.get("quote_user") or "").strip() or str(item.get("quote_text") or "").strip():
+        return True
+    for key in ("summary", "text", "title", "raw_text"):
+        text = str(item.get(key) or "").lstrip()
+        lower = text.lower()
+        if lower.startswith("replying to"):
+            return True
+        if text.upper().startswith("RT @"):
+            return True
+        if lower.startswith("qt @") or lower.startswith("qt:"):
+            return True
+        # compose 后常见 "正文 QT @user: …" / 多段 "\nQT:"
+        if " qt @" in lower or " qt:" in lower or "\nqt @" in lower or "\nqt:" in lower:
+            return True
+    return False
+
+
+def _compose_body(
+    text: str,
+    *,
+    reply_to: str = "",
+    quote_user: str = "",
+    quote_text: str = "",
+) -> str:
+    """拼接正文；列表阶段已丢弃回复/RT/QT，通常只剩原文。"""
+    parts: list[str] = []
+    reply_to = (reply_to or "").lstrip("@").strip()
+    quote_user = (quote_user or "").lstrip("@").strip()
+    text = (text or "").strip()
+    quote_text = (quote_text or "").strip()
+    if reply_to:
+        parts.append(f"Replying to @{reply_to}")
+    if text:
+        parts.append(text)
+    if quote_user or quote_text:
+        head = f"QT @{quote_user}" if quote_user else "QT"
+        parts.append(f"{head}: {quote_text}" if quote_text else head)
+    return "\n\n".join(parts).strip()
+
+
+def _media_image(entities: dict | None) -> str:
+    if not isinstance(entities, dict):
+        return ""
+    media = entities.get("media")
+    if not isinstance(media, list) or not media:
+        return ""
+    first = media[0] if isinstance(media[0], dict) else {}
+    return str(
+        first.get("media_url_https")
+        or first.get("media_url")
+        or first.get("expanded_url")
+        or ""
+    )
+
+
+def _cookie_pairs(cookie: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for part in (cookie or "").split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        key = name.strip()
+        val = value.strip()
+        if key and val:
+            out[key] = val
+    return out
+
+
+def _require_x_cookie() -> str:
+    cookie = get_request_cookie(AUTH_SLOT).strip()
+    if not cookie:
+        raise ValueError(
+            "ASKME_AUTH_REQUIRED:slot=x 未配置 X Cookie。"
+            "请在设置页登录 x.com 后保存含 auth_token 与 ct0 的凭证。"
+        )
+    pairs = _cookie_pairs(cookie)
+    if not pairs.get("auth_token") or not pairs.get("ct0"):
+        raise ValueError(
+            "ASKME_AUTH_REQUIRED:slot=x Cookie 缺少 auth_token 或 ct0（访客态无效）。"
+            "请重新登录 x.com 后粘贴完整 Cookie。"
+        )
+    return cookie
+
+
+def _session_headers(*, referer: str = "") -> dict[str, str]:
+    cookie = _require_x_cookie()
+    ct0 = _cookie_pairs(cookie)["ct0"]
+    return {
+        "Authorization": f"Bearer {BEARER_TOKEN}",
+        "Cookie": cookie,
+        "x-csrf-token": ct0,
+        "x-twitter-auth-type": "OAuth2Session",
+        "x-twitter-active-user": "yes",
+        "x-twitter-client-language": "en",
+        "content-type": "application/json",
+        "Referer": referer or _entry_url(),
+    }
+
+
+def _graphql(
+    query_id: str,
+    operation: str,
+    variables: dict,
+    features: dict,
+    *,
+    referer: str = "",
+) -> dict:
+    query = urllib.parse.urlencode(
+        {
+            "variables": json.dumps(variables, separators=(",", ":")),
+            "features": json.dumps(features, separators=(",", ":")),
+        }
+    )
+    url = f"{API_BASE}/graphql/{query_id}/{operation}?{query}"
+    body = _request(url, headers=_session_headers(referer=referer))
+    data = json.loads(body.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{operation} 响应非对象")
+    return data
+
+
+def _resolve_user() -> dict:
+    data = _graphql(
+        USER_BY_SCREEN_NAME_ID,
+        "UserByScreenName",
+        {"screen_name": _screen(), "withSafetyModeUserFields": True},
+        USER_FEATURES,
+    )
+    result = ((data.get("data") or {}).get("user") or {}).get("result") or {}
+    rest_id = str(result.get("rest_id") or "").strip()
+    legacy = result.get("legacy") or {}
+    if not rest_id:
+        raise ValueError(f"无法解析用户 @{_screen()}")
+    return {
+        "rest_id": rest_id,
+        "name": str(legacy.get("name") or _screen()),
+        "screen_name": str(legacy.get("screen_name") or _screen()),
+        "avatar": str(legacy.get("profile_image_url_https") or ""),
+        "description": str(legacy.get("description") or ""),
+    }
+
+
+def _unwrap_tweet_result(item: dict) -> dict:
+    if not isinstance(item, dict):
+        return {}
+    if item.get("__typename") == "TweetWithVisibilityResults":
+        nested = item.get("tweet")
+        return nested if isinstance(nested, dict) else {}
+    return item
+
+
+def _quote_from_graphql(tweet: dict) -> tuple[str, str]:
+    qsr = tweet.get("quoted_status_result")
+    if not isinstance(qsr, dict):
+        return "", ""
+    quoted = _unwrap_tweet_result(qsr.get("result") or {})
+    if not quoted:
+        return "", ""
+    qleg = quoted.get("legacy") if isinstance(quoted.get("legacy"), dict) else {}
+    quser = ((quoted.get("core") or {}).get("user_results") or {}).get("result") or {}
+    qul = quser.get("legacy") if isinstance(quser.get("legacy"), dict) else {}
+    return (
+        str(qul.get("screen_name") or "").strip(),
+        str(qleg.get("full_text") or qleg.get("text") or "").strip(),
+    )
+
+
+def _tweet_from_graphql(item: dict) -> dict | None:
+    tweet = _unwrap_tweet_result(item)
+    legacy = tweet.get("legacy") if isinstance(tweet.get("legacy"), dict) else {}
+    tweet_id = str(legacy.get("id_str") or tweet.get("rest_id") or "").strip()
+    if not tweet_id:
+        return None
+    text = str(legacy.get("full_text") or legacy.get("text") or "").strip()
+    user = ((tweet.get("core") or {}).get("user_results") or {}).get("result") or {}
+    user_legacy = user.get("legacy") if isinstance(user.get("legacy"), dict) else {}
+    author = str(user_legacy.get("name") or _screen()).strip() or _screen()
+    screen = str(user_legacy.get("screen_name") or _screen()).strip() or _screen()
+    # 仅保留目标账号原创主帖；跳过回复 / RT / QT 与他人推文
+    if screen.lower() != _screen().lower():
+        return None
+    if _is_reply_fields(
+        in_reply_to_status_id=legacy.get("in_reply_to_status_id"),
+        in_reply_to_status_id_str=legacy.get("in_reply_to_status_id_str"),
+        in_reply_to_screen_name=legacy.get("in_reply_to_screen_name"),
+        conversation_id_str=legacy.get("conversation_id_str"),
+        tweet_id=tweet_id,
+    ):
+        return None
+    if _is_retweet_or_quote(tweet, legacy, text=text):
+        return None
+    reply_to = ""
+    quote_user, quote_text = "", ""
+    body = _compose_body(text, reply_to=reply_to, quote_user=quote_user, quote_text=quote_text)
+    url = f"{BASE_URL}/{screen}/status/{tweet_id}"
+    return {
+        "id": tweet_id,
+        "title": _title_from_text(body),
+        "url": url,
+        "published_at": _to_iso_shanghai(str(legacy.get("created_at") or "")),
+        "author": author,
+        "image": _media_image(legacy.get("entities") if isinstance(legacy.get("entities"), dict) else {}),
+        "summary": body,
+        "text": body,
+        "raw_text": text,
+        "reply_to": reply_to,
+        "quote_user": quote_user,
+        "quote_text": quote_text,
+    }
+
+
+def _iter_timeline_tweet_results(entry: dict) -> list[dict]:
+    """从 timeline 条目提取 tweet results。"""
+    content = entry.get("content") or {}
+    results: list[dict] = []
+    single = ((content.get("itemContent") or {}).get("tweet_results") or {}).get("result")
+    if isinstance(single, dict):
+        results.append(single)
+    for sub in content.get("items") or []:
+        if not isinstance(sub, dict):
+            continue
+        item = sub.get("item") or sub
+        ic = item.get("itemContent") if isinstance(item, dict) else {}
+        if not isinstance(ic, dict):
+            continue
+        nested = (ic.get("tweet_results") or {}).get("result")
+        if isinstance(nested, dict):
+            results.append(nested)
+    return results
+
+
+def _parse_user_tweets(data: dict) -> list[dict]:
+    result = ((data.get("data") or {}).get("user") or {}).get("result") or {}
+    timeline = ((result.get("timeline_v2") or result.get("timeline") or {}).get("timeline")) or {}
+    instructions = timeline.get("instructions") or []
+    tweets: list[dict] = []
+    seen: set[str] = set()
+    for inst in instructions:
+        if not isinstance(inst, dict):
+            continue
+        if inst.get("type") not in ("TimelineAddEntries", "TimelinePinEntry"):
+            continue
+        entries = inst.get("entries")
+        if inst.get("type") == "TimelinePinEntry":
+            entry = inst.get("entry")
+            entries = [entry] if isinstance(entry, dict) else []
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_id = str(entry.get("entryId") or "")
+            # 只收主时间线条目；profile-conversation- 多为回复会话，跳过
+            if not entry_id.startswith("tweet-"):
+                continue
+            for raw in _iter_timeline_tweet_results(entry):
+                item = _tweet_from_graphql(raw)
+                if item is None or item["id"] in seen:
+                    continue
+                seen.add(item["id"])
+                tweets.append(item)
+    tweets.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+    return tweets
+
+
+def _fetch_graphql_operation(
+    operation: str,
+    query_ids: tuple[str, ...],
+    count: int = 40,
+    *,
+    soft: bool = False,
+) -> list[dict]:
+    user = _resolve_user()
+    if user.get("avatar"):
+        FEED_META["mpCover"] = user["avatar"].replace("_normal.", "_bigger.")
+    if user.get("name"):
+        FEED_META["mpIntro"] = f"X · {user['name']} (@{user['screen_name']})"
+    variables = {
+        "userId": user["rest_id"],
+        "count": max(5, min(int(count), 40)),
+        "includePromotedContent": True,
+        "withQuickPromoteEligibilityTweetFields": True,
+        "withVoice": True,
+        "withV2Timeline": True,
+    }
+    last_err: Exception | None = None
+    # soft 模式只试第一个 queryId，避免过期 id 拖慢
+    ids = query_ids[:1] if soft else query_ids
+    referer = _entry_url()
+    for query_id in ids:
+        try:
+            query = urllib.parse.urlencode(
+                {
+                    "variables": json.dumps(variables, separators=(",", ":")),
+                    "features": json.dumps(TIMELINE_FEATURES, separators=(",", ":")),
+                }
+            )
+            url = f"{API_BASE}/graphql/{query_id}/{operation}?{query}"
+            body = _request(
+                url,
+                headers=_session_headers(referer=referer),
+                retries=0 if soft else 1,
+            )
+            data = json.loads(body.decode("utf-8"))
+            if not isinstance(data, dict) or data.get("errors"):
+                continue
+            tweets = _parse_user_tweets(data)
+            if tweets:
+                return tweets
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            continue
+    if last_err and not soft:
+        raise last_err
+    return []
+
+
+def _fetch_graphql_tweets(count: int = 40) -> list[dict]:
+    # 只抓主帖时间线（不含回复）；UserTweets 失败时再试一次 soft
+    tweets = _fetch_graphql_operation(
+        "UserTweets", USER_TWEETS_QUERY_IDS, count=count
+    )
+    if tweets:
+        return tweets
+    return _fetch_graphql_operation(
+        "UserTweets", USER_TWEETS_QUERY_IDS, count=count, soft=True
+    )
+
+
+def _tweet_from_syndication(raw: dict) -> dict | None:
+    tweet_id = str(raw.get("id_str") or "").strip()
+    if not tweet_id:
+        return None
+    text = str(raw.get("full_text") or raw.get("text") or "").strip()
+    user = raw.get("user") if isinstance(raw.get("user"), dict) else {}
+    author = str(user.get("name") or _screen()).strip() or _screen()
+    screen = str(user.get("screen_name") or _screen()).strip() or _screen()
+    if screen.lower() != _screen().lower():
+        return None
+    if _is_reply_fields(
+        in_reply_to_status_id=raw.get("in_reply_to_status_id"),
+        in_reply_to_status_id_str=raw.get("in_reply_to_status_id_str"),
+        in_reply_to_screen_name=raw.get("in_reply_to_screen_name"),
+        conversation_id_str=raw.get("conversation_id_str"),
+        tweet_id=tweet_id,
+    ):
+        return None
+    if isinstance(raw.get("retweeted_status"), dict) or raw.get("is_quote_status") in (
+        True,
+        1,
+        "true",
+        "True",
+    ):
+        return None
+    if isinstance(raw.get("quoted_status"), dict):
+        return None
+    if text.lstrip().upper().startswith("RT @"):
+        return None
+    reply_to = ""
+    quote_user = ""
+    quote_text = ""
+    body = _compose_body(text, reply_to=reply_to, quote_user=quote_user, quote_text=quote_text)
+    permalink = str(raw.get("permalink") or f"/{screen}/status/{tweet_id}")
+    url = f"{BASE_URL}{permalink}" if permalink.startswith("/") else permalink
+    return {
+        "id": tweet_id,
+        "title": _title_from_text(body),
+        "url": url,
+        "published_at": _to_iso_shanghai(str(raw.get("created_at") or "")),
+        "author": author,
+        "image": _media_image(raw.get("entities") if isinstance(raw.get("entities"), dict) else {}),
+        "summary": body,
+        "text": body,
+        "raw_text": text,
+        "reply_to": reply_to,
+        "quote_user": quote_user,
+        "quote_text": quote_text,
+    }
+
+
+def _fetch_syndication_tweets() -> list[dict]:
+    body = _request(
+        _syndication_timeline(),
+        headers={"Referer": _entry_url(), "Accept": "text/html,application/xhtml+xml"},
+    )
+    page_html = body.decode("utf-8", "ignore")
+    match = _NEXT_DATA_RE.search(page_html)
+    if not match:
+        raise ValueError("syndication 页面缺少 __NEXT_DATA__")
+    data = json.loads(match.group(1))
+    entries = (
+        ((data.get("props") or {}).get("pageProps") or {})
+        .get("timeline", {})
+        .get("entries")
+        or []
+    )
+    tweets: list[dict] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content") or {}
+        raw = content.get("tweet") if isinstance(content, dict) else None
+        if not isinstance(raw, dict):
+            continue
+        item = _tweet_from_syndication(raw)
+        if item is None or item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        tweets.append(item)
+    tweets.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+    return tweets
+
+
+def _parse_nitter_item(username: str, body: str) -> dict | None:
+    if username.lower() != _screen().lower():
+        return None
+    if re.search(r'class="retweet-header"', body[:600]):
+        return None
+    sid_m = re.search(rf'/{re.escape(_screen())}/status/(\d+)', body)
+    if not sid_m:
+        return None
+    tweet_id = sid_m.group(1)
+    content_m = re.search(r'class="tweet-content[^"]*"[^>]*>(.*?)</div>', body, re.DOTALL)
+    text = _strip_html(content_m.group(1)) if content_m else ""
+    # Nitter：回复 / 引用块一律跳过
+    if re.search(r'class="replying-to"', body):
+        return None
+    if re.search(r'<div class="quote[^"]*">', body):
+        return None
+    if text.lstrip().upper().startswith("RT @"):
+        return None
+    quote_user = ""
+    quote_text = ""
+    date_m = re.search(
+        rf'/{re.escape(_screen())}/status/{tweet_id}[^"]*"[^>]*title="([^"]+)"',
+        body,
+    )
+    if not date_m:
+        date_m = re.search(r'title="([A-Za-z]{3}\s+\d{1,2},\s+\d{4}\s*[·•][^"]+UTC)"', body)
+    published = _to_iso_shanghai(date_m.group(1).strip() if date_m else "")
+    name_m = re.search(r'class="fullname"[^>]*title="([^"]+)"', body)
+    author = (name_m.group(1).strip() if name_m else _screen()) or _screen()
+    img_m = re.search(r'class="attachment[^"]*".*?<img[^>]+src="([^"]+)"', body, re.DOTALL)
+    image = img_m.group(1) if img_m else ""
+    composed = _compose_body(text, quote_user=quote_user, quote_text=quote_text)
+    return {
+        "id": tweet_id,
+        "title": _title_from_text(composed),
+        "url": f"{BASE_URL}/{_screen()}/status/{tweet_id}",
+        "published_at": published,
+        "author": author,
+        "image": image,
+        "summary": composed,
+        "text": composed,
+        "raw_text": text,
+        "reply_to": "",
+        "quote_user": quote_user,
+        "quote_text": quote_text,
+    }
+
+
+def _fetch_nitter_page(mirror: str, path: str) -> list[dict]:
+    url = f"{mirror.rstrip('/')}{path}"
+    body = _request(
+        url,
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "Referer": f"{mirror.rstrip('/')}/",
+        },
+        retries=1,
+    )
+    page = body.decode("utf-8", "ignore")
+    tweets: list[dict] = []
+    seen: set[str] = set()
+    for match in _TIMELINE_ITEM_RE.finditer(page):
+        item = _parse_nitter_item(match.group(1), match.group(2))
+        if item is None or item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        tweets.append(item)
+    return tweets
+
+
+def _fetch_nitter_tweets() -> list[dict]:
+    """从 Nitter 镜像拉主页时间线（不含 /with_replies）。"""
+    last_err: Exception | None = None
+    for mirror in NITTER_MIRRORS:
+        try:
+            collected = _fetch_nitter_page(mirror, f"/{_screen()}")
+            if collected:
+                return collected
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            continue
+    if last_err:
+        raise last_err
+    return []
+
+
+def _merge_tweets(*groups: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for group in groups:
+        for item in group:
+            tweet_id = str(item.get("id") or "").strip()
+            if not tweet_id or tweet_id in seen:
+                continue
+            seen.add(tweet_id)
+            merged.append(item)
+    merged.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+    return merged
+
+
+def _all_tweets() -> list[dict]:
+    # 缺 Cookie 立刻要求授权（不静默走公开镜像）
+    _require_x_cookie()
+    collected: list[dict] = []
+    # 有 Cookie 时优先登录态 GraphQL；Nitter / syndication 仅作补充
+    for fetcher in (_fetch_graphql_tweets, _fetch_nitter_tweets, _fetch_syndication_tweets):
+        try:
+            tweets = fetcher()
+            if tweets:
+                collected = _merge_tweets(collected, tweets)
+        except Exception:
+            continue
+    collected = [item for item in collected if not _item_not_original_post(item)]
+    if collected:
+        return collected
+    return [
+        dict(item)
+        for item in FALLBACK_TWEETS
+        if not _item_not_original_post(item)
+    ]
+
+
+def fetch_list_page(page: int = 1, per: int = 20) -> dict:
+    page = max(1, int(page or 1))
+    per = max(1, min(int(per or 20), 50))
+    tweets = _all_tweets()
+    start = (page - 1) * per
+    end = start + per
+    return {
+        "items": tweets[start:end],
+        "page": page,
+        "per": per,
+        "total": len(tweets),
+    }
+
+
+def list_items(payload: dict) -> list[dict]:
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict) and not _item_not_original_post(item)]
+
+
+def has_next_page(payload: dict) -> bool:
+    page = int(payload.get("page") or 1)
+    per = int(payload.get("per") or 20)
+    total = int(payload.get("total") or 0)
+    return page * per < total
+
+
+def normalize_list_item(item: dict) -> dict:
+    tweet_id = str(item.get("id") or "").strip()
+    text = str(item.get("text") or item.get("summary") or "").strip()
+    title = str(item.get("title") or "").strip() or _title_from_text(text)
+    url = str(item.get("url") or "").strip()
+    if not url and tweet_id:
+        url = f"{BASE_URL}/{_screen()}/status/{tweet_id}"
+    return {
+        "id": tweet_id,
+        "title": title,
+        "url": url,
+        "published_at": _to_iso_shanghai(str(item.get("published_at") or "")),
+        "author": str(item.get("author") or _screen()).strip(),
+        "image": str(item.get("image") or ""),
+        "summary": text,
+    }
+
+
+def _fetch_tweet_result(tweet_id: str) -> dict | None:
+    query = urllib.parse.urlencode({"id": tweet_id, "lang": "en", "token": "0"})
+    url = f"{TWEET_RESULT_API}?{query}"
+    try:
+        body = _request(
+            url,
+            headers={"Referer": "https://platform.twitter.com/", "Accept": "application/json"},
+        )
+        data = json.loads(body.decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict) or not data.get("id_str"):
+        return None
+    return data
+
+
+def _content_html(
+    text: str,
+    *,
+    url: str,
+    author: str,
+    reply_to: str = "",
+    quote_user: str = "",
+    quote_text: str = "",
+) -> str:
+    parts: list[str] = []
+    reply_to = (reply_to or "").lstrip("@").strip()
+    if reply_to:
+        parts.append(f"<p><em>Replying to @{html.escape(reply_to)}</em></p>")
+    body = (text or "").strip()
+    if body:
+        for para in body.split("\n\n"):
+            para = para.strip()
+            if para:
+                parts.append(f"<p>{html.escape(para)}</p>")
+    else:
+        parts.append("<p>(media-only post)</p>")
+    quote_user = (quote_user or "").lstrip("@").strip()
+    quote_text = (quote_text or "").strip()
+    if quote_user or quote_text:
+        q_label = f"@{html.escape(quote_user)}" if quote_user else "quoted"
+        parts.append(
+            "<blockquote>"
+            f"<p><strong>QT {q_label}</strong></p>"
+            f"<p>{html.escape(quote_text) if quote_text else '(media)'}</p>"
+            "</blockquote>"
+        )
+    meta = f"{html.escape(author)} · <a href=\"{html.escape(url)}\">{html.escape(url)}</a>"
+    parts.append(f"<p>{meta}</p>")
+    return "<article>" + "".join(parts) + "</article>"
+
+
+def fetch_article_detail(article_id: str, **hints) -> dict:
+    tweet_id = str(article_id or "").strip()
+    if not tweet_id:
+        raise ValueError("缺少 tweet id")
+
+    remote = _fetch_tweet_result(tweet_id)
+    if remote:
+        text = str(remote.get("text") or remote.get("full_text") or "").strip()
+        user = remote.get("user") if isinstance(remote.get("user"), dict) else {}
+        author = str(user.get("name") or _screen()).strip() or _screen()
+        screen = str(user.get("screen_name") or _screen()).strip() or _screen()
+        url = f"{BASE_URL}/{screen}/status/{tweet_id}"
+        reply_to = str(remote.get("in_reply_to_screen_name") or "").strip()
+        parent = remote.get("parent") if isinstance(remote.get("parent"), dict) else {}
+        if not reply_to and parent:
+            puser = parent.get("user") if isinstance(parent.get("user"), dict) else {}
+            reply_to = str(puser.get("screen_name") or "").strip()
+        quote_user = ""
+        quote_text = ""
+        quoted = remote.get("quoted_tweet") if isinstance(remote.get("quoted_tweet"), dict) else {}
+        if quoted:
+            quser = quoted.get("user") if isinstance(quoted.get("user"), dict) else {}
+            quote_user = str(quser.get("screen_name") or "").strip()
+            quote_text = str(quoted.get("text") or quoted.get("full_text") or "").strip()
+        # 详情正文：本人文本 + 独立 blockquote，避免与 _compose_body 重复嵌套
+        display = text
+        if reply_to and not display.lower().startswith("replying to"):
+            pass  # reply 由 _content_html 渲染
+        return {
+            "id": tweet_id,
+            "title": _title_from_text(
+                _compose_body(text, reply_to=reply_to, quote_user=quote_user, quote_text=quote_text)
+            ),
+            "url": url,
+            "author": author,
+            "published_at": _to_iso_shanghai(str(remote.get("created_at") or "")),
+            "image": _media_image(
+                remote.get("entities") if isinstance(remote.get("entities"), dict) else {}
+            ),
+            "content_html": _content_html(
+                display,
+                url=url,
+                author=author,
+                reply_to=reply_to,
+                quote_user=quote_user,
+                quote_text=quote_text,
+            ),
+        }
+
+    for item in _all_tweets():
+        if str(item.get("id")) == tweet_id:
+            raw_text = str(item.get("raw_text") or item.get("text") or item.get("summary") or "")
+            # 列表项可能已 compose，详情优先用 raw + 结构化字段
+            reply_to = str(item.get("reply_to") or "")
+            quote_user = str(item.get("quote_user") or "")
+            quote_text = str(item.get("quote_text") or "")
+            url = str(item.get("url") or f"{BASE_URL}/{_screen()}/status/{tweet_id}")
+            author = str(item.get("author") or _screen())
+            return {
+                "id": tweet_id,
+                "title": str(item.get("title") or _title_from_text(raw_text)),
+                "url": url,
+                "author": author,
+                "published_at": _to_iso_shanghai(str(item.get("published_at") or "")),
+                "image": str(item.get("image") or ""),
+                "content_html": _content_html(
+                    raw_text if (reply_to or quote_user or quote_text) else raw_text,
+                    url=url,
+                    author=author,
+                    reply_to=reply_to,
+                    quote_user=quote_user,
+                    quote_text=quote_text,
+                ),
+            }
+
+    raise ValueError(f"未找到推文: {tweet_id}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="发现 X 推文（需绑定账号上下文）")
+    parser.add_argument("--page", type=int, default=1)
+    parser.add_argument("--per", type=int, default=20)
+    parser.add_argument("--id", type=str, default="")
+    args = parser.parse_args()
+    try:
+        if args.id:
+            output = fetch_article_detail(args.id)
+        else:
+            payload = fetch_list_page(page=args.page, per=args.per)
+            output = {
+                "articles": [normalize_list_item(item) for item in list_items(payload)],
+                "has_next_page": has_next_page(payload),
+            }
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 1
+    print(json.dumps({"ok": True, **output}, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

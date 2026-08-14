@@ -133,17 +133,24 @@ async def start_bodies_job(body: RecentArticlesRequest):
         "group_id": (body.group_id or "").strip(),
     }
 
-    async def runner(on_progress):
+    async def runner(on_progress, is_cancelled=None):
         return await article_service.get_recent_articles(
             days=body.days,
             feed_ids=body.feed_ids or None,
             enrich=True,
             list_limit=body.list_limit,
             on_progress=on_progress,
+            is_cancelled=is_cancelled,
         )
 
     started = await content_job_manager.start_bodies(runner=runner, params=params)
     return started
+
+
+@router.post("/api/articles/bodies/jobs/cancel")
+async def cancel_bodies_job():
+    ok = content_job_manager.request_bodies_cancel()
+    return {"ok": ok, "message": "已请求停止拉取正文" if ok else "当前没有进行中的正文任务"}
 
 
 @router.get("/api/articles/bodies/jobs/current")

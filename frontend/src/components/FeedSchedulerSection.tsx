@@ -1,24 +1,26 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchFeedSchedulerConfig,
+  fetchFeeds,
   updateFeedSchedulerConfig,
+  type FeedGroup,
   type FeedSchedulerConfig,
   type ScheduleTime,
 } from "../api";
+import { UNGROUPED_GROUP_ID, countUngroupedFeeds } from "../utils/feedLayout";
 import { useFeedRefresh } from "../contexts/FeedRefreshContext";
-import { useDigest } from "../contexts/DigestContext";
-
-interface ScheduleDraft extends ScheduleTime {
-  id: string;
-}
-
-function pad2(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-function formatScheduleLabel(schedule: ScheduleTime): string {
-  return `${pad2(schedule.hour)}:${pad2(schedule.minute)}:${pad2(schedule.second)}`;
-}
+import {
+  SCHEDULES_UPDATED_EVENT,
+  clampEveryHours,
+  formatScheduleSummary,
+  notifySchedulesUpdated,
+  parseDrafts,
+  schedulesEqual,
+  timeValue,
+  toDrafts,
+  validateSchedules,
+  type ScheduleDraft,
+} from "../utils/feedScheduler";
 
 function formatLastRun(timestamp: number | null | undefined): string {
   if (!timestamp) return "—";
@@ -34,49 +36,24 @@ function formatNextRun(iso: string | null | undefined): string {
   return date.toLocaleString("zh-CN");
 }
 
-function schedulesEqual(a: ScheduleTime[], b: ScheduleTime[]): boolean {
-  if (a.length !== b.length) return false;
-  const sortKey = (item: ScheduleTime) =>
-    `${item.hour}:${item.minute}:${item.second}`;
-  const left = [...a].map(sortKey).sort();
-  const right = [...b].map(sortKey).sort();
-  return left.every((value, index) => value === right[index]);
-}
-
-function toDrafts(schedules: ScheduleTime[]): ScheduleDraft[] {
-  return schedules.map((schedule, index) => ({
-    ...schedule,
-    id: `${schedule.hour}-${schedule.minute}-${schedule.second}-${index}`,
-  }));
-}
-
-function clampTimePart(value: number, max: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(max, Math.max(0, Math.trunc(value)));
-}
-
-function parseDrafts(drafts: ScheduleDraft[]): ScheduleTime[] {
-  return drafts.map((item) => ({
-    hour: clampTimePart(item.hour, 23),
-    minute: clampTimePart(item.minute, 59),
-    second: clampTimePart(item.second, 59),
-  }));
-}
-
 export default function FeedSchedulerSection() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [groups, setGroups] = useState<FeedGroup[]>([]);
+  const [ungroupedCount, setUngroupedCount] = useState(0);
+  const [openPopId, setOpenPopId] = useState<string | null>(null);
+  const [draftGroupIds, setDraftGroupIds] = useState<string[]>([]);
+  const popRef = useRef<HTMLDivElement>(null);
   const {
     refreshBusy,
     progress: liveProgress,
     statusMessage,
     resultMessage,
     error: refreshError,
-    startRefreshAll,
+    stopRefresh,
   } = useFeedRefresh();
-  const { days } = useDigest();
 
   const [drafts, setDrafts] = useState<ScheduleDraft[]>([]);
   const [status, setStatus] = useState<FeedSchedulerConfig | null>(null);
@@ -90,8 +67,13 @@ export default function FeedSchedulerSection() {
     setLoading(true);
     setError("");
     try {
-      const config = await fetchFeedSchedulerConfig();
+      const [config, feedsData] = await Promise.all([
+        fetchFeedSchedulerConfig(),
+        fetchFeeds(),
+      ]);
       applyServerConfig(config);
+      setGroups(feedsData.groups ?? []);
+      setUngroupedCount(countUngroupedFeeds(feedsData.feeds ?? [], feedsData.groups ?? []));
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载定时设置失败");
     } finally {
@@ -102,6 +84,34 @@ export default function FeedSchedulerSection() {
   useEffect(() => {
     void loadConfig();
   }, [loadConfig]);
+
+  useEffect(() => {
+    function handleSchedulesUpdated(event: Event) {
+      const detail = (event as CustomEvent<{ schedules?: ScheduleTime[] }>).detail;
+      if (detail?.schedules) {
+        setStatus((current) =>
+          current ? { ...current, schedules: detail.schedules ?? [] } : current,
+        );
+        setDrafts(toDrafts(detail.schedules ?? []));
+        setSaved(true);
+        setError("");
+      } else {
+        void loadConfig();
+      }
+    }
+    window.addEventListener(SCHEDULES_UPDATED_EVENT, handleSchedulesUpdated);
+    return () => window.removeEventListener(SCHEDULES_UPDATED_EVENT, handleSchedulesUpdated);
+  }, [loadConfig]);
+
+  useEffect(() => {
+    if (!openPopId) return;
+    function handleClick(event: MouseEvent) {
+      if (popRef.current?.contains(event.target as Node)) return;
+      setOpenPopId(null);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [openPopId]);
 
   const draftSchedules = useMemo(() => parseDrafts(drafts), [drafts]);
 
@@ -119,6 +129,54 @@ export default function FeedSchedulerSection() {
     ? Math.min(100, Math.round((refreshProgress.current / refreshProgress.total) * 100))
     : 0;
 
+  const groupOptions = useMemo(() => {
+    const named = groups
+      .filter((group) => group.id !== UNGROUPED_GROUP_ID)
+      .map((group) => ({
+        id: group.id,
+        name: group.name,
+        feedCount: group.feed_ids?.length ?? 0,
+      }));
+    return [
+      ...named,
+      {
+        id: UNGROUPED_GROUP_ID,
+        name: "未分组",
+        feedCount: ungroupedCount,
+      },
+    ];
+  }, [groups, ungroupedCount]);
+
+  const persistSchedules = useCallback(async (schedules: ScheduleTime[]) => {
+    setSaving(true);
+    setError("");
+    setSaved(false);
+    try {
+      const result = await updateFeedSchedulerConfig({ schedules });
+      applyServerConfig(result);
+      notifySchedulesUpdated(result.schedules ?? []);
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  }, [applyServerConfig]);
+
+  useEffect(() => {
+    if (loading || !status || !isDirty) return;
+    const validationError = validateSchedules(draftSchedules);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setError("");
+    const timer = window.setTimeout(() => {
+      void persistSchedules(draftSchedules);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [draftSchedules, isDirty, loading, persistSchedules, status]);
+
   function updateDraft(id: string, patch: Partial<ScheduleTime>) {
     setDrafts((current) =>
       current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
@@ -127,13 +185,17 @@ export default function FeedSchedulerSection() {
   }
 
   function handleAddSchedule() {
+    const defaultGroupId = groupOptions[0]?.id;
     setDrafts((current) => [
       ...current,
       {
         id: `new-${Date.now()}`,
+        kind: "daily",
         hour: 8,
         minute: 0,
         second: 0,
+        every_hours: 6,
+        group_ids: defaultGroupId ? [defaultGroupId] : [],
       },
     ]);
     setSaved(false);
@@ -141,72 +203,56 @@ export default function FeedSchedulerSection() {
 
   function handleRemoveSchedule(id: string) {
     setDrafts((current) => current.filter((item) => item.id !== id));
+    if (openPopId === id) setOpenPopId(null);
     setSaved(false);
   }
 
-  async function handleSave() {
-    setSaving(true);
-    setError("");
-    setSaved(false);
-    try {
-      const result = await updateFeedSchedulerConfig({
-        schedules: draftSchedules,
-      });
-      applyServerConfig(result);
-      setSaved(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
-    } finally {
-      setSaving(false);
+  function openGroupsPop(item: ScheduleDraft) {
+    const wasOpen = openPopId === item.id;
+    if (wasOpen) {
+      setOpenPopId(null);
+      return;
     }
+    setDraftGroupIds([...(item.group_ids ?? [])]);
+    setOpenPopId(item.id);
   }
 
-  async function handleRefreshAllNow() {
-    setError("");
-    setSaved(false);
-    try {
-      if (isDirty) {
-        const savedConfig = await updateFeedSchedulerConfig({
-          schedules: draftSchedules,
-        });
-        applyServerConfig(savedConfig);
-      }
-      await startRefreshAll(days);
-      const latest = await fetchFeedSchedulerConfig();
-      applyServerConfig(latest);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "立即更新失败");
+  function confirmGroupsPop(id: string) {
+    if (draftGroupIds.length === 0) {
+      setError("请至少选择一个分组");
+      return;
     }
+    updateDraft(id, { group_ids: [...draftGroupIds] });
+    setOpenPopId(null);
+    setError("");
   }
+
+  const nextHint = (() => {
+    if (!status) return "";
+    if (drafts.length === 0) return "尚未添加定时。";
+    const summaries = draftSchedules.map(formatScheduleSummary).join(" · ");
+    const next =
+      status.next_runs?.[0]?.next_run != null
+        ? `下次：${formatNextRun(status.next_runs[0].next_run)}`
+        : "";
+    const last = status.last_run_at
+      ? `上次：${formatLastRun(status.last_run_at)}${
+          (status.last_feed_count ?? 0) > 0 ? ` · 成功 ${status.last_feed_count} 个源` : ""
+        }`
+      : "";
+    return [`已设 ${drafts.length} 条：${summaries}`, next, last].filter(Boolean).join("　　");
+  })();
 
   return (
     <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">订阅定时更新</h2>
-          <p className="mt-1 text-xs text-[var(--ink-muted)]">
-            每天在指定时刻刷新各网站数据源文章列表。未添加定时则需手动在「数据源」刷新。
-            配置保存在服务端 data/feed_scheduler.json，时区为 Asia/Shanghai。
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={handleAddSchedule}
-          className="rounded-md border border-[var(--rule)] px-3 py-1.5 text-sm hover:bg-[var(--paper)]"
-        >
+        <h2 className="text-sm font-semibold">定时更新</h2>
+        <button type="button" onClick={handleAddSchedule} className="ui-btn text-sm">
           添加定时
-        </button>
-        <button
-          type="button"
-          disabled={refreshBusy}
-          onClick={() => void handleRefreshAllNow()}
-          className="rounded-md bg-[var(--ink)] px-3 py-1.5 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)] disabled:opacity-50"
-        >
-          {refreshBusy ? "更新中..." : "立即更新"}
         </button>
       </div>
 
-      {showProgressBar && refreshProgress && (
+      {showProgressBar && refreshProgress ? (
         <div className="mt-3">
           <div className="mb-1 flex items-center justify-between text-xs text-[var(--ink-muted)]">
             <span>
@@ -225,146 +271,182 @@ export default function FeedSchedulerSection() {
               style={{ width: `${progressPercent}%` }}
             />
           </div>
+          {refreshBusy ? (
+            <button type="button" onClick={stopRefresh} className="ui-btn mt-2 text-xs">
+              停止更新
+            </button>
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       {loading ? (
         <p className="mt-4 text-sm text-[var(--ink-muted)]">加载中...</p>
       ) : (
         <>
           {drafts.length === 0 ? (
-            <p className="mt-4 text-sm text-[var(--ink-muted)]">暂无定时，点击「添加定时」创建。</p>
+            <p className="mt-4 text-sm text-[var(--ink-muted)]">还没有定时，点右上角「添加定时」。</p>
           ) : (
-            <ul className="mt-4 space-y-3">
-              {drafts.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--rule)] px-3 py-2 text-sm"
-                >
-                  <span className="text-[var(--ink-muted)]">每天</span>
-                  <label className="flex items-center gap-1 text-xs text-[var(--ink-muted)]">
-                    时
-                    <input
-                      type="number"
-                      min={0}
-                      max={23}
-                      value={item.hour}
-                      onChange={(e) =>
-                        updateDraft(item.id, { hour: Number(e.target.value) })
-                      }
-                      className="w-14 rounded border border-[var(--rule)] px-2 py-1 text-sm text-[var(--ink)]"
-                    />
-                  </label>
-                  <span className="text-[var(--ink-muted)]">:</span>
-                  <label className="flex items-center gap-1 text-xs text-[var(--ink-muted)]">
-                    分
-                    <input
-                      type="number"
-                      min={0}
-                      max={59}
-                      value={item.minute}
-                      onChange={(e) =>
-                        updateDraft(item.id, { minute: Number(e.target.value) })
-                      }
-                      className="w-14 rounded border border-[var(--rule)] px-2 py-1 text-sm text-[var(--ink)]"
-                    />
-                  </label>
-                  <span className="text-[var(--ink-muted)]">:</span>
-                  <label className="flex items-center gap-1 text-xs text-[var(--ink-muted)]">
-                    秒
-                    <input
-                      type="number"
-                      min={0}
-                      max={59}
-                      value={item.second}
-                      onChange={(e) =>
-                        updateDraft(item.id, { second: Number(e.target.value) })
-                      }
-                      className="w-14 rounded border border-[var(--rule)] px-2 py-1 text-sm text-[var(--ink)]"
-                    />
-                  </label>
-                  <span className="ml-1 font-mono text-xs text-[var(--ink-muted)]">
-                    {formatScheduleLabel(item)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveSchedule(item.id)}
-                    className="ml-auto rounded border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50"
+            <ul className="mt-4 space-y-2">
+              {drafts.map((item) => {
+                const n = (item.group_ids ?? []).length;
+                const groupsLabel = n > 0 ? `已选 ${n} 组` : "选择分组";
+                const popOpen = openPopId === item.id;
+                return (
+                  <li
+                    key={item.id}
+                    className="relative flex flex-nowrap items-center gap-2 rounded-[var(--radius-control)] border border-[var(--rule)] bg-[color-mix(in_srgb,var(--paper)_55%,var(--paper-raised))] px-2.5 py-2 text-sm"
                   >
-                    删除
-                  </button>
-                </li>
-              ))}
+                    <select
+                      aria-label="定时类型"
+                      value={item.kind === "interval" ? "interval" : "daily"}
+                      onChange={(e) =>
+                        updateDraft(item.id, {
+                          kind: e.target.value === "interval" ? "interval" : "daily",
+                        })
+                      }
+                      className="ui-input max-w-[4.6rem] shrink-0 px-2 py-1 text-xs"
+                    >
+                      <option value="daily">每天</option>
+                      <option value="interval">每隔</option>
+                    </select>
+
+                    <div className="flex min-w-0 shrink items-center gap-1">
+                      {item.kind === "interval" ? (
+                        <>
+                          <input
+                            type="number"
+                            min={1}
+                            max={24}
+                            step={1}
+                            aria-label="间隔小时"
+                            value={item.every_hours ?? 6}
+                            onChange={(e) =>
+                              updateDraft(item.id, {
+                                every_hours: clampEveryHours(Number(e.target.value)),
+                              })
+                            }
+                            className="ui-input w-14 px-2 py-1 text-xs"
+                          />
+                          <span className="shrink-0 text-xs text-[var(--ink-muted)]">小时</span>
+                        </>
+                      ) : (
+                        <input
+                          type="time"
+                          aria-label="每天时刻"
+                          value={timeValue(item.hour, item.minute)}
+                          onChange={(e) => {
+                            const [h, m] = e.target.value.split(":").map(Number);
+                            updateDraft(item.id, {
+                              hour: Math.min(23, Math.max(0, h || 0)),
+                              minute: Math.min(59, Math.max(0, m || 0)),
+                              second: 0,
+                            });
+                          }}
+                          className="ui-input px-2 py-1 text-xs"
+                        />
+                      )}
+                    </div>
+
+                    <div className="relative min-w-0 flex-1" ref={popOpen ? popRef : undefined}>
+                      <button
+                        type="button"
+                        onClick={() => openGroupsPop(item)}
+                        className={`w-full rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper-raised)] px-2.5 py-1 text-left text-xs hover:border-[var(--accent)] ${
+                          n === 0 ? "text-[var(--accent)]" : "text-[var(--ink)]"
+                        }`}
+                      >
+                        {groupsLabel}
+                      </button>
+                      {popOpen ? (
+                        <div
+                          role="dialog"
+                          className="absolute right-0 top-full z-30 mt-1 w-56 rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper-raised)] p-2.5 shadow-md"
+                        >
+                          <p className="mb-2 text-xs text-[var(--ink-muted)]">选择要更新的分组</p>
+                          <div className="max-h-44 space-y-1 overflow-y-auto">
+                            {groupOptions.length === 0 ? (
+                              <p className="text-xs text-[var(--ink-muted)]">暂无分组</p>
+                            ) : (
+                              groupOptions.map((opt) => {
+                                const checked = draftGroupIds.includes(opt.id);
+                                return (
+                                  <label
+                                    key={opt.id}
+                                    className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs text-[var(--ink)] hover:bg-[var(--paper)]"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(e) => {
+                                        setDraftGroupIds((current) =>
+                                          e.target.checked
+                                            ? [...current, opt.id]
+                                            : current.filter((id) => id !== opt.id),
+                                        );
+                                      }}
+                                    />
+                                    <span className="min-w-0 flex-1 truncate">{opt.name}</span>
+                                    <span className="shrink-0 text-[10px] text-[var(--ink-muted)]">
+                                      {opt.feedCount}
+                                    </span>
+                                  </label>
+                                );
+                              })
+                            )}
+                          </div>
+                          <div className="mt-2 flex justify-end gap-2 border-t border-[var(--rule)] pt-2">
+                            <button
+                              type="button"
+                              onClick={() => setOpenPopId(null)}
+                              className="ui-btn px-2 py-1 text-xs"
+                            >
+                              取消
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => confirmGroupsPop(item.id)}
+                              className="ui-btn ui-btn-primary px-2 py-1 text-xs"
+                            >
+                              完成
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSchedule(item.id)}
+                      className="shrink-0 rounded border border-transparent px-2 py-0.5 text-xs text-[var(--ink-muted)] hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+                    >
+                      删除
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
 
-          {status && status.next_runs && status.next_runs.length > 0 && (
-            <div className="mt-4 rounded-lg bg-[var(--paper)] px-3 py-2 text-xs text-[var(--ink-muted)]">
-              <div className="font-medium text-[var(--ink)]">下次执行</div>
-              <ul className="mt-1 space-y-1">
-                {status.next_runs.map((item) => (
-                  <li key={`${item.hour}-${item.minute}-${item.second}`}>
-                    {formatScheduleLabel(item)} → {formatNextRun(item.next_run)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {nextHint ? (
+            <p className="mt-3 text-xs text-[var(--ink-muted)]">
+              {nextHint}
+              {saving ? (
+                <span className="ml-2 text-[var(--ink-muted)]">保存中…</span>
+              ) : saved && !isDirty ? (
+                <span className="ml-2 text-[var(--success)]">已保存</span>
+              ) : null}
+            </p>
+          ) : null}
 
-          {status && (
-            <div className="mt-3 rounded-lg bg-[var(--paper)] px-3 py-2 text-xs text-[var(--ink-muted)]">
-              <div>上次执行：{formatLastRun(status.last_run_at)}</div>
-              {(status.last_feed_count ?? 0) > 0 && (
-                <div>上次刷新成功：{status.last_feed_count} 个源</div>
-              )}
-              {status.last_refresh_message && (
-                <div className="mt-1">{status.last_refresh_message}</div>
-              )}
-              {status.last_error && (
-                <div className="mt-1 text-red-600">上次错误：{status.last_error}</div>
-              )}
-            </div>
-          )}
-
-          {(status?.last_refresh_failed?.length ?? 0) > 0 && (
-            <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
-              <div className="font-medium">
-                上次有 {status!.last_refresh_failed!.length} 个源失败
-                {status!.last_refresh_failed!.some((item) =>
-                  /授权|登录|会话|ASKME_AUTH|cookie|公众号/i.test(item.error || ""),
-                )
-                  ? "（含授权/登录问题，请到「授权」页检查凭证）"
-                  : ""}
-              </div>
-              <ul className="mt-1.5 max-h-40 space-y-1 overflow-y-auto">
-                {status!.last_refresh_failed!.map((item) => (
-                  <li key={`${item.feed_id}-${item.error}`}>
-                    · {item.feed_name || item.feed_id}：{item.error || "未知错误"}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {error && <p className="mt-3 whitespace-pre-wrap text-sm text-red-600">{error}</p>}
-          {refreshError && (
-            <p className="mt-3 whitespace-pre-wrap text-sm text-amber-800">{refreshError}</p>
-          )}
-          {statusMessage && <p className="mt-3 text-sm text-blue-700">{statusMessage}</p>}
-          {resultMessage && !statusMessage && (
-            <p className="mt-3 text-sm text-green-700">{resultMessage}</p>
-          )}
-          {saved && !isDirty && <p className="mt-3 text-sm text-green-700">定时设置已保存</p>}
-          <div className="mt-4 flex justify-end">
-            <button
-              type="button"
-              disabled={saving || !isDirty}
-              onClick={() => void handleSave()}
-              className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)] disabled:opacity-50"
+          {(error || refreshError || resultMessage) && (
+            <p
+              className={`mt-3 text-sm ${
+                error || refreshError ? "text-red-800" : "text-[var(--ink-muted)]"
+              }`}
             >
-              {saving ? "保存中..." : "保存"}
-            </button>
-          </div>
+              {error || refreshError || resultMessage}
+            </p>
+          )}
         </>
       )}
     </section>

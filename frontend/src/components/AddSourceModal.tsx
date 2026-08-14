@@ -1,20 +1,26 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  FEEDS_NEED_RELOAD_KEY,
   ONBOARD_BATCH_MAX_SIZE,
-  buildWeixinOnboardUrl,
-  looksLikeWeixinUrl,
+  fetchFeeds,
+  fetchSkillsCatalog,
+  importDiscoverySkills,
+  parseDiscoverySkillZip,
   parseOnboardUrls,
-  parseWeixinNames,
-  pickWeixinAccount,
   precheckSourceAuth,
-  resolveWeixinAccountUrl,
-  searchWeixinAccounts,
   type AuthPrecheckItem,
   type AuthPrecheckResult,
+  type DiscoverySkillImportResult,
   type FeedGroup,
+  type PlatformAccountImportPayload,
 } from "../api";
 import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
-import { WEIXIN_SOURCE_ENABLED } from "../utils/featureFlags";
+import {
+  parseSkillDirectoriesFromRelativeEntries,
+  parsePlatformAccountsFromRelativeEntries,
+  collectFilesFromDataTransfer,
+  type ParsedSkillDirectory,
+} from "../utils/skillDirectory";
 import { useOnboarding } from "../contexts/OnboardingContext";
 import AuthHandoffPanel from "./AuthHandoffPanel";
 
@@ -25,16 +31,14 @@ interface AddSourceModalProps {
   defaultGroupId?: string;
   /** 失败重试时预填链接 */
   initialUrls?: string;
+  /** skill 导入成功 */
+  onImported?: (result: DiscoverySkillImportResult) => void;
 }
-
-type AddSourceTab = "url" | "weixin";
-
-const WEIXIN_PRECHECK_URL = "https://mp.weixin.qq.com/";
 
 function isAuthErrorMessage(message: string): boolean {
   const text = (message || "").toLowerCase();
   if (!text) return false;
-  // 不要用平台名（zhihu / xiaohongshu）做匹配：普通接入错误也会带这些字样
+  // 不要用具体站点/平台名做匹配：普通接入错误也会带这些字样
   return (
     text.includes("askme_auth_required") ||
     text.includes("needs_auth") ||
@@ -54,25 +58,32 @@ export default function AddSourceModal({
   groups,
   defaultGroupId = UNGROUPED_GROUP_ID,
   initialUrls = "",
+  onImported,
 }: AddSourceModalProps) {
-  const { batch, job, startBatchOnboarding } = useOnboarding();
-  const [tab, setTab] = useState<AddSourceTab>("url");
+  const { job, startBatchOnboarding } = useOnboarding();
   const [siteUrls, setSiteUrls] = useState("");
-  const [weixinNamesText, setWeixinNamesText] = useState("");
   const [groupId, setGroupId] = useState<string>(defaultGroupId);
   const [localError, setLocalError] = useState("");
   const [precheck, setPrecheck] = useState<AuthPrecheckResult | null>(null);
   const [precheckLoading, setPrecheckLoading] = useState(false);
   const [authCookies, setAuthCookies] = useState<Record<string, string>>({});
   const [savingSlot, setSavingSlot] = useState<string | null>(null);
-  const [resolvingWeixin, setResolvingWeixin] = useState(false);
+  const [mode, setMode] = useState<"url" | "import">("url");
+  const [importSkills, setImportSkills] = useState<ParsedSkillDirectory[]>([]);
+  const [importPlatformAccounts, setImportPlatformAccounts] = useState<PlatformAccountImportPayload[]>([]);
+  const [importError, setImportError] = useState("");
+  const [importConflict, setImportConflict] = useState(false);
+  const [overwriteImport, setOverwriteImport] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [parsingImport, setParsingImport] = useState(false);
+  const [knownDiscoverySkillIds, setKnownDiscoverySkillIds] = useState<Set<string>>(new Set());
+  const [knownPlatformFeedIds, setKnownPlatformFeedIds] = useState<Set<string>>(new Set());
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const parsedUrls = useMemo(() => parseOnboardUrls(siteUrls), [siteUrls]);
-  const parsedWeixinNames = useMemo(
-    () => parseWeixinNames(weixinNamesText),
-    [weixinNamesText],
-  );
-  const busy = Boolean(batch?.status === "running" || job?.running || resolvingWeixin);
+  // 接入 batch 进行中仍可继续提交（后端合并进同一并发池）；仅修复中禁用
+  const busy = Boolean(job?.running);
 
   const missingAuthItems = useMemo(() => {
     const bySlot = new Map<string, AuthPrecheckItem>();
@@ -86,10 +97,29 @@ export default function AddSourceModal({
 
   const blockedByAuth = missingAuthItems.length > 0;
 
-  const weixinReady = useMemo(() => {
-    const item = (precheck?.items ?? []).find((x) => x.slot === "weixin");
-    return Boolean(item?.configured);
-  }, [precheck]);
+  const validImportSkills = useMemo(
+    () => importSkills.filter((skill) => !skill.error),
+    [importSkills],
+  );
+
+  const importMetaError = useMemo(() => {
+    if (importSkills.length === 0) return "";
+    const firstError = importSkills.find((skill) => skill.error)?.error;
+    return firstError || "";
+  }, [importSkills]);
+
+  const conflictingSkills = useMemo(
+    () => validImportSkills.filter((skill) => knownDiscoverySkillIds.has(skill.skillId)),
+    [knownDiscoverySkillIds, validImportSkills],
+  );
+
+  const conflictingPlatformAccounts = useMemo(
+    () => importPlatformAccounts.filter((account) => knownPlatformFeedIds.has(account.feed_id)),
+    [importPlatformAccounts, knownPlatformFeedIds],
+  );
+
+  const hasImportConflict =
+    conflictingSkills.length > 0 || conflictingPlatformAccounts.length > 0;
 
   const refreshPrecheck = useCallback(async (urls: string[]) => {
     if (urls.length === 0) {
@@ -101,6 +131,129 @@ export default function AddSourceModal({
     return refreshed;
   }, []);
 
+  const applyImportPackage = useCallback(
+    (skills: ParsedSkillDirectory[], platformAccounts: PlatformAccountImportPayload[]) => {
+      if (skills.length === 0 && platformAccounts.length === 0) {
+        setImportSkills([]);
+        setImportPlatformAccounts([]);
+        setImportError("未识别到有效的 skill 或平台账号，请拖入或选择 zip / *-discovery 目录");
+        return;
+      }
+      setImportSkills(skills);
+      setImportPlatformAccounts(platformAccounts);
+      setImportError("");
+    },
+    [],
+  );
+
+  const loadImportFromZipFiles = useCallback(async (zipFiles: File[]) => {
+    const parsed: ParsedSkillDirectory[] = [];
+    const platformAccounts: PlatformAccountImportPayload[] = [];
+    for (const zipFile of zipFiles) {
+      const pkg = await parseDiscoverySkillZip(zipFile);
+      for (const skill of pkg.skills) {
+        parsed.push({
+          skillId: skill.skill_id,
+          slug: skill.slug || skill.skill_id.replace(/-discovery$/, ""),
+          feedId: skill.feed_id || `website:${(skill.slug || skill.skill_id).replace(/-discovery$/, "")}`,
+          name: skill.name || skill.skill_id,
+          files: skill.files,
+        });
+      }
+      platformAccounts.push(...pkg.platform_accounts);
+    }
+    applyImportPackage(
+      parsed.sort((a, b) => a.skillId.localeCompare(b.skillId)),
+      platformAccounts.sort((a, b) => a.feed_id.localeCompare(b.feed_id)),
+    );
+  }, [applyImportPackage]);
+
+  const loadImportPayload = useCallback(
+    async (payload: FileList | Awaited<ReturnType<typeof collectFilesFromDataTransfer>>) => {
+      if (!payload || (payload instanceof FileList && payload.length === 0)) {
+        setImportSkills([]);
+        setImportPlatformAccounts([]);
+        setImportError("");
+        return;
+      }
+
+      setParsingImport(true);
+      setImportError("");
+      try {
+        if (payload instanceof FileList) {
+          const zipFiles = Array.from(payload).filter((file) => /\.zip$/i.test(file.name));
+          if (zipFiles.length > 0) {
+            await loadImportFromZipFiles(zipFiles);
+            return;
+          }
+          const dirEntries = Array.from(payload).flatMap((file) => {
+            if (!file) return [];
+            const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+            return [{ relPath, file }];
+          });
+          applyImportPackage(
+            await parseSkillDirectoriesFromRelativeEntries(dirEntries),
+            await parsePlatformAccountsFromRelativeEntries(dirEntries),
+          );
+          return;
+        }
+
+        const zipFiles = payload
+          .filter((entry) => /\.zip$/i.test(entry.relPath.split("/").pop() || entry.file.name))
+          .map((entry) => entry.file);
+        const dirEntries = payload.filter(
+          (entry) => !/\.zip$/i.test(entry.relPath.split("/").pop() || entry.file.name),
+        );
+
+        const parsed: ParsedSkillDirectory[] = [];
+        const platformAccounts: PlatformAccountImportPayload[] = [];
+        if (zipFiles.length > 0) {
+          for (const zipFile of zipFiles) {
+            const pkg = await parseDiscoverySkillZip(zipFile);
+            for (const skill of pkg.skills) {
+              parsed.push({
+                skillId: skill.skill_id,
+                slug: skill.slug || skill.skill_id.replace(/-discovery$/, ""),
+                feedId: skill.feed_id || `website:${(skill.slug || skill.skill_id).replace(/-discovery$/, "")}`,
+                name: skill.name || skill.skill_id,
+                files: skill.files,
+              });
+            }
+            platformAccounts.push(...pkg.platform_accounts);
+          }
+        }
+        if (dirEntries.length > 0) {
+          parsed.push(...(await parseSkillDirectoriesFromRelativeEntries(dirEntries)));
+          platformAccounts.push(...(await parsePlatformAccountsFromRelativeEntries(dirEntries)));
+        }
+        applyImportPackage(
+          parsed.sort((a, b) => a.skillId.localeCompare(b.skillId)),
+          platformAccounts.sort((a, b) => a.feed_id.localeCompare(b.feed_id)),
+        );
+      } catch (err) {
+        setImportSkills([]);
+        setImportPlatformAccounts([]);
+        setImportError(err instanceof Error ? err.message : "解析 skill 失败");
+      } finally {
+        setParsingImport(false);
+      }
+    },
+    [applyImportPackage, loadImportFromZipFiles],
+  );
+
+  const handleImportPick = useCallback(() => {
+    if (parsingImport || importing) return;
+    importInputRef.current?.click();
+  }, [importing, parsingImport]);
+
+  const handleImportDrop = useCallback(
+    async (dataTransfer: DataTransfer) => {
+      const payload = await collectFilesFromDataTransfer(dataTransfer);
+      await loadImportPayload(payload);
+    },
+    [loadImportPayload],
+  );
+
   useEffect(() => {
     if (!open) return;
     setGroupId(defaultGroupId || UNGROUPED_GROUP_ID);
@@ -108,19 +261,49 @@ export default function AddSourceModal({
     setPrecheck(null);
     setAuthCookies({});
     setSavingSlot(null);
-    setResolvingWeixin(false);
-    setWeixinNamesText("");
+    setMode("url");
+    setImportSkills([]);
+    setImportPlatformAccounts([]);
+    setImportError("");
+    setImportConflict(false);
+    setOverwriteImport(false);
+    setDragOver(false);
+    setImporting(false);
+    setParsingImport(false);
     if (initialUrls.trim()) {
       setSiteUrls(initialUrls.trim());
-      setTab("url");
-    } else {
-      setTab("url");
     }
   }, [open, defaultGroupId, initialUrls]);
 
-  // 链接 Tab：按解析出的 URL 预检
   useEffect(() => {
-    if (!open || tab !== "url") return;
+    if (!open) return;
+    void Promise.all([fetchSkillsCatalog(), fetchFeeds()])
+      .then(([catalog, feedsData]) => {
+        const ids = new Set<string>();
+        for (const item of catalog.discovery || []) {
+          const raw = (item.id || "").trim();
+          if (!raw) continue;
+          ids.add(raw);
+          ids.add(raw.endsWith("-discovery") ? raw : `${raw}-discovery`);
+        }
+        setKnownDiscoverySkillIds(ids);
+        const platformIds = new Set<string>();
+        for (const feed of feedsData.feeds || []) {
+          if (feed.platform_account) platformIds.add(feed.id);
+        }
+        setKnownPlatformFeedIds(platformIds);
+      })
+      .catch(() => {});
+  }, [open]);
+
+  useEffect(() => {
+    setImportError(importMetaError);
+    setImportConflict(hasImportConflict);
+    if (!hasImportConflict) setOverwriteImport(false);
+  }, [hasImportConflict, importMetaError]);
+
+  useEffect(() => {
+    if (!open) return;
     if (parsedUrls.length === 0) {
       setPrecheck(null);
       setPrecheckLoading(false);
@@ -128,11 +311,39 @@ export default function AddSourceModal({
     }
 
     let cancelled = false;
+    let requestStarted = false;
     const timer = window.setTimeout(() => {
+      requestStarted = true;
       setPrecheckLoading(true);
       void precheckSourceAuth(parsedUrls)
         .then((result) => {
           if (!cancelled) setPrecheck(result);
+          // #region agent log
+          fetch("http://127.0.0.1:7634/ingest/b537ae99-3d07-4783-ab5c-dba4b6f73463", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "fed963",
+            },
+            body: JSON.stringify({
+              sessionId: "fed963",
+              location: "AddSourceModal.tsx:precheck",
+              message: "auth precheck result",
+              data: {
+                urls: parsedUrls,
+                can_proceed: result.can_proceed,
+                items: (result.items || []).map((item) => ({
+                  entry_url: item.entry_url,
+                  requires_auth: item.requires_auth,
+                  configured: item.configured,
+                  slot: item.slot,
+                })),
+              },
+              hypothesisId: "B",
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
         })
         .catch((err) => {
           if (!cancelled) {
@@ -148,31 +359,12 @@ export default function AddSourceModal({
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      // 取消进行中的预检时清掉 loading，避免按钮一直灰掉
+      if (requestStarted) {
+        setPrecheckLoading(false);
+      }
     };
-  }, [open, tab, parsedUrls]);
-
-  // 微信 Tab：固定预检公众号后台凭证（功能关闭时不跑）
-  useEffect(() => {
-    if (!WEIXIN_SOURCE_ENABLED || !open || tab !== "weixin") return;
-    let cancelled = false;
-    setPrecheckLoading(true);
-    void precheckSourceAuth([WEIXIN_PRECHECK_URL])
-      .then((result) => {
-        if (!cancelled) setPrecheck(result);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setPrecheck(null);
-          setLocalError(err instanceof Error ? err.message : "授权预检失败");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setPrecheckLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, tab]);
+  }, [open, parsedUrls]);
 
   if (!open) return null;
 
@@ -181,8 +373,7 @@ export default function AddSourceModal({
     setLocalError("");
     try {
       setAuthCookies((current) => ({ ...current, [slot]: "" }));
-      const urls = tab === "weixin" ? [WEIXIN_PRECHECK_URL] : parseOnboardUrls(siteUrls);
-      await refreshPrecheck(urls);
+      await refreshPrecheck(parseOnboardUrls(siteUrls));
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : "刷新授权状态失败");
     } finally {
@@ -200,12 +391,8 @@ export default function AddSourceModal({
       setLocalError(`单次最多 ${ONBOARD_BATCH_MAX_SIZE} 个链接`);
       return;
     }
-    if (!WEIXIN_SOURCE_ENABLED && urls.some((url) => looksLikeWeixinUrl(url))) {
-      setLocalError("微信公众号接入已暂时关闭，请去掉 mp.weixin.qq.com 相关链接");
-      return;
-    }
-    if (busy) {
-      setLocalError("已有接入或修复任务在后台运行");
+    if (job?.running) {
+      setLocalError("已有修复任务在后台运行，请稍后再添加源");
       return;
     }
 
@@ -226,104 +413,31 @@ export default function AddSourceModal({
     void startBatchOnboarding(urls, groupId);
   }
 
-  async function handleStartWeixin() {
-    if (!WEIXIN_SOURCE_ENABLED) {
-      setLocalError("微信公众号接入已暂时关闭");
-      return;
-    }
-    const names = parseWeixinNames(weixinNamesText);
-    if (names.length === 0) {
-      setLocalError("请填写至少一个公众号名称或文章链接");
-      return;
-    }
-    if (names.length > ONBOARD_BATCH_MAX_SIZE) {
-      setLocalError(`单次最多 ${ONBOARD_BATCH_MAX_SIZE} 个公众号`);
-      return;
-    }
-    if (busy) {
-      setLocalError("已有接入或修复任务在后台运行");
-      return;
-    }
-    if (!weixinReady) {
-      setLocalError("请先完成微信公众号后台授权");
-      return;
-    }
-
+  async function handleImportSkill() {
+    if ((validImportSkills.length === 0 && importPlatformAccounts.length === 0) || importError) return;
+    if (importConflict && !overwriteImport) return;
+    setImporting(true);
     setLocalError("");
     try {
-      const latest = await precheckSourceAuth([WEIXIN_PRECHECK_URL]);
-      setPrecheck(latest);
-      if (!latest.can_proceed) {
-        setLocalError("请先完成下方登录授权，再开始接入");
-        return;
-      }
-    } catch (err) {
-      setLocalError(err instanceof Error ? err.message : "授权预检失败");
-      return;
-    }
-
-    setResolvingWeixin(true);
-    try {
-      const urls: string[] = [];
-      const seenFakeids = new Set<string>();
-      const missing: string[] = [];
-      const LINK_HINT =
-        "也可在本页直接粘贴文章链接（mp.weixin.qq.com/s/...），无需按名搜索。";
-
-      for (let i = 0; i < names.length; i++) {
-        const name = names[i];
-        try {
-          if (looksLikeWeixinUrl(name)) {
-            const resolved = await resolveWeixinAccountUrl(name);
-            if (!resolved?.fakeid) {
-              missing.push(name);
-              continue;
-            }
-            if (seenFakeids.has(resolved.fakeid)) continue;
-            seenFakeids.add(resolved.fakeid);
-            urls.push(
-              resolved.entry_url ||
-                buildWeixinOnboardUrl(resolved.fakeid, resolved.nickname || ""),
-            );
-            continue;
-          }
-
-          const result = await searchWeixinAccounts(name);
-          const hit = pickWeixinAccount(name, result.accounts || []);
-          if (!hit?.fakeid) {
-            missing.push(name);
-          } else if (!seenFakeids.has(hit.fakeid)) {
-            seenFakeids.add(hit.fakeid);
-            urls.push(buildWeixinOnboardUrl(hit.fakeid, hit.nickname || name));
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : "解析公众号失败";
-          const rateLimited =
-            /频繁|限流|冷却|429|稍后再试/i.test(msg) || msg.includes("freq");
-          setLocalError(
-            rateLimited
-              ? `${msg}${urls.length > 0 ? `（已解析 ${urls.length} 个）` : ""}。${LINK_HINT}`
-              : `${msg}。${LINK_HINT}`,
-          );
-          return;
-        }
-      }
-
-      if (missing.length > 0) {
-        setLocalError(`未找到公众号：${missing.join("、")}。${LINK_HINT}`);
-        return;
-      }
-      if (urls.length === 0) {
-        setLocalError(`未能解析出可接入的公众号。${LINK_HINT}`);
-        return;
-      }
-
+      const result = await importDiscoverySkills(
+        validImportSkills.map((skill) => ({
+          skill_id: skill.skillId,
+          slug: skill.slug,
+          feed_id: skill.feedId,
+          name: skill.name,
+          files: skill.files,
+        })),
+        overwriteImport,
+        groupId,
+        importPlatformAccounts,
+      );
+      sessionStorage.setItem(FEEDS_NEED_RELOAD_KEY, "1");
+      onImported?.(result);
       onClose();
-      void startBatchOnboarding(urls, groupId);
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : "解析公众号失败");
+      setLocalError(err instanceof Error ? err.message : "导入失败");
     } finally {
-      setResolvingWeixin(false);
+      setImporting(false);
     }
   }
 
@@ -333,12 +447,13 @@ export default function AddSourceModal({
   const authNeededCount = (precheck?.items ?? []).filter((item) => item.requires_auth).length;
 
   const primaryDisabled =
-    busy ||
-    blockedByAuth ||
-    precheckLoading ||
-    (!WEIXIN_SOURCE_ENABLED || tab === "url"
-      ? parsedUrls.length === 0
-      : parsedWeixinNames.length === 0);
+    mode === "url"
+      ? busy || blockedByAuth || precheckLoading || parsedUrls.length === 0
+      : importing ||
+        parsingImport ||
+        (validImportSkills.length === 0 && importPlatformAccounts.length === 0) ||
+        Boolean(importError) ||
+        (importConflict && !overwriteImport);
 
   return (
     <div className="ui-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-source-title">
@@ -347,21 +462,36 @@ export default function AddSourceModal({
           <h2 id="add-source-title" className="ui-modal-title">
             添加数据源
           </h2>
-          <p className="ui-modal-desc">
-            {tab === "url"
-              ? `每行一个链接，或用逗号分隔；最多 ${ONBOARD_BATCH_MAX_SIZE} 个。需要登录的站点会引导完成授权。`
-              : `每行一个公众号名称或文章链接，可混输；最多 ${ONBOARD_BATCH_MAX_SIZE} 个。名称会走搜索（有间隔与缓存）；链接直接解析 __biz，不触发 searchbiz。需先登录【公众号】后台（不要选小程序）。`}
-          </p>
+          <div className="mt-3 inline-flex rounded border border-[var(--rule)] bg-[var(--paper)] p-0.5">
+            <button
+              type="button"
+              className={`rounded px-3 py-1 text-xs ${
+                mode === "url"
+                  ? "bg-[var(--paper-raised)] font-semibold text-[var(--ink)] shadow-sm"
+                  : "text-[var(--ink-muted)]"
+              }`}
+              onClick={() => setMode("url")}
+            >
+              链接接入
+            </button>
+            <button
+              type="button"
+              className={`rounded px-3 py-1 text-xs ${
+                mode === "import"
+                  ? "bg-[var(--paper-raised)] font-semibold text-[var(--ink)] shadow-sm"
+                  : "text-[var(--ink-muted)]"
+              }`}
+              onClick={() => setMode("import")}
+            >
+              导入 skill
+            </button>
+          </div>
         </div>
 
         <div className="ui-modal-body space-y-4">
           <label className="ui-field">
             <span className="ui-field-label">添加到分组</span>
-            <select
-              value={groupId}
-              onChange={(e) => setGroupId(e.target.value)}
-              className="ui-select w-full"
-            >
+            <select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="ui-select w-full">
               <option value={UNGROUPED_GROUP_ID}>未分组</option>
               {groups.map((group) => (
                 <option key={group.id} value={group.id}>
@@ -371,44 +501,7 @@ export default function AddSourceModal({
             </select>
           </label>
 
-          {WEIXIN_SOURCE_ENABLED ? (
-            <div className="flex gap-1 border-b border-[var(--line)] pb-0" role="tablist">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab === "url"}
-                className={`px-3 py-2 text-sm ${
-                  tab === "url"
-                    ? "border-b-2 border-[var(--ink)] font-medium text-[var(--ink)]"
-                    : "text-[var(--ink-muted)]"
-                }`}
-                onClick={() => {
-                  setTab("url");
-                  setLocalError("");
-                }}
-              >
-                链接
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab === "weixin"}
-                className={`px-3 py-2 text-sm ${
-                  tab === "weixin"
-                    ? "border-b-2 border-[var(--ink)] font-medium text-[var(--ink)]"
-                    : "text-[var(--ink-muted)]"
-                }`}
-                onClick={() => {
-                  setTab("weixin");
-                  setLocalError("");
-                }}
-              >
-                微信公众号
-              </button>
-            </div>
-          ) : null}
-
-          {tab === "url" || !WEIXIN_SOURCE_ENABLED ? (
+          {mode === "url" ? (
             <>
               <label className="ui-field">
                 <span className="ui-field-label">网站链接</span>
@@ -417,9 +510,7 @@ export default function AddSourceModal({
                   onChange={(e) => setSiteUrls(e.target.value)}
                   rows={5}
                   className="ui-textarea w-full"
-                  placeholder={
-                    "https://www.xiaohongshu.com/user/profile/...\nhttps://www.zhihu.com/people/example\nhttps://www.reddit.com/r/indiehackers\nhttps://x.com/elonmusk"
-                  }
+                  placeholder={"https://example.com/blog\nhttps://news.example.org/"}
                 />
               </label>
 
@@ -433,65 +524,160 @@ export default function AddSourceModal({
                       : ""}
                 </p>
               )}
+
+              {missingAuthItems.map((item) => (
+                <AuthHandoffPanel
+                  key={item.slot || item.entry_url}
+                  item={item}
+                  cookieDraft={authCookies[item.slot || ""] || ""}
+                  onCookieChange={(value) =>
+                    setAuthCookies((current) => ({
+                      ...current,
+                      [item.slot || ""]: value,
+                    }))
+                  }
+                  saving={savingSlot === item.slot}
+                  onSaved={() => void handleAuthSaved(item.slot || "")}
+                />
+              ))}
+
+              {!blockedByAuth &&
+                (precheck?.items ?? []).some((item) => item.requires_auth && item.configured) && (
+                  <div className="border-l-2 border-[var(--success)] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
+                    已使用已有授权：
+                    {(precheck?.items ?? [])
+                      .filter((item) => item.requires_auth && item.configured)
+                      .map((item) => item.credential_label || item.slot_label || item.slot)
+                      .filter((value, index, arr) => arr.indexOf(value) === index)
+                      .join("、")}
+                  </div>
+                )}
             </>
           ) : (
             <>
-              <label className="ui-field">
-                <span className="ui-field-label">公众号名称或文章链接</span>
-                <textarea
-                  value={weixinNamesText}
-                  onChange={(e) => setWeixinNamesText(e.target.value)}
-                  rows={5}
-                  className="ui-textarea w-full"
-                  placeholder={
-                    "量子位\nhttps://mp.weixin.qq.com/s/xxxx\n机器之心"
-                  }
-                  disabled={!weixinReady || precheckLoading || resolvingWeixin}
-                />
-              </label>
-
-              {precheckLoading && (
-                <p className="text-xs text-[var(--ink-muted)]">正在检查微信授权…</p>
-              )}
-
-              {parsedWeixinNames.length > 0 && (
-                <p className="text-xs text-[var(--ink-muted)]">
-                  将解析并接入 {parsedWeixinNames.length} 项
-                  {resolvingWeixin
-                    ? " · 正在匹配（名称搜索约间隔 3 秒；链接即时解析）…"
-                    : " · 优先粘贴文章链接，可减少搜索限流"}
+              <button
+                type="button"
+                className={`w-full rounded border border-dashed px-4 py-6 text-center transition-colors ${
+                  dragOver
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                    : "border-[var(--rule)] bg-[var(--paper)] hover:bg-[var(--paper-raised)]"
+                }`}
+                disabled={parsingImport || importing}
+                onClick={() => void handleImportPick()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  void handleImportDrop(e.dataTransfer);
+                }}
+              >
+                <p className="text-sm text-[var(--ink)]">选择或拖入 <strong>zip / skill 目录</strong></p>
+                <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                  推荐直接拖入 zip；也支持解压后的目录（含 <code>askme-skills/</code> 或单个{" "}
+                  <code>*-discovery</code> 文件夹）
                 </p>
-              )}
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                hidden
+                accept=".zip,application/zip"
+                multiple
+                onChange={(e) => {
+                  if (e.target.files) void loadImportPayload(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              {parsingImport ? (
+                <p className="text-xs text-[var(--ink-muted)]">正在读取…</p>
+              ) : null}
+              {validImportSkills.length > 0 || importPlatformAccounts.length > 0 ? (
+                !importError ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-[var(--ink-muted)]">
+                    将导入
+                    {validImportSkills.length > 0 ? ` ${validImportSkills.length} 个 skill` : ""}
+                    {validImportSkills.length > 0 && importPlatformAccounts.length > 0 ? "、" : ""}
+                    {importPlatformAccounts.length > 0 ? ` ${importPlatformAccounts.length} 个平台账号` : ""}
+                  </p>
+                  {validImportSkills.map((skill) => (
+                    <div
+                      key={skill.skillId}
+                      className="rounded border border-[var(--rule)] bg-[var(--paper)] px-3 py-2 text-xs"
+                    >
+                      <dl className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1">
+                        <dt className="text-[var(--ink-muted)]">类型</dt>
+                        <dd className="font-medium">站级 skill</dd>
+                        <dt className="text-[var(--ink-muted)]">名称</dt>
+                        <dd className="font-medium">{skill.name}</dd>
+                        <dt className="text-[var(--ink-muted)]">Skill</dt>
+                        <dd className="font-medium">{skill.skillId}</dd>
+                        <dt className="text-[var(--ink-muted)]">Feed ID</dt>
+                        <dd className="font-medium">{skill.feedId}</dd>
+                      </dl>
+                    </div>
+                  ))}
+                  {importPlatformAccounts.map((account) => (
+                    <div
+                      key={account.feed_id}
+                      className="rounded border border-[var(--rule)] bg-[var(--paper)] px-3 py-2 text-xs"
+                    >
+                      <dl className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1">
+                        <dt className="text-[var(--ink-muted)]">类型</dt>
+                        <dd className="font-medium">平台账号</dd>
+                        <dt className="text-[var(--ink-muted)]">名称</dt>
+                        <dd className="font-medium">{account.display_name || account.account_key || account.feed_id}</dd>
+                        <dt className="text-[var(--ink-muted)]">平台</dt>
+                        <dd className="font-medium">{account.platform || "—"}</dd>
+                        <dt className="text-[var(--ink-muted)]">Feed ID</dt>
+                        <dd className="font-medium">{account.feed_id}</dd>
+                      </dl>
+                      <p className="mt-2 text-[11px] text-[var(--ink-muted)]">
+                        不含 Cookie；导入后若需登录请在设置中补授权
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                ) : null
+              ) : null}
+              {importError ? (
+                <div className="border-l-2 border-amber-700 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {importError}
+                </div>
+              ) : null}
+              {importConflict ? (
+                <div className="border-l-2 border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2 text-xs">
+                  {conflictingSkills.length > 0 ? (
+                    <p>
+                      本地已有同名 skill：
+                      {conflictingSkills.map((skill) => skill.skillId).join("、")}。
+                    </p>
+                  ) : null}
+                  {conflictingPlatformAccounts.length > 0 ? (
+                    <p className={conflictingSkills.length > 0 ? "mt-1" : ""}>
+                      本地已有平台账号：
+                      {conflictingPlatformAccounts
+                        .map((account) => account.display_name || account.feed_id)
+                        .join("、")}
+                      。
+                    </p>
+                  ) : null}
+                  <label className="mt-2 flex cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={overwriteImport}
+                      onChange={(e) => setOverwriteImport(e.target.checked)}
+                    />
+                    <span>覆盖现有项并移入选定分组</span>
+                  </label>
+                </div>
+              ) : null}
             </>
           )}
-
-          {missingAuthItems.map((item) => (
-            <AuthHandoffPanel
-              key={item.slot || item.entry_url}
-              item={item}
-              cookieDraft={authCookies[item.slot || ""] || ""}
-              onCookieChange={(value) =>
-                setAuthCookies((current) => ({
-                  ...current,
-                  [item.slot || ""]: value,
-                }))
-              }
-              saving={savingSlot === item.slot}
-              onSaved={() => void handleAuthSaved(item.slot || "")}
-            />
-          ))}
-
-          {!blockedByAuth &&
-            (precheck?.items ?? []).some((item) => item.requires_auth && item.configured) && (
-              <div className="border-l-2 border-[var(--success)] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
-                已使用已有授权：
-                {(precheck?.items ?? [])
-                  .filter((item) => item.requires_auth && item.configured)
-                  .map((item) => item.credential_label || item.slot_label || item.slot)
-                  .filter((value, index, arr) => arr.indexOf(value) === index)
-                  .join("、")}
-              </div>
-            )}
 
           {localError && <p className="text-sm text-red-800">{localError}</p>}
         </div>
@@ -503,19 +689,17 @@ export default function AddSourceModal({
           <button
             type="button"
             disabled={primaryDisabled}
-            onClick={() =>
-              void (
-                WEIXIN_SOURCE_ENABLED && tab === "weixin"
-                  ? handleStartWeixin()
-                  : handleStartUrl()
-              )
-            }
+            onClick={() => void (mode === "url" ? handleStartUrl() : handleImportSkill())}
             className="ui-btn ui-btn-primary"
           >
-            {blockedByAuth
-              ? "请先完成授权"
-              : resolvingWeixin
-                ? "匹配中…"
+            {mode === "import"
+              ? importing
+                ? "导入中…"
+                : parsingImport
+                  ? "读取中…"
+                  : "确认导入"
+              : blockedByAuth
+                ? "请先完成授权"
                 : "开始接入"}
           </button>
         </div>

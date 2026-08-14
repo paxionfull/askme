@@ -16,14 +16,35 @@ from digest.digest_service import (
     build_article_refs,
     generate_partition_summary,
     partition_articles_by_groups,
+    resolve_digest_skill_for_group,
     resolve_feed_ids_for_groups,
     stitch_digest_trees,
     stitch_summaries,
 )
 from feed.content_job_manager import content_job_manager
 from feed.feed_errors import FeedError
-from feed.feed_registry import feed_registry
+from feed.feed_registry import UNGROUPED_GROUP_ID, feed_registry
 from schemas import SummarizeRequest
+
+
+def _missing_digest_rule_detail(group_ids: list[str] | None) -> str | None:
+    """所选分组若未绑定整理规则，返回错误文案；否则 None。"""
+    if not group_ids:
+        return None
+    groups = {str(g.get("id")): g for g in feed_registry.list_groups()}
+    for gid in group_ids:
+        if gid == UNGROUPED_GROUP_ID:
+            return "「未分组」无法生成简报，请先将源归入板块并设置整理规则。"
+        group = groups.get(gid)
+        if not group:
+            return f"分组不存在：{gid}"
+        if not resolve_digest_skill_for_group(group):
+            name = str(group.get("name") or gid)
+            return (
+                f"「{name}」尚未设置整理规则，无法生成简报。"
+                "请先在管理分组或简报页绑定规则。"
+            )
+    return None
 
 router = APIRouter(tags=["digest"])
 
@@ -120,6 +141,11 @@ async def _sse_summarize_stream(body: SummarizeRequest, request: Request | None 
 
         if _cancelled():
             yield sse_event("cancelled", {"detail": "已取消"})
+            return
+
+        missing_rule = _missing_digest_rule_detail(body.group_ids)
+        if missing_rule:
+            yield sse_event("error", {"detail": missing_rule})
             return
 
         data = await _resolve_summarize_context(body)
@@ -411,6 +437,10 @@ async def summarize(body: SummarizeRequest, request: Request):
 
         if not body.group_ids:
             raise HTTPException(status_code=400, detail="请至少选择一个分组")
+
+        missing_rule = _missing_digest_rule_detail(body.group_ids)
+        if missing_rule:
+            raise HTTPException(status_code=400, detail=missing_rule)
 
         data = await _resolve_summarize_context(body)
         meta_count = data.get("meta_count", data["article_count"])

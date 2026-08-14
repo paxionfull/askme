@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { DigestCategory, DigestProfile } from "../utils/digestProfile";
 
 interface DigestProfileModalProps {
@@ -23,12 +23,29 @@ interface DigestProfileModalProps {
   deleting?: boolean;
 }
 
+const PLACEHOLDERS = {
+  description: "介绍这个规则用于处理什么类型的信息源，例如科技长文、财经快讯、行业动态等",
+  focusCriteria:
+    "描述哪些内容应进入「重点关注」：例如重大发布、政策变动、融资并购等会影响决策的关键事件。系统会据此挑选少量高优先级条目，单独展示在简报顶部；未写明的文章会按下方分类继续整理。",
+  categoryName: "分类标题名",
+  categoryCriteria: "说明这一分类下应收录哪些主题、事件或类型的文章",
+  ignoreCriteria:
+    "描述你不想在简报中看到的内容，例如广告软文、重复转载、人事变动、与主题无关的日常资讯；匹配到的文章会被过滤掉，不会出现在简报中。",
+} as const;
+
 function updateCategory(
   categories: DigestCategory[],
   index: number,
   patch: Partial<DigestCategory>,
 ): DigestCategory[] {
   return categories.map((item, i) => (i === index ? { ...item, ...patch } : item));
+}
+
+function reorderCategories(categories: DigestCategory[], from: number, to: number): DigestCategory[] {
+  const next = [...categories];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
 }
 
 function FieldBlock({
@@ -56,7 +73,7 @@ export default function DigestProfileModal({
   title,
   loading = false,
   error = "",
-  path,
+  path: _path,
   skillId,
   idReadonly = true,
   onSkillIdChange,
@@ -72,6 +89,9 @@ export default function DigestProfileModal({
   onDelete,
   deleting = false,
 }: DigestProfileModalProps) {
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
   if (!open) return null;
 
   return (
@@ -81,10 +101,6 @@ export default function DigestProfileModal({
           <h2 id="digest-profile-title" className="ui-modal-title">
             {title}
           </h2>
-          <p className="ui-modal-desc">
-            {path ? `${path} · ` : ""}
-            配置分类与重点规则，系统按固定模板生成目录
-          </p>
         </div>
 
         <div className="ui-modal-body space-y-5">
@@ -113,10 +129,11 @@ export default function DigestProfileModal({
                 </label>
               </div>
               <label className="ui-field">
-                <span className="ui-field-label">描述</span>
+                <span className="ui-field-label">规则描述</span>
                 <input
                   value={description}
                   onChange={(e) => onDescriptionChange(e.target.value)}
+                  placeholder={PLACEHOLDERS.description}
                   className="ui-input w-full"
                 />
               </label>
@@ -139,24 +156,19 @@ export default function DigestProfileModal({
                   </label>
                 }
               >
-                <label className="ui-field">
-                  <span className="ui-field-label">判定标准</span>
-                  <textarea
-                    value={profile.focus.criteria}
-                    disabled={!profile.focus.enabled}
-                    onChange={(e) =>
-                      onProfileChange({
-                        ...profile,
-                        focus: { ...profile.focus, criteria: e.target.value },
-                      })
-                    }
-                    rows={3}
-                    className="ui-textarea w-full disabled:opacity-60"
-                  />
-                </label>
-                <p className="text-xs text-[var(--ink-muted)]">
-                  聚类时对每个事件标记 focus_score=0/1；取标为 1 的事件作头条，最多取「最多事件数」。
-                </p>
+                <textarea
+                  value={profile.focus.criteria}
+                  disabled={!profile.focus.enabled}
+                  onChange={(e) =>
+                    onProfileChange({
+                      ...profile,
+                      focus: { ...profile.focus, criteria: e.target.value },
+                    })
+                  }
+                  rows={4}
+                  placeholder={PLACEHOLDERS.focusCriteria}
+                  className="ui-textarea w-full disabled:opacity-60"
+                />
                 <div className="flex flex-wrap items-center gap-4">
                   <label className="flex items-center gap-2 text-xs text-[var(--ink-muted)]">
                     最多事件数
@@ -208,7 +220,7 @@ export default function DigestProfileModal({
                           ...profile.categories,
                           {
                             id: `cat-${profile.categories.length + 1}`,
-                            name: `分类 ${profile.categories.length + 1}`,
+                            name: "",
                             criteria: "",
                           },
                         ],
@@ -220,12 +232,58 @@ export default function DigestProfileModal({
                 }
               >
                 {profile.categories.length === 0 ? (
-                  <p className="text-xs text-[var(--ink-muted)]">暂无分类（仍会有「其他」）</p>
+                  <p className="text-xs text-[var(--ink-muted)]">暂无分类</p>
                 ) : null}
                 <ul className="space-y-3">
                   {profile.categories.map((cat, index) => (
-                    <li key={`${cat.id}-${index}`} className="space-y-2 border-l-2 border-[var(--rule)] pl-3">
+                    <li
+                      key={`${cat.id}-${index}`}
+                      className={`space-y-2 border-l-2 pl-3 transition-colors ${
+                        dragOverIndex === index ? "border-[var(--accent)]" : "border-[var(--rule)]"
+                      } ${draggingIndex === index ? "opacity-45" : ""}`}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setDragOverIndex(index);
+                      }}
+                      onDragLeave={() => {
+                        setDragOverIndex((current) => (current === index ? null : current));
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const from =
+                          draggingIndex ?? Number.parseInt(e.dataTransfer.getData("text/plain"), 10);
+                        if (Number.isNaN(from) || from === index) {
+                          setDraggingIndex(null);
+                          setDragOverIndex(null);
+                          return;
+                        }
+                        onProfileChange({
+                          ...profile,
+                          categories: reorderCategories(profile.categories, from, index),
+                        });
+                        setDraggingIndex(null);
+                        setDragOverIndex(null);
+                      }}
+                    >
                       <div className="flex gap-2">
+                        <button
+                          type="button"
+                          draggable
+                          onDragStart={(e) => {
+                            setDraggingIndex(index);
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData("text/plain", String(index));
+                          }}
+                          onDragEnd={() => {
+                            setDraggingIndex(null);
+                            setDragOverIndex(null);
+                          }}
+                          className="flex h-6 w-6 shrink-0 cursor-grab items-center justify-center rounded-[var(--radius-control)] border-0 bg-transparent text-sm leading-none text-[var(--ink-muted)] active:cursor-grabbing hover:bg-[var(--paper)] hover:text-[var(--ink)]"
+                          aria-label="拖动调整顺序"
+                          title="拖动调整顺序"
+                        >
+                          ⋮⋮
+                        </button>
                         <input
                           value={cat.name}
                           onChange={(e) =>
@@ -236,7 +294,7 @@ export default function DigestProfileModal({
                               }),
                             })
                           }
-                          placeholder="分类名"
+                          placeholder={PLACEHOLDERS.categoryName}
                           className="ui-input min-w-0 flex-1"
                         />
                         <button
@@ -263,7 +321,7 @@ export default function DigestProfileModal({
                           })
                         }
                         rows={2}
-                        placeholder="分类标准"
+                        placeholder={PLACEHOLDERS.categoryCriteria}
                         className="ui-textarea w-full"
                       />
                     </li>
@@ -272,9 +330,6 @@ export default function DigestProfileModal({
               </FieldBlock>
 
               <FieldBlock title="不重要">
-                <p className="text-xs text-[var(--ink-muted)]">
-                  作为分类桶之一；被标为不重要的文章不会进入聚类与渲染。
-                </p>
                 <textarea
                   value={profile.ignore.criteria}
                   onChange={(e) =>
@@ -283,7 +338,8 @@ export default function DigestProfileModal({
                       ignore: { criteria: e.target.value },
                     })
                   }
-                  rows={2}
+                  rows={3}
+                  placeholder={PLACEHOLDERS.ignoreCriteria}
                   className="ui-textarea w-full"
                 />
               </FieldBlock>

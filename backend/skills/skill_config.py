@@ -6,42 +6,46 @@ import json
 from typing import Any
 
 from digest.digest_skill_registry import get_digest_skill
-from paths import DATA_DIR
+from paths import CHAT_SKILLS_BUILTIN_ROOT, DATA_DIR
+from skills.skill_md import strip_frontmatter
 
 CONFIG_PATH = DATA_DIR / "skill_config.json"
 DEFAULT_DIGEST_SKILL = "general-digest"
 
-DEFAULT_CHAT_PROMPT = """你是 Askme 助手。本轮用户消息提供任务所需语料。语气：专业、清晰、中文 Markdown。
+# 仅当 chat-rag/SKILL.md 缺失时的紧急回退；正常真源是 skill 文件。
+_FALLBACK_CHAT_PROMPT = "你是 Askme 助手。语气：专业、清晰、中文 Markdown。"
 
-按本轮用户消息中的任务形态作答：
 
-【问答】用户对照日报概览提问，消息中含「检索片段」。回复要求：
-  - 请详细、有据地回答
-  - 具体引用与忠实度要求见系统追加的硬性规则
-  - 关键陈述后以内联编号标注出处（如 …[1][2]），风格类似 NotebookLM / Perplexity；禁止改成文末来源列表
+def builtin_chat_role_prompt() -> str:
+    """从内置 chat-rag/SKILL.md 读取角色正文（单一真源）。"""
+    path = CHAT_SKILLS_BUILTIN_ROOT / "chat-rag" / "SKILL.md"
+    if path.is_file():
+        body = strip_frontmatter(path.read_text(encoding="utf-8")).strip()
+        if body:
+            return body
+    return _FALLBACK_CHAT_PROMPT
 
-【摘要】用户选定文章，消息中以 XML 提供「选定正文」，让你生成摘要。回复要求：
-  - 紧扣正文，提炼关键事实、数据与结论；删去冗余背景与空话
-  - 多篇若报道同一事件或主题，融合整理为连贯叙述，不要按文章逐篇复述
-  - 仅使用原文信息，不编造
-  - 关键陈述后以内联编号标注出处（如 …[1][2]），编号对应选定正文中的文章编号，风格同 NotebookLM / Perplexity；禁止改成文末来源列表"""
+
+# 兼容旧名：指向 builtin skill；运行时请优先 get_chat_system_prompt() / builtin_chat_role_prompt()
+DEFAULT_CHAT_PROMPT = builtin_chat_role_prompt()
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "chat_system_prompt": DEFAULT_CHAT_PROMPT,
+    "chat_system_prompt": "",  # 空表示使用 builtin_chat_role_prompt()
 }
 
 
 def _load() -> dict[str, Any]:
     if not CONFIG_PATH.is_file():
-        return json.loads(json.dumps(DEFAULT_CONFIG))
+        return {"chat_system_prompt": builtin_chat_role_prompt()}
     try:
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return json.loads(json.dumps(DEFAULT_CONFIG))
+        return {"chat_system_prompt": builtin_chat_role_prompt()}
     if not isinstance(data, dict):
-        return json.loads(json.dumps(DEFAULT_CONFIG))
+        return {"chat_system_prompt": builtin_chat_role_prompt()}
+    stored = str(data.get("chat_system_prompt") or "").strip()
     return {
-        "chat_system_prompt": str(data.get("chat_system_prompt") or DEFAULT_CONFIG["chat_system_prompt"]).strip(),
+        "chat_system_prompt": stored or builtin_chat_role_prompt(),
     }
 
 
@@ -55,10 +59,10 @@ def save_skill_config(patch: dict[str, Any]) -> dict[str, Any]:
         prompt = str(patch["chat_system_prompt"]).strip()
         if not prompt:
             raise ValueError("对话 system prompt 不能为空")
-        from chat.chat_skill_registry import DEFAULT_DESCRIPTION, save_chat_skill
+        from chat.chat_skill_registry import DEFAULT_DESCRIPTION, get_chat_skill_md, save_chat_skill
         from skills.skill_md import skill_meta_from_md
 
-        base_md = __import__("chat_skill_registry").get_chat_skill_md()
+        base_md = get_chat_skill_md()
         name, desc = skill_meta_from_md(base_md, fallback_id="chat-rag")
         skill_md = (
             f"---\nname: {name}\ndescription: {desc or DEFAULT_DESCRIPTION}\n---\n\n{prompt}\n"

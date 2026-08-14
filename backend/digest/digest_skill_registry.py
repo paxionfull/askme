@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
 from digest.digest_profile import load_profile_from_dir, normalize_profile, save_profile_to_dir
-from paths import DATA_DIR, SKILLS_ROOT
+from paths import DATA_DIR, DIGEST_SKILLS_BUILTIN_ROOT, PROJECT_ROOT
 from skills.skill_md import resolve_skill_instructions, skill_meta_from_md, strip_frontmatter, is_stub_skill_body
 
-BUILTIN_ROOT = SKILLS_ROOT
+BUILTIN_ROOT = DIGEST_SKILLS_BUILTIN_ROOT
 USER_ROOT = DATA_DIR / "digest-skills"
 SKILL_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 DIGEST_SUFFIX = "-digest"
@@ -289,3 +290,34 @@ def delete_user_digest_skill(skill_id: str) -> None:
             updated_groups.append(group)
     if changed:
         feed_registry.set_layout(updated_groups, feed_registry.list_group_order())
+
+
+def restore_builtin_digest_skill(skill_id: str) -> dict[str, Any]:
+    safe_id = validate_skill_id(skill_id)
+    existing = get_digest_skill(safe_id)
+    if not existing:
+        raise ValueError("skill 不存在")
+    if not existing.get("builtin"):
+        raise ValueError("仅内置规则支持还原")
+
+    skill_dir = BUILTIN_ROOT / safe_id
+    if not skill_dir.is_dir():
+        raise ValueError("内置规则目录不存在")
+
+    rel_dir = skill_dir.relative_to(PROJECT_ROOT)
+    try:
+        subprocess.run(
+            ["git", "checkout", "HEAD", "--", str(rel_dir)],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise ValueError(f"还原失败: {detail or 'git checkout 执行失败'}") from exc
+
+    item = _load_digest_skill(skill_dir, builtin=True)
+    if not item:
+        raise ValueError("还原后读取失败")
+    return item

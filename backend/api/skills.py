@@ -2,16 +2,25 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from api.deps import feed_client
 from digest.digest_skill_registry import (
     delete_user_digest_skill,
     get_digest_skill_detail,
     list_digest_skills,
+    restore_builtin_digest_skill,
     save_user_digest_skill,
 )
 from feed.feed_registry import feed_registry
-from schemas import ChatSkillInput, DigestSkillInput, SkillConfigInput
+from schemas import (
+    ChatSkillInput,
+    DigestSkillInput,
+    DiscoverySkillExportInput,
+    DiscoverySkillImportInput,
+    DiscoverySkillZipParseInput,
+    SkillConfigInput,
+)
 from skills.skill_config import load_skill_config, save_skill_config
 from skills.skill_manager import (
     delete_discovery_skill,
@@ -21,6 +30,11 @@ from skills.skill_manager import (
     get_other_skill_detail,
     list_all_skills,
     save_chat_skill,
+)
+from skills.skill_package import (
+    export_discovery_skills,
+    import_discovery_package,
+    parse_discovery_zip_package,
 )
 
 router = APIRouter(tags=["skills"])
@@ -77,6 +91,70 @@ async def remove_digest_skill(skill_id: str):
         return {"ok": True}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/skills/digest/{skill_id}/restore")
+async def restore_digest_skill(skill_id: str):
+    try:
+        return restore_builtin_digest_skill(skill_id) | {"ok": True}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/skills/discovery/export")
+async def export_discovery_skill_directories(body: DiscoverySkillExportInput):
+    try:
+        if not body.skill_ids and not body.platform_feed_ids:
+            raise ValueError("请选择至少一个可导出的 skill 或平台账号")
+        payload, filename, _stats = export_discovery_skills(
+            body.skill_ids,
+            platform_feed_ids=body.platform_feed_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/api/skills/discovery/parse-zip")
+async def parse_discovery_skill_zip(body: DiscoverySkillZipParseInput):
+    import base64
+
+    try:
+        raw = base64.b64decode(body.zip_base64, validate=False)
+        package = parse_discovery_zip_package(raw)
+        return {
+            "skills": package.get("skills") or [],
+            "platform_accounts": package.get("platform_accounts") or [],
+            "count": len(package.get("skills") or []),
+            "platform_account_count": len(package.get("platform_accounts") or []),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"解析 zip 失败: {exc}") from exc
+
+
+@router.post("/api/skills/discovery/import")
+async def import_discovery_skill_directories(body: DiscoverySkillImportInput):
+    try:
+        if not body.skills and not body.platform_accounts:
+            raise ValueError("请选择至少一个 skill 或平台账号")
+        skills = [item.model_dump() for item in body.skills if item.files]
+        platform_accounts = [item.model_dump() for item in body.platform_accounts if item.feed_id]
+        return import_discovery_package(
+            skills,
+            platform_accounts,
+            overwrite=body.overwrite,
+            group_id=body.group_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"导入 skill 失败: {exc}") from exc
 
 
 @router.get("/api/skills/discovery/{skill_id}")
@@ -142,4 +220,3 @@ async def save_skill_global_config(body: SkillConfigInput):
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-

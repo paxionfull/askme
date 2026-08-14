@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
+import HelpModal from "../../components/HelpModal";
 import OnboardingBatchPanel from "../../components/OnboardingBatchPanel";
 import TopJobBanner from "../../components/TopJobBanner";
 import { DigestProvider, useDigest } from "../../contexts/DigestContext";
@@ -6,6 +8,7 @@ import { ChatProvider } from "../../contexts/ChatContext";
 import { FeedRefreshProvider, useFeedRefresh } from "../../contexts/FeedRefreshContext";
 import { OnboardingProvider, useOnboarding } from "../../contexts/OnboardingContext";
 import { isLlmConfigured, useSettings } from "../../hooks/useSettings";
+import { settingsAuthPath } from "../../utils/authSlot";
 
 const navItems = [
   { to: "/", label: "简报", end: true },
@@ -22,7 +25,9 @@ function FeedRefreshBanner() {
     progress,
     bannerTitle,
     authFailureUrls,
+    authFailureSlots,
     authFailureDetected,
+    stopRefresh,
     clearResult,
   } = useFeedRefresh();
   const { requestAuthRetry } = useOnboarding();
@@ -36,13 +41,25 @@ function FeedRefreshBanner() {
         current={progress?.current}
         total={progress?.total}
         indeterminate={!progress || progress.total <= 0}
+        actions={
+          <button
+            type="button"
+            onClick={stopRefresh}
+            className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+          >
+            停止
+          </button>
+        }
       />
     );
   }
 
   if (!refreshBusy && (resultMessage || error)) {
     const message = [resultMessage, error].filter(Boolean).join("\n\n");
-    const showAuth = Boolean(error) && (authFailureUrls.length > 0 || authFailureDetected);
+    const showAuth =
+      Boolean(error) &&
+      (authFailureSlots.length > 0 || authFailureUrls.length > 0 || authFailureDetected);
+    const authSlot = authFailureSlots[0] || null;
     return (
       <TopJobBanner
         tone={error ? "warning" : "success"}
@@ -51,7 +68,15 @@ function FeedRefreshBanner() {
         onClose={clearResult}
         actions={
           showAuth ? (
-            authFailureUrls.length > 0 ? (
+            authSlot ? (
+              <NavLink
+                to={settingsAuthPath(authSlot)}
+                onClick={clearResult}
+                className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+              >
+                去授权
+              </NavLink>
+            ) : authFailureUrls.length > 0 ? (
               <button
                 type="button"
                 onClick={() => {
@@ -65,11 +90,11 @@ function FeedRefreshBanner() {
               </button>
             ) : (
               <NavLink
-                to="/settings?tab=auth"
+                to={settingsAuthPath()}
                 onClick={clearResult}
                 className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
               >
-                去设置授权
+                去 Cookie
               </NavLink>
             )
           ) : null
@@ -92,6 +117,7 @@ function DigestJobBanner() {
     indexProgress,
     indexStatusMessage,
     stopSummarize,
+    stopBodies,
   } = useDigest();
 
   if (generating) {
@@ -128,6 +154,15 @@ function DigestJobBanner() {
         current={bodyProgress.current}
         total={bodyProgress.total}
         indeterminate={bodyProgress.total <= 0}
+        actions={
+          <button
+            type="button"
+            onClick={stopBodies}
+            className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+          >
+            停止
+          </button>
+        }
       />
     );
   }
@@ -269,6 +304,7 @@ function AppShellContent() {
   const { generating, loadingBodies, loadingIndex } = useDigest();
   const { job, batch } = useOnboarding();
   const { refreshBusy } = useFeedRefresh();
+  const [helpOpen, setHelpOpen] = useState(false);
   const llmConfigured = isLlmConfigured(settings);
   const sourcesInProgress =
     loadingBodies ||
@@ -322,6 +358,14 @@ function AppShellContent() {
                 )}
               </NavLink>
             ))}
+            <div className="min-h-2 flex-1" aria-hidden="true" />
+            <button
+              type="button"
+              onClick={() => setHelpOpen(true)}
+              className="rounded-md px-2 py-2.5 text-center text-[11px] font-medium leading-tight text-[var(--ink-muted)] transition-colors hover:bg-[var(--paper)] hover:text-[var(--ink)]"
+            >
+              帮助
+            </button>
           </nav>
         </aside>
 
@@ -329,6 +373,8 @@ function AppShellContent() {
           <Outlet />
         </div>
       </div>
+
+      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }

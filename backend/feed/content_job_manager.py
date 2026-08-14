@@ -26,6 +26,7 @@ class ContentJobManager:
         self._index: dict[str, Any] = self._idle_state("index")
         self._summarize: dict[str, Any] = self._idle_state("summarize")
         self._summarize_cancel: asyncio.Event | None = None
+        self._bodies_cancel: asyncio.Event | None = None
 
     @staticmethod
     def _idle_state(kind: str) -> dict[str, Any]:
@@ -119,6 +120,20 @@ class ContentJobManager:
             self._summarize_cancel.set()
         return True
 
+    def is_bodies_cancelled(self) -> bool:
+        cancel = self._bodies_cancel
+        return cancel is not None and cancel.is_set()
+
+    def request_bodies_cancel(self) -> bool:
+        """请求停止当前正文拉取任务。"""
+        if not self.is_bodies_running():
+            return False
+        if self._bodies_cancel is not None:
+            self._bodies_cancel.set()
+        if self._bodies_task is not None and not self._bodies_task.done():
+            self._bodies_task.cancel()
+        return True
+
     def finish_summarize(
         self,
         job_id: str,
@@ -143,13 +158,14 @@ class ContentJobManager:
     async def start_bodies(
         self,
         *,
-        runner: Callable[[Callable[..., Awaitable[None]]], Awaitable[dict[str, Any]]],
+        runner: Callable[..., Awaitable[dict[str, Any]]],
         params: dict[str, Any],
     ) -> dict[str, Any]:
         async with self._lock:
             if self.is_bodies_running():
                 return {"started": False, **self.get_bodies_status()}
             job_id = _new_job_id("bodies")
+            self._bodies_cancel = asyncio.Event()
             self._bodies = {
                 "job_id": job_id,
                 "kind": "bodies",
@@ -183,10 +199,23 @@ class ContentJobManager:
                     }
                 )
 
+            def is_cancelled() -> bool:
+                return self.is_bodies_cancelled() or self._bodies.get("job_id") != job_id
+
             async def worker() -> None:
                 try:
-                    result = await runner(on_progress)
+                    result = await runner(on_progress, is_cancelled)
                     if self._bodies.get("job_id") != job_id:
+                        return
+                    if is_cancelled():
+                        self._bodies.update(
+                            {
+                                "status": "cancelled",
+                                "message": "已停止拉取正文",
+                                "result": result,
+                                "finished_at": time.time(),
+                            }
+                        )
                         return
                     self._bodies.update(
                         {
@@ -195,6 +224,16 @@ class ContentJobManager:
                             "result": result,
                             "finished_at": time.time(),
                             "current": int(self._bodies.get("total") or 0),
+                        }
+                    )
+                except asyncio.CancelledError:
+                    if self._bodies.get("job_id") != job_id:
+                        return
+                    self._bodies.update(
+                        {
+                            "status": "cancelled",
+                            "message": "已停止拉取正文",
+                            "finished_at": time.time(),
                         }
                     )
                 except Exception as exc:
@@ -211,9 +250,20 @@ class ContentJobManager:
                     )
                 finally:
                     self._bodies_task = None
+                    self._bodies_cancel = None
 
             self._bodies_task = asyncio.create_task(worker())
             return {"started": True, **self.get_bodies_status()}
+
+    async def wait_for_bodies(self) -> dict[str, Any]:
+        """等待当前正文任务结束（无任务则立即返回状态）。"""
+        task = self._bodies_task
+        if task is not None and not task.done():
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        return self.get_bodies_status()
 
     async def start_index(
         self,

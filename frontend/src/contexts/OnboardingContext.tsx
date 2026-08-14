@@ -20,7 +20,11 @@ import {
 
 const LAST_ONBOARD_FEED_KEY = "askme.lastOnboardedFeedId";
 const ACTIVE_BATCH_KEY = "askme.activeOnboardBatchId";
+const ACTIVE_BATCH_SNAPSHOT_KEY = "askme.activeOnboardBatchSnapshot";
 const BATCH_POLL_MS = 800;
+/** 连续「任务不存在」次数达到阈值后才放弃轮询（避免切换天数/后端短暂 reload 立刻清栏） */
+const BATCH_GONE_MAX_MISSES = 5;
+const BATCH_GONE_DETAIL = "批量任务不存在或已结束";
 
 function readPersistedBatchId(): string | null {
   try {
@@ -40,6 +44,38 @@ function persistBatchId(batchId: string | null) {
   } catch {
     // ignore quota / private mode
   }
+}
+
+function readPersistedBatchSnapshot(): OnboardBatchStatus | null {
+  try {
+    const raw = sessionStorage.getItem(ACTIVE_BATCH_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as OnboardBatchStatus;
+    if (!parsed || typeof parsed !== "object" || !parsed.batch_id) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function persistBatchSnapshot(batch: OnboardBatchStatus | null) {
+  try {
+    if (batch && batch.status === "running" && batch.batch_id) {
+      sessionStorage.setItem(ACTIVE_BATCH_SNAPSHOT_KEY, JSON.stringify(batch));
+    } else {
+      sessionStorage.removeItem(ACTIVE_BATCH_SNAPSHOT_KEY);
+    }
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function isBatchGoneError(message: string): boolean {
+  const text = message.trim();
+  if (!text) return false;
+  if (text === BATCH_GONE_DETAIL) return true;
+  // 兼容旧代理文案，但避免宽泛匹配「不存在」「已结束」误伤其它错误
+  return text.includes("批量任务不存在");
 }
 
 export type SkillJobKind = "onboard" | "repair";
@@ -84,6 +120,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const batchIdRef = useRef<string | null>(null);
   const batchCompletedRef = useRef(0);
+  const batchPollInFlightRef = useRef(false);
+  const batchGoneMissesRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const repairJobIdRef = useRef<string | null>(null);
 
@@ -98,12 +136,20 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     sessionStorage.setItem(FEEDS_NEED_RELOAD_KEY, "1");
   }, []);
 
+  const applyBatchStatus = useCallback((status: OnboardBatchStatus) => {
+    setBatch(status);
+    persistBatchId(status.batch_id || null);
+    persistBatchSnapshot(status.status === "running" ? status : null);
+  }, []);
+
   const pollBatchOnce = useCallback(
     async (batchId: string) => {
+      if (batchPollInFlightRef.current) return;
+      batchPollInFlightRef.current = true;
       try {
         const status = await fetchOnboardBatch(batchId);
-        setBatch(status);
-        persistBatchId(batchId);
+        batchGoneMissesRef.current = 0;
+        applyBatchStatus(status);
 
         if (status.completed > batchCompletedRef.current) {
           batchCompletedRef.current = status.completed;
@@ -121,16 +167,48 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
-        if (message.includes("不存在") || message.includes("已结束")) {
+        if (isBatchGoneError(message)) {
+          batchGoneMissesRef.current += 1;
+          const tracking = batchIdRef.current === batchId;
+          if (tracking && batchGoneMissesRef.current < BATCH_GONE_MAX_MISSES) {
+            // 保留任务栏：切换天数/后端短暂不可用时常见瞬时 404
+            setBatch((current) => {
+              if (!current || current.batch_id !== batchId) return current;
+              if (current.status !== "running") return current;
+              const next = {
+                ...current,
+                message: `进度同步中断，正在重试（${batchGoneMissesRef.current}/${BATCH_GONE_MAX_MISSES}）…`,
+              };
+              persistBatchSnapshot(next);
+              return next;
+            });
+            return;
+          }
+
           clearBatchPoll();
           batchIdRef.current = null;
           persistBatchId(null);
-          setBatch(null);
+          persistBatchSnapshot(null);
+          setBatch((current) => {
+            if (current && current.batch_id === batchId) {
+              return {
+                ...current,
+                status: "cancelled",
+                message: "进度同步中断（服务可能已重启）。可关闭后重新添加该源。",
+                running: 0,
+                queued: 0,
+              };
+            }
+            return null;
+          });
+          return;
         }
         // 临时网络错误：保留当前面板，下一轮继续轮询
+      } finally {
+        batchPollInFlightRef.current = false;
       }
     },
-    [clearBatchPoll, markFeedsNeedReload],
+    [applyBatchStatus, clearBatchPoll, markFeedsNeedReload],
   );
 
   const startBatchPolling = useCallback(
@@ -138,6 +216,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       clearBatchPoll();
       batchIdRef.current = batchId;
       batchCompletedRef.current = options?.completedBaseline ?? 0;
+      batchGoneMissesRef.current = 0;
       persistBatchId(batchId);
       void pollBatchOnce(batchId);
       batchPollRef.current = setInterval(() => {
@@ -156,40 +235,73 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     void (async () => {
-      try {
-        const status = await fetchOnboardBatch(batchId);
+      const snapshot = readPersistedBatchSnapshot();
+      if (snapshot?.batch_id === batchId && snapshot.status === "running") {
+        setBatch(snapshot);
+      }
+
+      for (let attempt = 0; attempt < BATCH_GONE_MAX_MISSES; attempt += 1) {
         if (cancelled) return;
-        setBatch(status);
-        if (status.status === "running") {
-          startBatchPolling(batchId, { completedBaseline: status.completed });
-        } else {
-          batchIdRef.current = null;
-          markFeedsNeedReload();
-        }
-      } catch {
-        if (!cancelled) {
-          persistBatchId(null);
+        try {
+          const status = await fetchOnboardBatch(batchId);
+          if (cancelled) return;
+          applyBatchStatus(status);
+          if (status.status === "running") {
+            startBatchPolling(batchId, { completedBaseline: status.completed });
+          } else {
+            batchIdRef.current = null;
+            markFeedsNeedReload();
+          }
+          return;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "";
+          if (!isBatchGoneError(message)) {
+            // 网络抖动：保留快照并继续轮询，避免任务栏直接消失
+            if (snapshot?.batch_id === batchId && snapshot.status === "running") {
+              startBatchPolling(batchId, { completedBaseline: snapshot.completed });
+              return;
+            }
+            break;
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, BATCH_POLL_MS));
         }
       }
+
+      if (cancelled) return;
+      if (snapshot?.batch_id === batchId && snapshot.status === "running") {
+        // 后端确实找不到任务：展示可关闭的中断态，避免任务栏「无声消失」
+        persistBatchId(null);
+        persistBatchSnapshot(null);
+        setBatch({
+          ...snapshot,
+          status: "cancelled",
+          message: "进度同步中断（服务可能已重启）。可关闭后重新添加该源。",
+          running: 0,
+          queued: 0,
+        });
+        return;
+      }
+      persistBatchId(null);
+      persistBatchSnapshot(null);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [markFeedsNeedReload, startBatchPolling]);
+  }, [applyBatchStatus, markFeedsNeedReload, startBatchPolling]);
 
   const stopBatch = useCallback(() => {
     const batchId = batchIdRef.current ?? batch?.batch_id ?? readPersistedBatchId();
     if (batchId) {
       void cancelOnboardBatch(batchId)
         .then((status) => {
-          setBatch(status);
-          persistBatchId(batchId);
+          applyBatchStatus(status);
         })
         .catch(() => {});
     }
     clearBatchPoll();
     batchIdRef.current = null;
+    persistBatchSnapshot(null);
     setBatch((current) =>
       current
         ? {
@@ -199,12 +311,13 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
           }
         : current,
     );
-  }, [batch?.batch_id, clearBatchPoll]);
+  }, [applyBatchStatus, batch?.batch_id, clearBatchPoll]);
 
   const clearBatch = useCallback(() => {
     if (batchIdRef.current) return;
     if (batch?.status === "running") return;
     persistBatchId(null);
+    persistBatchSnapshot(null);
     setBatch(null);
   }, [batch?.status]);
 
@@ -212,7 +325,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     async (entryUrls: string[], groupId?: string) => {
       const urls = entryUrls.map((url) => url.trim()).filter(Boolean);
       if (urls.length === 0) return;
-      if (batchIdRef.current || repairInFlightRef.current) return;
+      // 修复任务进行中时不启动接入；已有 batch 则由后端合并追加
+      if (repairInFlightRef.current) return;
 
       try {
         const initial = await startOnboardBatch({
@@ -222,38 +336,47 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
           reload: true,
           group_id: groupId,
         });
-        setBatch(initial);
-        persistBatchId(initial.batch_id || null);
+        applyBatchStatus(initial);
         if (initial.status === "running") {
-          startBatchPolling(initial.batch_id);
+          if (batchIdRef.current !== initial.batch_id) {
+            startBatchPolling(initial.batch_id);
+          } else {
+            // 同一 batch 追加：保持轮询，刷新一次状态
+            batchIdRef.current = initial.batch_id;
+          }
         } else {
+          batchIdRef.current = null;
           markFeedsNeedReload();
         }
       } catch (err) {
-        persistBatchId(null);
-        setBatch({
-          batch_id: "",
-          status: "done",
-          total: urls.length,
-          completed: 0,
-          failed: urls.length,
-          skipped: 0,
-          running: 0,
-          queued: 0,
-          message: err instanceof Error ? err.message : "批量接入启动失败",
-          items: urls.map((entry_url) => ({
-            entry_url,
-            slug: "",
-            name: "",
-            status: "failed",
-            phase: "error",
+        // 追加失败时保留原进行中的 batch 轮询
+        if (!batchIdRef.current) {
+          persistBatchId(null);
+          persistBatchSnapshot(null);
+          setBatch({
+            batch_id: "",
+            status: "done",
+            total: urls.length,
+            completed: 0,
+            failed: urls.length,
+            skipped: 0,
+            running: 0,
+            queued: 0,
             message: err instanceof Error ? err.message : "批量接入启动失败",
-            error: err instanceof Error ? err.message : "批量接入启动失败",
-          })),
-        });
+            items: urls.map((entry_url) => ({
+              entry_url,
+              slug: "",
+              name: "",
+              status: "failed",
+              phase: "error",
+              message: err instanceof Error ? err.message : "批量接入启动失败",
+              error: err instanceof Error ? err.message : "批量接入启动失败",
+            })),
+          });
+        }
       }
     },
-    [markFeedsNeedReload, startBatchPolling],
+    [applyBatchStatus, markFeedsNeedReload, startBatchPolling],
   );
 
   const resetRepairInFlight = useCallback(() => {

@@ -1,21 +1,57 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { FEEDS_NEED_RELOAD_KEY, deleteFeed, fetchArticles, fetchFeeds, renameFeed, saveFeedGroups, type Article, type Feed, type FeedGroup } from "../api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FEEDS_NEED_RELOAD_KEY,
+  deleteFeed,
+  fetchArticles,
+  fetchFeedSchedulerConfig,
+  fetchFeeds,
+  renameFeed,
+  saveFeedGroups,
+  type Article,
+  type Feed,
+  type FeedGroup,
+  type ScheduleTime,
+} from "../api";
 import ArticleList from "../components/ArticleList";
 import AddSourceModal from "../components/AddSourceModal";
+import GroupScheduleModal from "../components/GroupScheduleModal";
 import FeedGroupModal from "../components/FeedGroupModal";
 import ConfirmModal from "../components/ConfirmModal";
 import FeedSidebar from "../components/FeedSidebar";
 import { consumeLastOnboardedFeedId, useOnboarding } from "../contexts/OnboardingContext";
-import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
+import { UNGROUPED_GROUP_ID, buildSections } from "../utils/feedLayout";
+import { formatScheduleSummary, SCHEDULES_UPDATED_EVENT } from "../utils/feedScheduler";
 import { resolveDefaultFeedId, setStoredSelectedFeedId } from "../utils/selectedFeed";
 import { deleteFeedMessage, deleteFeedSuccessMessage, isPlatformFeed } from "../utils/platformFeed";
 import { hydrateFeedsState, writeFeedsCache } from "../utils/feedsCache";
 import { useDigest } from "../contexts/DigestContext";
 import { useFeedRefresh } from "../contexts/FeedRefreshContext";
-import { isLlmConfigured, useSettings, formatDaysLabel } from "../hooks/useSettings";
+import { isEmbeddingConfigured, useSettings, formatDaysLabel } from "../hooks/useSettings";
+import { useIndexBuildConfirm } from "../hooks/useIndexBuildConfirm";
 import DaysRangeSelect from "../components/DaysRangeSelect";
 
 const INITIAL_FEEDS_CACHE = hydrateFeedsState();
+const SCOPE_GROUP_IDS_KEY = "askme.sources.scopedGroupIds";
+
+function readScopedGroupIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SCOPE_GROUP_IDS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((id) => String(id)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeScopedGroupIds(ids: Set<string>) {
+  try {
+    localStorage.setItem(SCOPE_GROUP_IDS_KEY, JSON.stringify([...ids]));
+  } catch {
+    // ignore
+  }
+}
 
 export default function ReadPage() {
   const { settings } = useSettings();
@@ -25,17 +61,15 @@ export default function ReadPage() {
     loadingBodies,
     loadingIndex,
     loadError: digestError,
-    metaCount,
     indexReady,
-    indexChunkCount,
     indexProgress,
     bodyProgress,
     digestBusy,
     loadBodies,
-    buildIndex,
     clearErrors,
     reloadSummaryGroups,
     loadingBodiesGroupId,
+    stopBodies,
   } = useDigest();
 
   const [feeds, setFeeds] = useState<Feed[]>(() => INITIAL_FEEDS_CACHE?.feeds ?? []);
@@ -54,19 +88,34 @@ export default function ReadPage() {
     refreshingGroupId,
     refreshingFeedId,
     refreshBusy,
-    startRefreshAll,
+    startRefreshSelected,
     startRefreshGroup,
     startRefreshFeed,
+    stopRefresh,
   } = useFeedRefresh();
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [addSourceOpen, setAddSourceOpen] = useState(false);
   const [addSourceInitialUrls, setAddSourceInitialUrls] = useState("");
+  const [addSourceGroupId, setAddSourceGroupId] = useState(UNGROUPED_GROUP_ID);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Feed | null>(null);
   const [deleteRemoveSkill, setDeleteRemoveSkill] = useState(false);
   const [deletingFeed, setDeletingFeed] = useState(false);
+  const [groupBulkTarget, setGroupBulkTarget] = useState<
+    | { kind: "delete-group"; id: string; name: string; feedIds: string[] }
+    | { kind: "clear-ungrouped"; feedIds: string[] }
+    | null
+  >(null);
+  const [groupBulkRemoveSkill, setGroupBulkRemoveSkill] = useState(false);
+  const [deletingGroupBulk, setDeletingGroupBulk] = useState(false);
+  const [scopedGroupIds, setScopedGroupIds] = useState<Set<string>>(() => readScopedGroupIds());
+  const [schedules, setSchedules] = useState<ScheduleTime[]>([]);
+  const [scheduleModalGroup, setScheduleModalGroup] = useState<{ id: string; name: string } | null>(
+    null,
+  );
   const { batch, authRetryUrls, clearAuthRetry } = useOnboarding();
+  const { requestIndexBuild, IndexBuildConfirmModal, indexBuildBusy } = useIndexBuildConfirm();
 
   useEffect(() => {
     if (authRetryUrls.length === 0) return;
@@ -92,6 +141,98 @@ export default function ReadPage() {
       setStoredSelectedFeedId(selectedFeedId);
     }
   }, [selectedFeedId]);
+
+  const reloadSchedules = useCallback(async () => {
+    try {
+      const config = await fetchFeedSchedulerConfig();
+      setSchedules(config.schedules ?? []);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadSchedules();
+    function onFocus() {
+      void reloadSchedules();
+    }
+    function onSchedulesUpdated(event: Event) {
+      const detail = (event as CustomEvent<{ schedules?: ScheduleTime[] }>).detail;
+      if (detail?.schedules) {
+        setSchedules(detail.schedules);
+      } else {
+        void reloadSchedules();
+      }
+    }
+    window.addEventListener("focus", onFocus);
+    window.addEventListener(SCHEDULES_UPDATED_EVENT, onSchedulesUpdated);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener(SCHEDULES_UPDATED_EVENT, onSchedulesUpdated);
+    };
+  }, [reloadSchedules]);
+
+  const sections = useMemo(
+    () => buildSections(feeds, feedGroups, groupOrder),
+    [feeds, feedGroups, groupOrder],
+  );
+
+  const selectableGroupIds = useMemo(
+    () => sections.filter((section) => section.feeds.length > 0).map((section) => section.id),
+    [sections],
+  );
+
+  // 分组变化时修剪无效勾选；首次无持久化时默认全选有源分组
+  useEffect(() => {
+    if (selectableGroupIds.length === 0) return;
+    setScopedGroupIds((current) => {
+      const next = new Set([...current].filter((id) => selectableGroupIds.includes(id)));
+      const raw = localStorage.getItem(SCOPE_GROUP_IDS_KEY);
+      if (next.size === 0 && raw == null) {
+        for (const id of selectableGroupIds) next.add(id);
+      }
+      if (next.size === current.size && [...next].every((id) => current.has(id))) {
+        return current;
+      }
+      writeScopedGroupIds(next);
+      return next;
+    });
+  }, [selectableGroupIds]);
+
+  const scopedSections = useMemo(
+    () => sections.filter((section) => scopedGroupIds.has(section.id) && section.feeds.length > 0),
+    [sections, scopedGroupIds],
+  );
+
+  const scopedFeedIds = useMemo(
+    () => scopedSections.flatMap((section) => section.feeds.map((feed) => feed.id)),
+    [scopedSections],
+  );
+
+  const scheduledGroupIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const schedule of schedules) {
+      for (const gid of schedule.group_ids ?? []) {
+        if (gid) ids.add(gid);
+      }
+    }
+    return ids;
+  }, [schedules]);
+
+  const scheduleHintByGroupId = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const section of sections) {
+      if (section.isSystem) continue;
+      const labels = schedules
+        .filter((schedule) => (schedule.group_ids ?? []).includes(section.id))
+        .map(formatScheduleSummary);
+      map[section.id] =
+        labels.length > 0
+          ? `已加入定时：${labels.join("、")}`
+          : "未加入任何定时（在设置 → 定时里为某条定时选择分组）";
+    }
+    return map;
+  }, [schedules, sections]);
 
   const selectedFeed = feeds.find((feed) => feed.id === selectedFeedId) ?? null;
 
@@ -262,7 +403,6 @@ export default function ReadPage() {
     }
   }, [loadingBodies, selectedFeedId, days, loadArticles]);
 
-  const feedRefreshBusy = refreshBusy;
   const prevRefreshBusyRef = useRef(refreshBusy);
 
   useEffect(() => {
@@ -277,8 +417,13 @@ export default function ReadPage() {
     }
   }, [refreshBusy, loadFeeds, loadArticles, days, articleCacheKey]);
 
-  async function handleUpdateSourcesAll() {
-    if (feeds.length === 0 || feedRefreshBusy || loadingBodies) return;
+  function stopUpdateSources() {
+    stopRefresh();
+    stopBodies();
+  }
+
+  async function handleUpdateSourcesSelected() {
+    if (scopedFeedIds.length === 0 || loadingBodies) return;
     setError("");
     setInfo("");
     try {
@@ -286,20 +431,34 @@ export default function ReadPage() {
       setFeeds(latest.feeds);
       setFeedGroups(latest.groups);
       setGroupOrder(latest.group_order ?? []);
-      await startRefreshAll(days);
+      const names = scopedSections.map((section) => section.name);
+      const label = names.join("、");
+      const { cancelled } = await startRefreshSelected(scopedFeedIds, days, label);
+      if (cancelled) return;
       clearErrors();
-      await loadBodies();
+      await loadBodies({ feedIds: scopedFeedIds });
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新源信息失败");
     }
   }
 
+  function handleToggleGroupScope(groupId: string, checked: boolean) {
+    setScopedGroupIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(groupId);
+      else next.delete(groupId);
+      writeScopedGroupIds(next);
+      return next;
+    });
+  }
+
   async function handleUpdateSourcesGroup(groupId: string, groupName: string, feedIds: string[]) {
-    if (feedIds.length === 0 || feedRefreshBusy || loadingBodies) return;
+    if (feedIds.length === 0 || loadingBodies) return;
     setError("");
     setInfo("");
     try {
-      await startRefreshGroup(groupId, groupName, days);
+      const { cancelled } = await startRefreshGroup(groupId, groupName, days);
+      if (cancelled) return;
       clearErrors();
       const result = await loadBodies({
         feedIds,
@@ -334,16 +493,17 @@ export default function ReadPage() {
     feedName?: string,
     entryUrl?: string | null,
   ) {
-    if (!feedId || feedRefreshBusy || loadingBodies) return;
+    if (!feedId || loadingBodies) return;
     setError("");
     setInfo("");
     try {
-      await startRefreshFeed(
+      const { cancelled } = await startRefreshFeed(
         feedId,
         feedName,
         days,
         entryUrl == null ? undefined : entryUrl,
       );
+      if (cancelled) return;
       clearErrors();
       await loadBodies({ feedIds: [feedId] });
       articlesCache.current.delete(articleCacheKey(feedId, days));
@@ -383,6 +543,41 @@ export default function ReadPage() {
     }
   }
 
+  async function handleDeleteFeeds(
+    feedIds: string[],
+    removeSkill: boolean,
+    options?: { silent?: boolean },
+  ) {
+    if (feedIds.length === 0) return { removedSkill: false };
+    setError("");
+    let removedSkill = false;
+    for (const feedId of feedIds) {
+      const result = await deleteFeed(feedId, removeSkill);
+      articlesCache.current.delete(feedId);
+      if (result.skill_removed) removedSkill = true;
+    }
+    const latest = await fetchFeeds();
+    setFeeds(latest.feeds);
+    setFeedGroups(latest.groups);
+    setGroupOrder(latest.group_order ?? []);
+    setSelectedFeedId((current) =>
+      resolveDefaultFeedId(
+        latest.feeds,
+        latest.groups,
+        latest.group_order ?? [],
+        current && feedIds.includes(current) ? null : current,
+      ),
+    );
+    if (!options?.silent) {
+      if (removeSkill && removedSkill) {
+        setInfo(`已删除 ${feedIds.length} 个源并删除本地 skill`);
+      } else {
+        setInfo(`已删除 ${feedIds.length} 个源`);
+      }
+    }
+    return { removedSkill };
+  }
+
   async function handleRenameFeed(feedId: string, nextName: string) {
     const feed = feeds.find((item) => item.id === feedId);
     if (!feed) return;
@@ -400,29 +595,117 @@ export default function ReadPage() {
     }
   }
 
-  async function handleSaveGroups(groups: FeedGroup[], nextDefaultDigestSkill: string) {
+  async function handleRenameGroup(groupId: string, nextName: string) {
+    const group = feedGroups.find((item) => item.id === groupId);
+    if (!group) return;
+    const trimmed = nextName.trim();
+    if (!trimmed || trimmed === group.name) return;
+    setError("");
+    try {
+      const nextGroups = feedGroups.map((item) =>
+        item.id === groupId ? { ...item, name: trimmed } : item,
+      );
+      const result = await saveFeedGroups(nextGroups, groupOrder);
+      setFeedGroups(result.groups);
+      setGroupOrder(result.group_order ?? []);
+      await reloadSummaryGroups();
+      setInfo(`已将分组重命名为「${trimmed}」`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重命名分组失败");
+    }
+  }
+
+  async function handleConfirmGroupBulk() {
+    if (!groupBulkTarget) return;
+    setDeletingGroupBulk(true);
+    setError("");
+    try {
+      const feedIds = groupBulkTarget.feedIds;
+      let removedSkill = false;
+      if (feedIds.length > 0) {
+        const result = await handleDeleteFeeds(feedIds, groupBulkRemoveSkill, { silent: true });
+        removedSkill = result.removedSkill;
+      }
+
+      if (groupBulkTarget.kind === "delete-group") {
+        const latest = await fetchFeeds();
+        const currentGroups = latest.groups;
+        const nextGroups = currentGroups.filter((group) => group.id !== groupBulkTarget.id);
+        const nextOrder = (latest.group_order ?? groupOrder).filter(
+          (id) => id !== groupBulkTarget.id,
+        );
+        const result = await saveFeedGroups(nextGroups, nextOrder);
+        setFeedGroups(result.groups);
+        setGroupOrder(result.group_order ?? []);
+        setDefaultDigestSkill(result.default_digest_skill ?? defaultDigestSkill);
+        const refreshed = await fetchFeeds();
+        setFeeds(refreshed.feeds);
+        setFeedGroups(refreshed.groups);
+        setGroupOrder(refreshed.group_order ?? []);
+        setScopedGroupIds((current) => {
+          if (!current.has(groupBulkTarget.id)) return current;
+          const next = new Set(current);
+          next.delete(groupBulkTarget.id);
+          writeScopedGroupIds(next);
+          return next;
+        });
+        await reloadSummaryGroups();
+        await reloadSchedules();
+        const skillHint =
+          feedIds.length === 0
+            ? "已删除分组"
+            : groupBulkRemoveSkill && removedSkill
+              ? `已删除分组，并删除组内 ${feedIds.length} 个源及其本地 skill`
+              : `已删除分组，并删除组内 ${feedIds.length} 个源（skill 已保留）`;
+        setInfo(skillHint);
+      } else {
+        setInfo(
+          groupBulkRemoveSkill && removedSkill
+            ? `已清空未分组 ${feedIds.length} 个源并删除本地 skill`
+            : `已清空未分组 ${feedIds.length} 个源`,
+        );
+      }
+
+      setGroupBulkTarget(null);
+      setGroupBulkRemoveSkill(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "操作失败");
+    } finally {
+      setDeletingGroupBulk(false);
+    }
+  }
+
+  async function handleSaveGroups(groups: FeedGroup[]) {
+    const removedCount = feedGroups.length - groups.length;
     const nextOrder = groupOrder.filter((id) => groups.some((group) => group.id === id));
     for (const group of groups) {
       if (!nextOrder.includes(group.id)) {
         nextOrder.push(group.id);
       }
     }
-    const result = await saveFeedGroups(groups, nextOrder, nextDefaultDigestSkill);
+    const result = await saveFeedGroups(groups, nextOrder);
     setFeedGroups(result.groups);
     setGroupOrder(result.group_order ?? []);
-    setDefaultDigestSkill(result.default_digest_skill ?? nextDefaultDigestSkill);
+    setDefaultDigestSkill(result.default_digest_skill ?? defaultDigestSkill);
     const latest = await fetchFeeds();
     setFeeds(latest.feeds);
     await reloadSummaryGroups();
+    if (removedCount > 0) {
+      await reloadSchedules();
+    }
     setInfo("分组已保存");
   }
 
   async function handleLayoutChange(groups: FeedGroup[], nextGroupOrder: string[]) {
-    const skillById = new Map(feedGroups.map((group) => [group.id, group.digest_skill_id ?? null]));
-    const merged = groups.map((group) => ({
-      ...group,
-      digest_skill_id: group.digest_skill_id ?? skillById.get(group.id) ?? null,
-    }));
+    const prevById = new Map(feedGroups.map((group) => [group.id, group]));
+    const merged = groups.map((group) => {
+      const prev = prevById.get(group.id);
+      return {
+        ...group,
+        digest_skill_id: group.digest_skill_id ?? prev?.digest_skill_id ?? null,
+        auto_refresh: group.auto_refresh ?? prev?.auto_refresh ?? true,
+      };
+    });
     const result = await saveFeedGroups(merged, nextGroupOrder);
     setFeedGroups(result.groups);
     setGroupOrder(result.group_order ?? []);
@@ -431,8 +714,10 @@ export default function ReadPage() {
   }
 
   const combinedError = error || digestError;
-  const llmConfigured = isLlmConfigured(settings);
-  const hasList = metaCount > 0 || feeds.length > 0;
+  const embeddingConfigured = isEmbeddingConfigured(settings);
+  const hasScopedSelection = scopedSections.length > 0;
+  const updateAllSelected =
+    hasScopedSelection && scopedSections.length === selectableGroupIds.length;
 
   const sourcesStatus = (() => {
     if (refreshBusy) return "正在更新文章列表…";
@@ -446,16 +731,27 @@ export default function ReadPage() {
         ? `建立索引中 ${indexProgress.current}/${indexProgress.total}`
         : "正在建立索引…";
     }
-    const parts: string[] = [];
-    if (feeds.length > 0) parts.push(`${feeds.length} 个源`);
-    parts.push(formatDaysLabel(days));
-    if (metaCount > 0) parts.push(`${metaCount} 篇列表`);
-    else if (feeds.length > 0) parts.push("暂无文章");
-    if (indexReady) parts.push(`索引 ${indexChunkCount} 片段`);
-    return parts.join(" · ") || "还没有数据源";
+    if (feeds.length === 0) return "还没有数据源";
+    if (!hasScopedSelection) {
+      return `未勾选分组 · ${formatDaysLabel(days)}`;
+    }
+    return `已选 ${scopedSections.length} 组 · ${scopedFeedIds.length} 源 · ${formatDaysLabel(days)}`;
   })();
 
   const sourcesBusy = refreshBusy || loadingBodies;
+
+  const indexScopeLabel = hasScopedSelection
+    ? `已选 ${scopedSections.length} 组 · ${scopedFeedIds.length} 源`
+    : "所选范围";
+
+  const handleRequestIndexBuild = useCallback(() => {
+    if (!hasScopedSelection) return;
+    clearErrors();
+    void requestIndexBuild({
+      feedIds: scopedFeedIds,
+      scopeLabel: indexScopeLabel,
+    });
+  }, [clearErrors, hasScopedSelection, indexScopeLabel, requestIndexBuild, scopedFeedIds]);
 
   return (
     <div className="flex h-full flex-col bg-[var(--paper)]">
@@ -471,7 +767,7 @@ export default function ReadPage() {
             className={`text-sm ${
               sourcesBusy || loadingIndex
                 ? "text-[var(--accent)]"
-                : hasList
+                : hasScopedSelection
                   ? "text-[var(--success)]"
                   : "text-[var(--ink-muted)]"
             }`}
@@ -482,37 +778,43 @@ export default function ReadPage() {
         <div className="mt-2.5 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            disabled={sourcesBusy || feeds.length === 0}
+            disabled={!hasScopedSelection || loadingBodies}
             title={
-              feeds.length === 0
-                ? "请先添加数据源"
-                : "刷新各源文章列表，并拉取正文。\n生成简报与摘要会用到更新后的内容；建立索引仍需另点。"
+              !hasScopedSelection
+                ? "请先在侧栏勾选至少一个分组"
+                : undefined
             }
-            onClick={() => void handleUpdateSourcesAll()}
+            onClick={() => void handleUpdateSourcesSelected()}
             className="ui-btn ui-btn-primary text-sm disabled:opacity-50"
           >
-            {sourcesBusy ? "更新中…" : "更新源信息"}
+            {updateAllSelected ? "更新全部" : "更新所选"}
           </button>
+          {sourcesBusy ? (
+            <button
+              type="button"
+              title="停止更新（列表刷新与正文拉取）"
+              onClick={stopUpdateSources}
+              className="ui-btn text-sm"
+            >
+              停止更新
+            </button>
+          ) : null}
           <button
             type="button"
-            disabled={digestBusy || !llmConfigured}
+            disabled={digestBusy || !hasScopedSelection || indexBuildBusy}
             title={
-              !llmConfigured
-                ? "请先在设置配置模型"
-                : "为已有正文建立检索索引，仅自由提问时需要。\n生成简报或对选定文章做摘要不需要索引，可跳过以节省 token。"
+              !embeddingConfigured
+                ? "请先在设置配置 Embedding 模型与 API Key"
+                : !hasScopedSelection
+                  ? "请先在侧栏勾选至少一个分组"
+                  : undefined
             }
-            onClick={() => {
-              clearErrors();
-              void buildIndex();
-            }}
+            onClick={handleRequestIndexBuild}
             className="ui-btn text-sm disabled:opacity-50"
           >
             {loadingIndex ? "建立索引中…" : indexReady ? "重建索引" : "建立索引"}
           </button>
         </div>
-        <p className="mt-2 text-xs text-[var(--ink-muted)]">
-          更新源信息 = 刷新列表并拉取正文；建立索引仅在提问时需要。
-        </p>
       </header>
 
       {combinedError && (
@@ -528,54 +830,81 @@ export default function ReadPage() {
       )}
 
       <main className="flex min-h-0 flex-1">
-        <FeedSidebar
-          feeds={feeds}
-          groups={feedGroups}
-          groupOrder={groupOrder}
-          selectedId={selectedFeedId}
-          loading={feedsLoading}
-          onSelect={setSelectedFeedId}
-          onRefreshAll={() => void handleUpdateSourcesAll()}
-          onRefreshGroup={(groupId, groupName, feedIds) =>
-            void handleUpdateSourcesGroup(groupId, groupName, feedIds)
-          }
-          refreshingAll={refreshingAll}
-          refreshing={Boolean(refreshingFeedId)}
-          refreshingGroupId={refreshingGroupId}
-          loadingBodies={loadingBodies}
-          loadingBodiesGroupId={loadingBodiesGroupId}
-          sourcesBusy={sourcesBusy}
-          onAddSource={() => setAddSourceOpen(true)}
-          onManageGroups={() => setGroupModalOpen(true)}
-          onDeleteFeed={(feedId) => {
-            const feed = feeds.find((item) => item.id === feedId) ?? null;
-            if (feed) {
-              setDeleteTarget(feed);
-              setDeleteRemoveSkill(false);
+          <FeedSidebar
+            feeds={feeds}
+            groups={feedGroups}
+            groupOrder={groupOrder}
+            selectedId={selectedFeedId}
+            loading={feedsLoading}
+            onSelect={setSelectedFeedId}
+            onRefreshAll={() => void handleUpdateSourcesSelected()}
+            onRefreshGroup={(groupId, groupName, feedIds) =>
+              void handleUpdateSourcesGroup(groupId, groupName, feedIds)
             }
-          }}
-          onRenameFeed={(feedId, name) => handleRenameFeed(feedId, name)}
-          onLayoutChange={handleLayoutChange}
-          days={days}
-        />
-        <ArticleList
-          key={selectedFeedId ?? "none"}
-          feedId={selectedFeedId}
-          articles={articles}
-          loading={articlesLoading}
-          feedName={selectedFeed?.name ?? ""}
-          feedUrl={selectedFeed?.entry_url}
-          syncTime={selectedFeed?.sync_time}
-          onRefresh={() => {
-            if (!selectedFeedId) return;
-            void handleUpdateSourcesFeed(
-              selectedFeedId,
-              selectedFeed?.name,
-              selectedFeed?.entry_url,
-            );
-          }}
-          refreshing={sourcesBusy}
-        />
+            refreshingAll={refreshingAll}
+            refreshing={Boolean(refreshingFeedId)}
+            refreshingGroupId={refreshingGroupId}
+            loadingBodies={loadingBodies}
+            loadingBodiesGroupId={loadingBodiesGroupId}
+            sourcesBusy={sourcesBusy}
+            onAddSource={(groupId) => {
+              setAddSourceGroupId(groupId || selectedFeed?.group_id || UNGROUPED_GROUP_ID);
+              setAddSourceOpen(true);
+            }}
+            onManageGroups={() => setGroupModalOpen(true)}
+            onRenameGroup={(groupId, name) => handleRenameGroup(groupId, name)}
+            onOpenSchedule={(groupId) => {
+              const section = sections.find((item) => item.id === groupId);
+              if (!section || section.isSystem) return;
+              setScheduleModalGroup({ id: section.id, name: section.name });
+            }}
+            onDeleteGroup={(group) => {
+              setGroupBulkRemoveSkill(false);
+              setGroupBulkTarget({
+                kind: "delete-group",
+                id: group.id,
+                name: group.name,
+                feedIds: group.feedIds,
+              });
+            }}
+            onClearUngrouped={(feedIds) => {
+              if (feedIds.length === 0) return;
+              setGroupBulkRemoveSkill(false);
+              setGroupBulkTarget({ kind: "clear-ungrouped", feedIds });
+            }}
+            onDeleteFeed={(feedId) => {
+              const feed = feeds.find((item) => item.id === feedId) ?? null;
+              if (feed) {
+                setDeleteTarget(feed);
+                setDeleteRemoveSkill(false);
+              }
+            }}
+            onRenameFeed={(feedId, name) => handleRenameFeed(feedId, name)}
+            onLayoutChange={handleLayoutChange}
+            days={days}
+            scopedGroupIds={scopedGroupIds}
+            onToggleGroupScope={handleToggleGroupScope}
+            scheduledGroupIds={scheduledGroupIds}
+            scheduleHintByGroupId={scheduleHintByGroupId}
+          />
+          <ArticleList
+            key={selectedFeedId ?? "none"}
+            feedId={selectedFeedId}
+            articles={articles}
+            loading={articlesLoading}
+            feedName={selectedFeed?.name ?? ""}
+            feedUrl={selectedFeed?.entry_url}
+            syncTime={selectedFeed?.sync_time}
+            onRefresh={() => {
+              if (!selectedFeedId) return;
+              void handleUpdateSourcesFeed(
+                selectedFeedId,
+                selectedFeed?.name,
+                selectedFeed?.entry_url,
+              );
+            }}
+            refreshing={sourcesBusy}
+          />
       </main>
 
       <AddSourceModal
@@ -583,22 +912,52 @@ export default function ReadPage() {
         onClose={() => {
           setAddSourceOpen(false);
           setAddSourceInitialUrls("");
+          setAddSourceGroupId(UNGROUPED_GROUP_ID);
         }}
         groups={feedGroups}
-        defaultGroupId={selectedFeed?.group_id ?? UNGROUPED_GROUP_ID}
+        defaultGroupId={addSourceGroupId}
         initialUrls={addSourceInitialUrls}
+        onImported={(result) => {
+          pendingForceReload.current = true;
+          void loadFeeds().then(() => {
+            const skillCount = result.imported.length;
+            const platformCount = result.imported_platform_accounts?.length ?? 0;
+            const parts: string[] = [];
+            if (skillCount > 0) parts.push(`${skillCount} 个 skill`);
+            if (platformCount > 0) parts.push(`${platformCount} 个平台账号`);
+            const groupName =
+              result.group_id === UNGROUPED_GROUP_ID
+                ? "未分组"
+                : feedGroups.find((group) => group.id === result.group_id)?.name ?? "所选分组";
+            let message = `已导入 ${parts.join("、")}到「${groupName}」`;
+            if (result.needs_auth?.length) {
+              message += `；请补授权：${result.needs_auth.join("、")}`;
+            }
+            setInfo(message);
+          });
+        }}
       />
       <FeedGroupModal
         open={groupModalOpen}
         feeds={feeds}
         groups={feedGroups}
-        defaultDigestSkill={defaultDigestSkill}
         onClose={() => setGroupModalOpen(false)}
         onSave={handleSaveGroups}
+        onDeleteFeeds={async (feedIds, removeSkill) => {
+          await handleDeleteFeeds(feedIds, removeSkill);
+        }}
+      />
+      <IndexBuildConfirmModal />
+      <GroupScheduleModal
+        open={Boolean(scheduleModalGroup)}
+        groupId={scheduleModalGroup?.id ?? null}
+        groupName={scheduleModalGroup?.name ?? ""}
+        onClose={() => setScheduleModalGroup(null)}
+        onSaved={setSchedules}
       />
       <ConfirmModal
         open={Boolean(deleteTarget)}
-        title="移除数据源"
+        title="删除数据源"
         message={deleteTarget ? deleteFeedMessage(deleteTarget) : ""}
         extraContent={
           deleteTarget && !isPlatformFeed(deleteTarget) ? (
@@ -613,7 +972,7 @@ export default function ReadPage() {
             </label>
           ) : null
         }
-        confirmLabel="确认移除"
+        confirmLabel="确认删除"
         danger
         loading={deletingFeed}
         onCancel={() => {
@@ -624,6 +983,52 @@ export default function ReadPage() {
         }}
         onConfirm={() => {
           if (deleteTarget) void handleDeleteFeed(deleteTarget.id);
+        }}
+      />
+      <ConfirmModal
+        open={Boolean(groupBulkTarget)}
+        title={
+          groupBulkTarget?.kind === "clear-ungrouped" ? "清空未分组" : "删除分组"
+        }
+        message={
+          !groupBulkTarget
+            ? ""
+            : groupBulkTarget.kind === "clear-ungrouped"
+              ? `清空「未分组」下的 ${groupBulkTarget.feedIds.length} 个数据源？\n\n默认保留本地 discovery skill，之后可通过相同链接重新接入。`
+              : groupBulkTarget.feedIds.length === 0
+                ? `确定删除分组「${groupBulkTarget.name}」？\n\n该分组下没有数据源。`
+                : `确定删除分组「${groupBulkTarget.name}」？\n\n将同时删除组内 ${groupBulkTarget.feedIds.length} 个数据源（不会移到「未分组」）。默认保留本地 discovery skill，之后可通过相同链接重新接入。`
+        }
+        extraContent={
+          groupBulkTarget && groupBulkTarget.feedIds.length > 0 ? (
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--ink-muted)]">
+              <input
+                type="checkbox"
+                checked={groupBulkRemoveSkill}
+                onChange={(e) => setGroupBulkRemoveSkill(e.target.checked)}
+                disabled={deletingGroupBulk}
+              />
+              {groupBulkTarget.feedIds.every((id) =>
+                isPlatformFeed(feeds.find((feed) => feed.id === id)),
+              )
+                ? "同时移除平台账号登记（不删除共享平台 skill）"
+                : `同时删除这 ${groupBulkTarget.feedIds.length} 个源的本地 skill 目录（不可恢复）`}
+            </label>
+          ) : null
+        }
+        confirmLabel={
+          groupBulkTarget?.kind === "clear-ungrouped" ? "确认清空" : "确认删除"
+        }
+        danger
+        loading={deletingGroupBulk}
+        onCancel={() => {
+          if (!deletingGroupBulk) {
+            setGroupBulkTarget(null);
+            setGroupBulkRemoveSkill(false);
+          }
+        }}
+        onConfirm={() => {
+          void handleConfirmGroupBulk();
         }}
       />
     </div>

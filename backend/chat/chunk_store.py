@@ -1,12 +1,63 @@
 from paths import DATA_DIR
 
 import json
+import logging
 import sqlite3
+import struct
 import time
-from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 DB_PATH = DATA_DIR / "article_chunks.db"
+logger = logging.getLogger(__name__)
+
+# 有有效 embedding：float32 BLOB（≥1 维）或旧版 JSON 文本数组
+_HAS_EMBEDDING_SQL = (
+    "(typeof(embedding) = 'blob' AND length(embedding) >= 4)"
+    " OR (typeof(embedding) = 'text' AND length(embedding) > 2 AND embedding != '[]')"
+)
+
+
+def encode_embedding(values: list[float] | None) -> bytes:
+    """list[float] → little-endian float32 bytes。"""
+    if not values:
+        return b""
+    return struct.pack(f"<{len(values)}f", *[float(x) for x in values])
+
+
+def decode_embedding(raw: object) -> list[float]:
+    """兼容 float32 BLOB 与旧版 JSON 文本。"""
+    if raw is None:
+        return []
+    if isinstance(raw, memoryview):
+        raw = raw.tobytes()
+    if isinstance(raw, bytearray):
+        raw = bytes(raw)
+    if isinstance(raw, bytes):
+        if not raw:
+            return []
+        # 旧数据偶发以 UTF-8 JSON bytes 存入
+        if raw[:1] in (b"[", b" ") or raw[:1] == b"\t":
+            try:
+                data = json.loads(raw.decode("utf-8"))
+                if isinstance(data, list):
+                    return [float(x) for x in data]
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                pass
+        if len(raw) % 4 != 0:
+            return []
+        n = len(raw) // 4
+        return list(struct.unpack(f"<{n}f", raw))
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text or text == "[]":
+            return []
+        try:
+            data = json.loads(text)
+            if isinstance(data, list):
+                return [float(x) for x in data]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return []
+    return []
 
 
 def _normalize_url(url: str) -> str:
@@ -32,7 +83,43 @@ class ChunkStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _migrate_embeddings_to_blob(self, conn: sqlite3.Connection) -> int:
+        """把仍为 JSON 文本的 embedding 转成 float32 BLOB。返回转换行数。"""
+        rows = conn.execute(
+            """
+            SELECT id, embedding FROM article_chunks
+            WHERE typeof(embedding) = 'text'
+               OR (typeof(embedding) = 'blob' AND length(embedding) > 0
+                   AND substr(embedding, 1, 1) = X'5B')
+            """
+        ).fetchall()
+        if not rows:
+            return 0
+
+        converted = 0
+        for row in rows:
+            values = decode_embedding(row["embedding"])
+            blob = encode_embedding(values)
+            conn.execute(
+                "UPDATE article_chunks SET embedding = ? WHERE id = ?",
+                (blob, row["id"]),
+            )
+            converted += 1
+        logger.info("article_chunks: migrated %s embeddings to float32 blob", converted)
+        return converted
+
+    def _vacuum(self) -> None:
+        """VACUUM 须在事务外执行。"""
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.Error as exc:
+            logger.warning("article_chunks VACUUM skipped: %s", exc)
+        finally:
+            conn.close()
+
     def _init_db(self) -> None:
+        converted = 0
         with self._connect() as conn:
             conn.execute(
                 """
@@ -47,7 +134,7 @@ class ChunkStore:
                     feed_name TEXT NOT NULL DEFAULT '',
                     published_at TEXT NOT NULL DEFAULT '',
                     url TEXT NOT NULL DEFAULT '',
-                    embedding TEXT NOT NULL DEFAULT '[]',
+                    embedding BLOB NOT NULL DEFAULT X'',
                     content_hash TEXT NOT NULL DEFAULT '',
                     updated_at REAL NOT NULL
                 )
@@ -59,6 +146,9 @@ class ChunkStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_article_chunks_published_at ON article_chunks(published_at)"
             )
+            converted = self._migrate_embeddings_to_blob(conn)
+        if converted:
+            self._vacuum()
 
     def delete_by_article(self, feed_id: str, article_id: str) -> None:
         with self._connect() as conn:
@@ -66,6 +156,31 @@ class ChunkStore:
                 "DELETE FROM article_chunks WHERE feed_id = ? AND article_id = ?",
                 (feed_id, article_id),
             )
+
+    def delete_older_than(self, cutoff) -> int:
+        """删除早于 cutoff 的分块与 embedding（优先 published_at，否则 updated_at）。"""
+        from core.time_scope import parse_publish_time
+
+        cutoff_ts = cutoff.timestamp()
+        deleted = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, published_at, updated_at FROM article_chunks"
+            ).fetchall()
+            stale_ids: list[str] = []
+            for row in rows:
+                pub = parse_publish_time(str(row["published_at"] or ""))
+                if pub is not None:
+                    stale = pub < cutoff
+                else:
+                    updated = float(row["updated_at"] or 0)
+                    stale = updated > 0 and updated < cutoff_ts
+                if stale:
+                    stale_ids.append(str(row["id"]))
+            for chunk_id in stale_ids:
+                conn.execute("DELETE FROM article_chunks WHERE id = ?", (chunk_id,))
+            deleted = len(stale_ids)
+        return deleted
 
     def get_content_hash(self, feed_id: str, article_id: str) -> str | None:
         with self._connect() as conn:
@@ -115,7 +230,7 @@ class ChunkStore:
                         chunk.get("feed_name", ""),
                         chunk.get("published_at", ""),
                         chunk.get("url", ""),
-                        json.dumps(chunk.get("embedding", [])),
+                        encode_embedding(chunk.get("embedding") or []),
                         chunk.get("content_hash", ""),
                         now,
                     ),
@@ -129,19 +244,19 @@ class ChunkStore:
     ) -> list[dict]:
         scoped = bool(article_pairs)
         if scoped:
-            query = """
+            query = f"""
                 SELECT id, feed_id, article_id, chunk_index, text, char_start,
                        title, feed_name, published_at, url, embedding
                 FROM article_chunks
-                WHERE embedding != '[]' AND embedding != ''
+                WHERE {_HAS_EMBEDDING_SQL}
             """
             params: list[str] = []
         else:
-            query = """
+            query = f"""
                 SELECT id, feed_id, article_id, chunk_index, text, char_start,
                        title, feed_name, published_at, url, embedding
                 FROM article_chunks
-                WHERE published_at >= ? AND embedding != '[]' AND embedding != ''
+                WHERE published_at >= ? AND {_HAS_EMBEDDING_SQL}
             """
             params = [cutoff_iso]
         if feed_ids:
@@ -159,7 +274,7 @@ class ChunkStore:
         result: list[dict] = []
         for row in rows:
             item = dict(row)
-            item["embedding"] = json.loads(item.get("embedding") or "[]")
+            item["embedding"] = decode_embedding(item.get("embedding"))
             result.append(item)
         return result
 
@@ -171,15 +286,15 @@ class ChunkStore:
     ) -> int:
         scoped = bool(article_pairs)
         if scoped:
-            query = """
+            query = f"""
                 SELECT COUNT(*) AS cnt FROM article_chunks
-                WHERE embedding != '[]' AND embedding != ''
+                WHERE {_HAS_EMBEDDING_SQL}
             """
             params: list[str] = []
         else:
-            query = """
+            query = f"""
                 SELECT COUNT(*) AS cnt FROM article_chunks
-                WHERE published_at >= ? AND embedding != '[]' AND embedding != ''
+                WHERE published_at >= ? AND {_HAS_EMBEDDING_SQL}
             """
             params = [cutoff_iso]
         if feed_ids:
@@ -207,9 +322,9 @@ class ChunkStore:
                     continue
                 seen.add(candidate)
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT feed_id, article_id FROM article_chunks
-                    WHERE url = ? AND embedding != '[]' AND embedding != ''
+                    WHERE url = ? AND {_HAS_EMBEDDING_SQL}
                     LIMIT 1
                     """,
                     (candidate,),
@@ -219,9 +334,9 @@ class ChunkStore:
             normalized = _normalize_url(raw)
             if normalized:
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT feed_id, article_id FROM article_chunks
-                    WHERE embedding != '[]' AND embedding != ''
+                    WHERE {_HAS_EMBEDDING_SQL}
                       AND lower(replace(replace(url, '://www.', '://'), 'https://', 'http://')) =
                           lower(replace(replace(?, '://www.', '://'), 'https://', 'http://'))
                     LIMIT 1
@@ -235,10 +350,10 @@ class ChunkStore:
     def article_has_chunks(self, feed_id: str, article_id: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT 1 FROM article_chunks
                 WHERE feed_id = ? AND article_id = ?
-                  AND embedding != '[]' AND embedding != ''
+                  AND {_HAS_EMBEDDING_SQL}
                 LIMIT 1
                 """,
                 (feed_id, article_id),
@@ -258,5 +373,5 @@ class ChunkStore:
         if row is None:
             return None
         item = dict(row)
-        item["embedding"] = json.loads(item.get("embedding") or "[]")
+        item["embedding"] = decode_embedding(item.get("embedding"))
         return item

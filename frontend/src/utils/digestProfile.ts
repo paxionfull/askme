@@ -32,12 +32,9 @@ export function defaultDigestProfile(): DigestProfile {
       max_events: 10,
       exclusive: true,
     },
-    categories: [
-      { id: "cat-1", name: "分类一", criteria: "" },
-      { id: "cat-2", name: "分类二", criteria: "" },
-    ],
+    categories: [{ id: "cat-1", name: "", criteria: "" }],
     ignore: {
-      criteria: "广告、软广、无实质信息、与主题无关的内容",
+      criteria: "",
     },
     cluster: {
       enabled: true,

@@ -221,6 +221,11 @@ interface DigestTreeViewProps {
   className?: string;
   /** 简报区滚动容器；不传则自动向上查找 */
   scrollParentRef?: RefObject<HTMLElement | null>;
+  /** 导出为 Markdown（目录轨下方、正文最左，对齐原型） */
+  exportAction?: {
+    done: boolean;
+    onClick: () => void;
+  };
 }
 
 export default function DigestTreeView({
@@ -228,6 +233,7 @@ export default function DigestTreeView({
   onAddArticles,
   className = "",
   scrollParentRef,
+  exportAction,
 }: DigestTreeViewProps) {
   const partitions = useMemo(() => normalizePartitions(tree), [tree]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -348,6 +354,23 @@ export default function DigestTreeView({
             })}
           </div>
         </nav>
+      ) : null}
+
+      {exportAction ? (
+        <div className="relative z-[4] h-0">
+          <button
+            type="button"
+            title={exportAction.done ? "已导出 Markdown" : "下载当前简报为 Markdown"}
+            onClick={exportAction.onClick}
+            className={`absolute left-[0.85rem] top-[0.55rem] whitespace-nowrap rounded-[var(--radius-control)] border px-2.5 py-1 text-[0.8rem] transition-colors ${
+              exportAction.done
+                ? "border-[color-mix(in_srgb,var(--success)_40%,var(--rule))] bg-[var(--success-soft)] text-[var(--success)]"
+                : "border-[var(--rule)] bg-[var(--paper-raised)] text-[var(--ink-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            }`}
+          >
+            {exportAction.done ? "已导出" : "导出为 Markdown"}
+          </button>
+        </div>
       ) : null}
 
       <div className="mx-auto min-w-0 max-w-[42rem] px-5 pt-4 pb-5 sm:px-8">

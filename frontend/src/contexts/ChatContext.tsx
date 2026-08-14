@@ -107,6 +107,10 @@ const PHASE_LABELS: Record<string, string> = {
   answering: "正在回答…",
 };
 
+function shanghaiDateKey(now = new Date()): string {
+  return now.toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+}
+
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { settings } = useSettings();
   const {
@@ -138,6 +142,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [enableDeepThinking, setEnableDeepThinking] = useStoredFlag("askme.chat.enableThinking");
   const abortRef = useRef<AbortController | null>(null);
   const prevDigestGeneratingRef = useRef(digestGenerating);
+  const messagesRef = useRef(messages);
+  const scopedArticlesRef = useRef(scopedArticles);
+  const chatScopeRef = useRef<{ key: string; days: number; date: string } | null>(null);
+  const chatBucketsRef = useRef<
+    Record<string, { messages: ChatUiMessage[]; scopedArticles: ScopedArticle[] }>
+  >({});
+  messagesRef.current = messages;
+  scopedArticlesRef.current = scopedArticles;
 
   const chatSummary = panelSummary.trim();
   const llmConfigured = Boolean(settings.llmApiKey.trim() && settings.llmModel.trim());
@@ -175,28 +187,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const addScopedArticle = useCallback((article: ScopedArticle) => {
     if (!article.feed_id || !article.article_id) return;
     if (article.title.includes("尚未建立索引")) return;
-    setScopedArticles((current) => {
-      if (current.some((item) => item.feed_id === article.feed_id && item.article_id === article.article_id)) {
-        return current;
-      }
-      return [...current, article];
-    });
+    setScopedArticles([article]);
   }, []);
 
   const addScopedArticles = useCallback((articles: ScopedArticle[]) => {
     if (articles.length === 0) return;
-    setScopedArticles((current) => {
-      const next = [...current];
-      for (const article of articles) {
-        if (!article.feed_id || !article.article_id) continue;
-        if (article.title.includes("尚未建立索引")) continue;
-        if (next.some((item) => item.feed_id === article.feed_id && item.article_id === article.article_id)) {
-          continue;
-        }
-        next.push(article);
+    const next: ScopedArticle[] = [];
+    for (const article of articles) {
+      if (!article.feed_id || !article.article_id) continue;
+      if (article.title.includes("尚未建立索引")) continue;
+      if (next.some((item) => item.feed_id === article.feed_id && item.article_id === article.article_id)) {
+        continue;
       }
-      return next;
-    });
+      next.push(article);
+    }
+    if (next.length === 0) return;
+    setScopedArticles(next);
   }, []);
 
   const removeScopedArticle = useCallback((feedId: string, articleId: string) => {
@@ -273,6 +279,49 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setStatusMessage("");
   }, []);
 
+  const applyChatBucket = useCallback(
+    (bucket: { messages: ChatUiMessage[]; scopedArticles: ScopedArticle[] }) => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setSending(false);
+      setStatusMessage("");
+      setError("");
+      setPromptPreview("");
+      setActiveCitationIndex(null);
+      setMessages(bucket.messages);
+      setScopedArticles(bucket.scopedArticles);
+      const lastAssistant = [...bucket.messages]
+        .reverse()
+        .find((item) => item.role === "assistant");
+      setCitations(lastAssistant?.citations ?? []);
+    },
+    [],
+  );
+
+  const switchChatScope = useCallback(
+    (nextDays: number, nextDate: string) => {
+      const nextKey = `${nextDate}:${nextDays}`;
+      const prev = chatScopeRef.current;
+      if (prev?.key === nextKey) return false;
+
+      if (prev) {
+        chatBucketsRef.current[prev.key] = {
+          messages: messagesRef.current,
+          scopedArticles: scopedArticlesRef.current,
+        };
+      }
+
+      const restored = chatBucketsRef.current[nextKey] ?? {
+        messages: [],
+        scopedArticles: [],
+      };
+      chatScopeRef.current = { key: nextKey, days: nextDays, date: nextDate };
+      applyChatBucket(restored);
+      return true;
+    },
+    [applyChatBucket],
+  );
+
   const clearMessages = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -283,7 +332,39 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setError("");
     setStatusMessage("");
     setSending(false);
+    const key = chatScopeRef.current?.key;
+    if (key) {
+      chatBucketsRef.current[key] = {
+        messages: [],
+        scopedArticles: scopedArticlesRef.current,
+      };
+    }
   }, []);
+
+  useEffect(() => {
+    switchChatScope(days, shanghaiDateKey());
+  }, [days, switchChatScope]);
+
+  useEffect(() => {
+    const syncCalendarDay = () => {
+      const date = shanghaiDateKey();
+      const prev = chatScopeRef.current;
+      if (!prev || prev.date === date) return;
+      const switched = switchChatScope(prev.days, date);
+      if (switched) {
+        void loadPanelSummary();
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") syncCalendarDay();
+    };
+    window.addEventListener("focus", syncCalendarDay);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", syncCalendarDay);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [switchChatScope, loadPanelSummary]);
 
   const sendMessage = useCallback(
     async (text: string, options?: { replaceFromIndex?: number }) => {

@@ -67,10 +67,13 @@ export default function SkillRepairModal({
         <div className="ui-modal-header">
           <h2 id="skill-repair-title" className="ui-modal-title">
             反馈并修复
+            {skillName ? (
+              <span className="ml-2 text-xs font-normal text-[var(--ink-muted)]">
+                {skillName}
+                {skillId && skillId !== skillName ? ` · ${skillId}` : ""}
+              </span>
+            ) : null}
           </h2>
-          <p className="ui-modal-desc">
-            {skillName}（{skillId}）· Cursor Agent 将按反馈修改抓取逻辑并验证
-          </p>
         </div>
 
         <div className="ui-modal-body space-y-4">

@@ -210,3 +210,29 @@ class WebsiteArticleStore:
                 (feed_id,),
             ).fetchone()
         return float(row["last_sync_at"]) if row else None
+
+    def delete_older_than(self, cutoff) -> int:
+        """删除早于 cutoff（timezone-aware datetime）的文章元数据。"""
+        from core.time_scope import parse_publish_time
+
+        cutoff_ts = cutoff.timestamp()
+        deleted = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT feed_id, article_id, published_at, updated_at FROM articles"
+            ).fetchall()
+            for row in rows:
+                pub = parse_publish_time(str(row["published_at"] or ""))
+                if pub is not None:
+                    stale = pub < cutoff
+                else:
+                    updated = float(row["updated_at"] or 0)
+                    stale = updated > 0 and updated < cutoff_ts
+                if not stale:
+                    continue
+                conn.execute(
+                    "DELETE FROM articles WHERE feed_id = ? AND article_id = ?",
+                    (row["feed_id"], row["article_id"]),
+                )
+                deleted += 1
+        return deleted

@@ -1,4 +1,4 @@
-"""数据源接入、修复、校验与微信探测。"""
+"""数据源接入、修复、校验。"""
 from __future__ import annotations
 
 import asyncio
@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from api.deps import feed_client
 from api.models import AuthPrecheckRequest, CancelOnboardRequest
-from auth.credential_store import precheck_entry_urls, sync_runtime_cookies
+from auth.credential_store import precheck_entry_urls
 from core.llm import LLMError, sse_event
 from feed.feed_errors import FeedError
 from feed.feed_registry import UNGROUPED_GROUP_ID, feed_registry
@@ -22,10 +22,9 @@ from onboarding.source_onboarding_log import (
     read_log,
     unregister_session,
 )
-from onboarding.source_onboarding_refresh import refresh_with_auto_repair
+from onboarding.source_onboarding_refresh import refresh_onboarded_feed, refresh_with_auto_repair
 from onboarding.source_skill_repair import resolve_skill_entry_url, run_skill_repair_agent
 from onboarding.source_skill_writer import resolve_onboard_target, skill_dir_for, validate_slug
-from paths import SKILLS_LIB
 from schemas import OnboardBatchRequest, OnboardSourceRequest, RepairSourceRequest
 from skills.skill_validate import run_validation
 
@@ -42,9 +41,7 @@ def _resolve_onboard_group_id(group_id: str | None) -> str | None:
 
 
 async def _refresh_onboarded_feed(feed_id: str) -> dict:
-    feed_client.ensure_feed_visible(feed_id)
-    # 与批量接入一致：首拉只更新近 3 天列表元数据，不拉正文
-    return await feed_client.refresh_feed(feed_id, days=3)
+    return await refresh_onboarded_feed(feed_client, feed_id)
 
 
 async def _watch_onboard_disconnect(request: Request, session) -> None:
@@ -460,87 +457,8 @@ async def auth_precheck(body: AuthPrecheckRequest):
     urls = [str(url).strip() for url in body.entry_urls if str(url).strip()]
     if not urls:
         raise HTTPException(status_code=400, detail="请提供至少一个链接")
-    return precheck_entry_urls(urls)
-
-
-@router.get("/api/sources/weixin/search")
-async def search_weixin_accounts(q: str = Query(..., min_length=1, max_length=80)):
-    """按名称搜索公众号（需公众号后台凭证）。"""
-    query = (q or "").strip()
-    if not query:
-        raise HTTPException(status_code=400, detail="请输入公众号名称")
-
-    sync_runtime_cookies()
-    from auth.credential_store import slot_configured
-
-    if not slot_configured("weixin"):
-        raise HTTPException(
-            status_code=400,
-            detail="ASKME_AUTH_REQUIRED:slot=weixin 请先在设置页或添加源弹窗登录【公众号】后台（勿选小程序）",
-        )
-
-    skills_lib = SKILLS_LIB
-    import sys
-
-    lib_path = str(skills_lib)
-    if lib_path not in sys.path:
-        sys.path.insert(0, lib_path)
-    import weixin_common as w
-
-    try:
-        hits = w.search_biz(query, begin=0, count=10)
-    except w.WeixinSearchRateLimited as exc:
-        retry_after = int(getattr(exc, "retry_after", 60) or 60)
-        raise HTTPException(
-            status_code=429,
-            detail=str(exc),
-            headers={"Retry-After": str(max(1, retry_after))},
-        ) from exc
-    except RuntimeError as exc:
-        detail = str(exc)
-        status = 400 if "ASKME_AUTH_REQUIRED" in detail else 502
-        raise HTTPException(status_code=status, detail=detail) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"搜索公众号失败: {exc}") from exc
-
-    accounts = [w.normalize_search_hit(item) for item in hits]
-    accounts = [a for a in accounts if a.get("fakeid")]
-    return {"ok": True, "query": query, "accounts": accounts}
-
-
-@router.get("/api/sources/weixin/resolve")
-async def resolve_weixin_account_url(url: str = Query(..., min_length=8, max_length=500)):
-    """从文章/带 __biz 的链接解析公众号（不走 searchbiz）。"""
-    entry = (url or "").strip()
-    if not entry:
-        raise HTTPException(status_code=400, detail="请提供公众号文章或带 __biz 的链接")
-
-    skills_lib = SKILLS_LIB
-    import sys
-
-    lib_path = str(skills_lib)
-    if lib_path not in sys.path:
-        sys.path.insert(0, lib_path)
-    import weixin_common as w
-
-    try:
-        account = w.resolve_account_from_entry(entry)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"解析公众号链接失败: {exc}") from exc
-
-    fakeid = str(account.get("fakeid") or "").strip()
-    if not fakeid:
-        raise HTTPException(status_code=400, detail="未能从链接解析出公众号")
-    nickname = str(account.get("nickname") or account.get("askme_name") or "").strip()
-    return {
-        "ok": True,
-        "url": entry,
-        "fakeid": fakeid,
-        "nickname": nickname,
-        "entry_url": w.build_weixin_entry_url(fakeid, nickname=nickname),
-    }
+    # 预检含同步 HTTP（如平台登录态 verify），放线程池以免被接入收尾堵住
+    return await asyncio.to_thread(precheck_entry_urls, urls)
 
 
 @router.post("/api/sources/{slug}/validate")

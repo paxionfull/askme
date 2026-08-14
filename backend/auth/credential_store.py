@@ -28,28 +28,58 @@ SECRETS_PATH = DATA_DIR / "integrations.json"
 CREDENTIALS_KEY = "credentials"
 ZHIHU_COOKIE_KEY = "zhihu_cookie"
 AUTH_SLOT_DEFS_KEY = "auth_slot_defs"
+_DEBUG_LOG_PATH = "/Users/zhuyuyao/Documents/llm应用/askme/.cursor/debug-fed963.log"
+
+
+def _agent_log(
+    location: str,
+    message: str,
+    data: dict[str, Any],
+    *,
+    hypothesis_id: str,
+) -> None:
+    # region agent log
+    try:
+        import json
+        import time
+
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "sessionId": "fed963",
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "hypothesisId": hypothesis_id,
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # endregion
 
 SLOT_DEFS: dict[str, dict[str, str]] = {
     "zhihu": {
         "label": "知乎",
         "login_url": "https://www.zhihu.com/signin",
-        "cookie_hint": "粘贴完整 Cookie（至少包含 d_c0）",
-        "required_token": "d_c0=",
-    },
-    "xiaohongshu": {
-        "label": "小红书",
-        "login_url": "https://www.xiaohongshu.com",
-        "cookie_hint": "须真实扫码登录后的 Cookie（访客也会有 web_session，不够；保存前会探测 loggedIn）",
-        "required_token": "web_session=",
-    },
-    "weixin": {
-        "label": "微信",
-        "login_url": "https://mp.weixin.qq.com/",
         "cookie_hint": (
-            "须登录【公众号】后台（勿选小程序）。自动登录会写入 askme_mp_token；"
-            "手动粘贴时请包含 askme_mp_token=<token> 与 slave_sid=…"
+            "须真实登录后的完整 Cookie（至少含 d_c0 与 z_c0）。"
+            "仅有 d_c0/__zse_ck 仍是访客态，文章列表 API 会 401/602。"
         ),
-        "required_token": "askme_mp_token=",
+        "required_token": "d_c0=,z_c0=",
+    },
+    "x": {
+        "label": "X",
+        "login_url": "https://x.com/i/flow/login",
+        "cookie_hint": (
+            "须浏览器登录 x.com 后粘贴完整 Cookie（至少含 auth_token 与 ct0）。"
+            "访客/未登录 Cookie 无效。"
+        ),
+        "required_token": "auth_token=,ct0=",
     },
     "goofish-com": {
         "label": "闲鱼",
@@ -357,24 +387,6 @@ def validate_cookie_for_slot(slot: str, cookie: str, *, probe_url: str = "") -> 
         )
     if not token and ("=" not in text or len(text) < 16):
         raise ValueError("Cookie 格式无效，请粘贴浏览器中的完整 Cookie 字符串")
-    # 小红书：访客态也有 web_session，必须探测页面 loggedIn
-    if slot.strip().lower() == "xiaohongshu":
-        from auth.xiaohongshu_auth import verify_xiaohongshu_cookie
-
-        verify_xiaohongshu_cookie(text, probe_url=probe_url)
-    if slot.strip().lower() == "weixin":
-        if "slave_sid=" not in text and "slave_user=" not in text:
-            raise ValueError(
-                "微信凭证缺少 slave_sid/slave_user：请确认已登录公众号后台（不是小程序）"
-            )
-        token = ""
-        for part in text.split(";"):
-            part = part.strip()
-            if part.startswith("askme_mp_token="):
-                token = part.split("=", 1)[1].strip()
-                break
-        if not token.isdigit():
-            raise ValueError("微信凭证缺少有效的 askme_mp_token（公众号后台 URL 中的 token=）")
 
 
 def _new_id(slot: str) -> str:
@@ -533,14 +545,6 @@ def sync_runtime_cookies() -> None:
         if slot == "zhihu":
             os.environ["ZHIHU_COOKIE"] = cookie
             os.environ["ASKME_COOKIE_ZHIHU"] = cookie
-        if slot == "weixin":
-            os.environ["ASKME_COOKIE_WEIXIN"] = cookie
-            # 同步拆出 token，便于旧脚本 / 调试
-            for part in cookie.split(";"):
-                part = part.strip()
-                if part.startswith("askme_mp_token="):
-                    os.environ["WEIXIN_MP_TOKEN"] = part.split("=", 1)[1].strip()
-                    break
 
     if latest_generic:
         os.environ["ASKME_COOKIE"] = latest_generic
@@ -550,27 +554,17 @@ def sync_runtime_cookies() -> None:
     if not get_cookie_for_slot("zhihu"):
         os.environ.pop("ZHIHU_COOKIE", None)
         os.environ.pop("ASKME_COOKIE_ZHIHU", None)
-    if not get_cookie_for_slot("weixin"):
-        os.environ.pop("ASKME_COOKIE_WEIXIN", None)
-        os.environ.pop("WEIXIN_MP_TOKEN", None)
 
 
 def _auth_item_for_slot(url: str, slot: str, *, platform: str | None = None) -> dict[str, Any]:
     meta = ensure_slot_meta(slot, login_url=url)
     configured = slot_configured(slot)
-    # 小红书访客态也有 web_session：字段校验通过不等于已登录
-    if configured and slot.strip().lower() == "xiaohongshu":
-        try:
-            from auth.xiaohongshu_auth import verify_xiaohongshu_cookie
-
-            verify_xiaohongshu_cookie(get_cookie_for_slot(slot), probe_url=url)
-        except Exception:
-            configured = False
     cred = next((c for c in list_credentials() if c["slot"] == slot), None)
-    # 登录窗口优先打开用户要接入的页面（如博主主页），而非平台首页
-    # 微信例外：必须打开公众号后台，文章页 Cookie 无法拉列表
-    if slot.strip().lower() == "weixin":
-        login_url = str(meta.get("login_url") or "https://mp.weixin.qq.com/")
+    # 登录窗口：默认打开用户入口页；部分平台必须用专用登录页
+    slot_id = slot.strip().lower()
+    if slot_id == "x":
+        # 用官方登录流，避免打开博主页时被拦 / 显示不安全
+        login_url = str(meta.get("login_url") or "https://x.com/i/flow/login")
     else:
         login_url = url or str(meta.get("login_url") or "")
     return {
@@ -603,8 +597,24 @@ def precheck_entry_urls(entry_urls: list[str]) -> dict[str, Any]:
         slot = None
         if match and match.requires_cookie:
             slot = match.platform
-        if not slot:
+        elif not (match and match.platform and not match.requires_cookie):
+            # 已知平台且 Cookie 可选（如 Reddit）→ 不因动态 auth_slot 强制预检登录
             slot = resolve_slot_from_url(url)
+
+        # region agent log
+        _agent_log(
+            "credential_store.py:precheck_entry_urls",
+            "precheck slot resolution",
+            {
+                "entry_url": url,
+                "platform": match.platform if match else None,
+                "platform_requires_cookie": bool(match and match.requires_cookie),
+                "resolved_slot": slot,
+                "slot_configured": slot_configured(slot) if slot else None,
+            },
+            hypothesis_id="B",
+        )
+        # endregion
 
         if not slot:
             items.append(

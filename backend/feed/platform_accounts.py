@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 
 from feed.feed_registry import feed_registry
-from skills.skill_registry import PLATFORM_SKILL_SLUGS, SKILLS_ROOT, platform_skill_slug
+from paths import DISCOVERY_SKILLS_ROOT
+from skills.skill_registry import PLATFORM_SKILL_SLUGS, platform_skill_slug
 from onboarding.source_platform_scaffold import PlatformMatch
 from onboarding.source_skill_writer import write_skill_files
 
@@ -25,10 +25,6 @@ def account_from_platform_match(
     *,
     display_name: str,
 ) -> dict[str, Any]:
-    entry = match.entry_url
-    xsec = ""
-    if match.platform == "xiaohongshu" and entry:
-        xsec = (parse_qs(urlparse(entry).query).get("xsec_token") or [""])[0]
     return {
         "feed_id": match.feed_id,
         "platform": match.platform,
@@ -39,7 +35,6 @@ def account_from_platform_match(
         "display_name": display_name.strip(),
         "list_api_path": match.list_api_path,
         "slug": match.slug,
-        "xsec_token": xsec,
     }
 
 
@@ -69,7 +64,7 @@ def _assert_platform_skill_shape(skill_dir: Path, platform: str) -> None:
     if missing:
         raise ValueError(
             f"平台 skill 不完整（{platform}）：缺少 {', '.join(missing)}。"
-            f"请维护 .cursor/skills/{skill_dir.name}/"
+            f"请维护 skills/discovery/{skill_dir.name}/"
         )
     text = discover.read_text(encoding="utf-8")
     if "raise RuntimeError(\"请通过 FeedClient" in text or "平台 skill 占位" in text:
@@ -77,7 +72,7 @@ def _assert_platform_skill_shape(skill_dir: Path, platform: str) -> None:
             f"平台 skill {skill_dir.name} 仍是空 stub，须提供真实 discover.py"
             "（require_account + WebsiteFeedAdapter 接口）"
         )
-    if "require_account" not in text and platform != "jin10":
+    if "require_account" not in text:
         raise ValueError(
             f"平台 skill {skill_dir.name} 的 discover.py 须使用 platform_account_ctx.require_account"
         )
@@ -98,7 +93,7 @@ def ensure_platform_skill(platform: str) -> Path:
     """确保 `{platform}-platform-discovery` 目录存在且符合契约；不覆盖已有可修文件。"""
     key = (platform or "").strip().lower()
     slug = platform_skill_slug(key)
-    skill_dir = SKILLS_ROOT / f"{slug}-discovery"
+    skill_dir = DISCOVERY_SKILLS_ROOT / f"{slug}-discovery"
     if skill_dir.is_dir() and (skill_dir / "scripts" / "discover.py").is_file():
         _assert_platform_skill_shape(skill_dir, key)
         return skill_dir
@@ -115,12 +110,12 @@ def _load_committed_platform_files(platform: str) -> dict[str, str]:
     slug = PLATFORM_SKILL_SLUGS.get(platform)
     if not slug:
         raise ValueError(f"未知平台，无法确保 skill: {platform}")
-    root = SKILLS_ROOT / f"{slug}-discovery"
+    root = DISCOVERY_SKILLS_ROOT / f"{slug}-discovery"
     required = ("scripts/discover.py", "source.yaml", "SKILL.md")
     missing = [rel for rel in required if not (root / rel).is_file()]
     if missing:
         raise ValueError(
             f"仓库缺少平台 skill 源文件（{platform}）：{', '.join(missing)}。"
-            f"请先提交 .cursor/skills/{slug}-discovery/"
+            f"请先提交 skills/discovery/{slug}-discovery/"
         )
     return {rel: (root / rel).read_text(encoding="utf-8") for rel in required}

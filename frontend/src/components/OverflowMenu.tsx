@@ -162,11 +162,6 @@ export default function OverflowMenu({
               }`}
             >
               <span>{item.label}</span>
-              {item.hint ? (
-                <span className="mt-0.5 text-[10px] font-normal text-[var(--ink-muted)]">
-                  {item.hint}
-                </span>
-              ) : null}
             </button>
           ))}
         </div>,

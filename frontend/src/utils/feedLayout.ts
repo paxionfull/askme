@@ -71,11 +71,13 @@ export function sectionsToLayout(
       const preserved = (previousById.get(section.id)?.feed_ids ?? []).filter(
         (feedId) => !visible.has(feedId) && !currentSet.has(feedId),
       );
+      const prev = previousById.get(section.id);
       return {
         id: section.id,
         name: section.name,
         feed_ids: [...currentIds, ...preserved],
-        digest_skill_id: previousById.get(section.id)?.digest_skill_id ?? null,
+        digest_skill_id: prev?.digest_skill_id ?? null,
+        auto_refresh: prev?.auto_refresh ?? true,
       };
     });
   return {

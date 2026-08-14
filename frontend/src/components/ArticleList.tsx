@@ -5,7 +5,6 @@ import {
   type Article,
   type StoredArticleBody,
 } from "../api";
-import OverflowMenu from "./OverflowMenu";
 import { formatFeedSyncTime, formatRelativePublished } from "../utils/formatSyncTime";
 import { getFeedLastReadArticleId, markFeedArticleRead } from "../utils/lastRead";
 
@@ -69,15 +68,9 @@ function bodyHasContent(body?: StoredArticleBody | null): boolean {
 
 function resolveTakeoverHint(
   status: string,
-  feedId: string | null,
+  _feedId: string | null,
 ): { title: string; actionLabel?: string } | null {
   if (status === "auth_required") {
-    if ((feedId || "").includes("zhihu")) {
-      return {
-        title: "该站点需要登录 Cookie，请到设置页「数据源授权」配置或更新后重试。",
-        actionLabel: "去设置页配置",
-      };
-    }
     return {
       title: "该站点需要登录或订阅权限，可到设置页添加 Cookie 授权，或先打开原文登录后再重试。",
       actionLabel: "去设置页",
@@ -287,18 +280,16 @@ export default function ArticleList({
           </p>
         </div>
         {feedName ? (
-          <OverflowMenu
-            label="源操作"
+          <button
+            type="button"
+            onClick={onRefresh}
             disabled={refreshing}
-            items={[
-              {
-                label: refreshing ? "更新中…" : "更新源信息",
-                hint: "刷新该源文章列表并拉取正文",
-                disabled: refreshing,
-                onClick: onRefresh,
-              },
-            ]}
-          />
+            title="刷新"
+            aria-label="刷新当前源"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-base text-[var(--ink-muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
+          >
+            {refreshing ? "…" : "↻"}
+          </button>
         ) : null}
       </div>
 

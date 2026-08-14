@@ -12,9 +12,6 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-echo ">>> 停止 Docker api（释放 8001 端口）..."
-docker compose stop api 2>/dev/null || true
-
 cd "$ROOT/backend"
 if [[ ! -d .venv ]]; then
   echo ">>> 创建 Python 虚拟环境..."

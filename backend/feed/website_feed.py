@@ -24,19 +24,6 @@ class WebsiteFeed:
         self.store = store
         self.feed_id = adapter.FEED_ID
 
-    def _force_page_delay(self) -> bool:
-        """后台 Cookie API 源（如微信 list_ex）无论单页多快都要页间限速。"""
-        feed_id = str(self.feed_id or "")
-        if feed_id.startswith("website:weixin:"):
-            return True
-        meta = getattr(self.adapter, "FEED_META", None) or {}
-        if str(meta.get("platform") or "").strip().lower() == "weixin":
-            return True
-        account = getattr(self.adapter, "account", None)
-        if isinstance(account, dict) and str(account.get("platform") or "").strip().lower() == "weixin":
-            return True
-        return False
-
     def normalize_body(self, raw_html: str, *, article_id: str = "") -> str:
         normalize = getattr(self.adapter, "normalize_article_body", None)
         if callable(normalize):
@@ -49,15 +36,10 @@ class WebsiteFeed:
         # 默认读 REFRESH_DEFAULTS.per，否则 50。勿对「用 len>=per 判断翻页」的固定页长源盲目加大。
         # 仍保留一个很高的硬上限，避免适配器分页逻辑异常导致死循环。
         per = int(overrides.get("per", defaults.get("per", 50)))
-        # max_pages：显式传入优先；微信等后台 API 源可读 REFRESH_DEFAULTS，限制首刷/日常翻页深度。
-        # 其它源保持 0=不限制（由时间 cutoff / has_next 停），避免历史 skill 里写的 max_pages 误伤。
+        # max_pages：显式传入优先；其它源保持 0=不限制（由时间 cutoff / has_next 停），
+        # 避免历史 skill 里写的 REFRESH_DEFAULTS.max_pages 误伤。
         if "max_pages" in overrides:
             max_pages = int(overrides["max_pages"])
-        elif self._force_page_delay() and defaults.get("max_pages") is not None:
-            try:
-                max_pages = int(defaults.get("max_pages") or 0)
-            except (TypeError, ValueError):
-                max_pages = 0
         else:
             max_pages = 0
         hard_max_pages = int(overrides.get("hard_max_pages", 500))
@@ -132,8 +114,8 @@ class WebsiteFeed:
             if not self.adapter.has_next_page(payload):
                 break
             # 内存切片分页（sitemap 缓存）通常极快，可跳过页间 sleep；
-            # 真网络分页、近 N 天多页、或微信等后台 API：一律限速，降低频控。
-            if self._force_page_delay() or fetch_elapsed >= 0.15 or days > 1:
+            # 真网络分页、近 N 天多页：一律限速，降低频控。
+            if fetch_elapsed >= 0.15 or days > 1:
                 await asyncio.sleep(page_delay_seconds())
             page += 1
 

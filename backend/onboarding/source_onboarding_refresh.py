@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -14,6 +15,77 @@ from onboarding.source_skill_repair import (
     build_refresh_failure_feedback,
     iter_auto_repair_agent,
 )
+
+logger = logging.getLogger(__name__)
+
+# 首拉时间窗：默认「今天」对更新频率不均的源过窄
+ONBOARD_REFRESH_DAYS = 3
+
+
+async def refresh_onboarded_feed(feed_client, feed_id: str, *, days: int = ONBOARD_REFRESH_DAYS) -> dict[str, Any]:
+    """接入成功后的自动更新：刷新文章列表，并拉取正文（与源页手动更新对齐）。"""
+    fid = str(feed_id or "").strip()
+    if not fid:
+        raise FeedError("缺少 feed_id", status_code=400)
+
+    feed_client.ensure_feed_visible(fid)
+    result = await feed_client.refresh_feed(fid, days=days)
+    if not isinstance(result, dict):
+        result = {"message": str(result or "列表已更新"), "ok": True}
+
+    try:
+        from feed.feed_scheduler import feed_scheduler
+
+        bodies_status = await feed_scheduler._pull_bodies_for_feeds([fid], days=days)
+    except Exception as bodies_exc:
+        logger.exception("接入后拉取正文异常: feed_id=%s", fid)
+        return {
+            **result,
+            "message": f"{result.get('message') or '列表已更新'}；正文拉取失败：{bodies_exc}",
+            "bodies_ok": False,
+            "bodies_error": str(bodies_exc),
+        }
+
+    status = str(bodies_status.get("status") or "")
+    if status == "error":
+        err = (
+            bodies_status.get("error")
+            or bodies_status.get("message")
+            or "拉取正文失败"
+        )
+        return {
+            **result,
+            "message": f"{result.get('message') or '列表已更新'}；正文拉取失败：{err}",
+            "bodies_ok": False,
+            "bodies_error": str(err),
+        }
+
+    if status == "done":
+        body_result = bodies_status.get("result") or {}
+        with_body = (
+            body_result.get("article_count")
+            if isinstance(body_result, dict)
+            else None
+        )
+        suffix = (
+            f"；正文已拉取 {with_body} 篇"
+            if with_body is not None
+            else "；正文已拉取"
+        )
+        return {
+            **result,
+            "message": f"{result.get('message') or '列表已更新'}{suffix}",
+            "bodies_ok": True,
+            "bodies_article_count": with_body,
+        }
+
+    # 未启动 / 跳过等：列表成功仍算接入成功
+    skip_msg = bodies_status.get("message") or status or "已跳过"
+    return {
+        **result,
+        "message": f"{result.get('message') or '列表已更新'}；正文：{skip_msg}",
+        "bodies_ok": None,
+    }
 
 
 async def refresh_with_auto_repair(

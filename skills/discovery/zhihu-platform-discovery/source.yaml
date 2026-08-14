@@ -1,0 +1,17 @@
+id: zhihu-platform
+name: 知乎
+homepage: https://www.zhihu.com
+platform: zhihu
+platform_skill: true
+
+discovery:
+  type: zhihu_api
+  requires_cookie: true
+  auth_slot: zhihu
+  login_url: https://www.zhihu.com/signin
+  required_token: d_c0=,z_c0=
+  cookie_hint: 须真实登录后的完整 Cookie（至少含 d_c0 与 z_c0；仅有 d_c0/__zse_ck 为访客态，文章 API 会 401/602）
+
+validation:
+  expected_min_items: 1
+  min_body_chars: 40

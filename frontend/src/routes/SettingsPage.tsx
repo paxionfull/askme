@@ -12,10 +12,12 @@ import {
   type CredentialItem,
 } from "../api";
 import AuthHandoffPanel from "../components/AuthHandoffPanel";
+import ConfirmModal from "../components/ConfirmModal";
 import FeedSchedulerSection from "../components/FeedSchedulerSection";
 import SkillsPanel from "./SkillsPage";
 import { isRefreshAuthError } from "../contexts/FeedRefreshContext";
 import {
+  DEFAULT_LLM_MAX_TOKENS,
   filterEmbeddingModels,
   isLlmConfigured,
   normalizeLlmMaxTokens,
@@ -24,7 +26,6 @@ import {
   formatDaysLabel,
 } from "../hooks/useSettings";
 import { THINKING_STYLES } from "../constants/llmProviders";
-import { WEIXIN_SOURCE_ENABLED } from "../utils/featureFlags";
 
 interface LlmDraft {
   llmModel: string;
@@ -37,14 +38,13 @@ interface LlmDraft {
   embeddingApiBase: string;
 }
 
-type SettingsTab = "sync" | "auth" | "model" | "skill" | "more";
+type SettingsTab = "model" | "skill" | "sync" | "auth";
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "sync", label: "同步与定时" },
-  { id: "auth", label: "授权" },
-  { id: "model", label: "模型" },
-  { id: "skill", label: "Skill" },
-  { id: "more", label: "其他" },
+  { id: "model", label: "API Key" },
+  { id: "skill", label: "Skills" },
+  { id: "sync", label: "定时" },
+  { id: "auth", label: "Cookie" },
 ];
 
 function parseSettingsTab(value: string | null): SettingsTab | null {
@@ -52,8 +52,75 @@ function parseSettingsTab(value: string | null): SettingsTab | null {
   return SETTINGS_TABS.some((tab) => tab.id === value) ? (value as SettingsTab) : null;
 }
 
+const PENDING_AUTH_SLOT_KEY = "askme.settings.pendingAuthSlot";
+const AUTH_AUTOSTART_DONE_KEY = "askme.settings.authAutoStartDone";
+
+function readPendingAuthSlot(): string | null {
+  try {
+    const raw = (sessionStorage.getItem(PENDING_AUTH_SLOT_KEY) || "").trim().toLowerCase();
+    return raw || null;
+  } catch {
+    return null;
+  }
+}
+
+function writePendingAuthSlot(slot: string | null) {
+  try {
+    if (!slot) {
+      sessionStorage.removeItem(PENDING_AUTH_SLOT_KEY);
+      return;
+    }
+    sessionStorage.setItem(PENDING_AUTH_SLOT_KEY, slot);
+  } catch {
+    // ignore
+  }
+}
+
+function readAuthAutoStartDone(): string | null {
+  try {
+    const raw = (sessionStorage.getItem(AUTH_AUTOSTART_DONE_KEY) || "").trim().toLowerCase();
+    return raw || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAuthAutoStartDone(slot: string | null) {
+  try {
+    if (!slot) {
+      sessionStorage.removeItem(AUTH_AUTOSTART_DONE_KEY);
+      return;
+    }
+    sessionStorage.setItem(AUTH_AUTOSTART_DONE_KEY, slot);
+  } catch {
+    // ignore
+  }
+}
+
+function buildReauthItemForSlotFrom(
+  authSlots: AuthSlot[],
+  credentials: CredentialItem[],
+  slotId: string,
+): AuthPrecheckItem | null {
+  const id = slotId.trim().toLowerCase();
+  if (!id) return null;
+  const slotMeta = authSlots.find((slot) => slot.id === id);
+  const existing = credentials.find((item) => item.slot === id);
+  // slot 元数据未加载完时仍给出可展示的占位，避免引导闪没
+  return {
+    entry_url: slotMeta?.login_url || "",
+    requires_auth: true,
+    slot: id,
+    slot_label: existing?.slot_label || existing?.label || slotMeta?.label || id,
+    login_url: slotMeta?.login_url || "",
+    cookie_hint: slotMeta?.cookie_hint,
+    configured: false,
+    can_proceed: false,
+  };
+}
+
 export default function SettingsPage() {
-  const { settings, setSettings, saveLlmToServer } = useSettings();
+  const { settings, setSettings, saveLlmToServer, clearLlmFromServer } = useSettings();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<SettingsTab>(
     () => parseSettingsTab(searchParams.get("tab")) ?? "model",
@@ -80,6 +147,10 @@ export default function SettingsPage() {
   const [embedError, setEmbedError] = useState("");
   const [embedSaved, setEmbedSaved] = useState(false);
   const [editingEmbed, setEditingEmbed] = useState(() => !settings.embeddingModel.trim());
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resettingLlm, setResettingLlm] = useState(false);
+  const [resetEmbedConfirmOpen, setResetEmbedConfirmOpen] = useState(false);
+  const [resettingEmbed, setResettingEmbed] = useState(false);
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
   const [authSlots, setAuthSlots] = useState<AuthSlot[]>([]);
   const [credVerifyingId, setCredVerifyingId] = useState<string | null>(null);
@@ -88,30 +159,62 @@ export default function SettingsPage() {
   const [reauthItem, setReauthItem] = useState<AuthPrecheckItem | null>(null);
   const [reauthCookie, setReauthCookie] = useState("");
   const [reauthKey, setReauthKey] = useState(0);
+  /** 进行中的授权 slot：取消/保存前一直保留（含 sessionStorage），不随 tab 卸载 */
+  const [pendingAuthSlot, setPendingAuthSlotState] = useState<string | null>(() => {
+    const fromUrl = (searchParams.get("slot") || "").trim().toLowerCase();
+    return fromUrl || readPendingAuthSlot();
+  });
+  /** 该 slot 是否已自动打开过登录窗（防止切 tab 回来再次弹窗） */
+  const [autoStartDoneForSlot, setAutoStartDoneForSlot] = useState<string | null>(() =>
+    readAuthAutoStartDone(),
+  );
   const [cursorApiKey, setCursorApiKey] = useState("");
   const [cursorConfigured, setCursorConfigured] = useState(false);
   const [cursorMasked, setCursorMasked] = useState("");
   const [cursorSaving, setCursorSaving] = useState(false);
   const [cursorMessage, setCursorMessage] = useState("");
   const [cursorError, setCursorError] = useState("");
+  const [editingCursor, setEditingCursor] = useState(false);
 
-  const visibleCredentials = useMemo(
-    () =>
-      WEIXIN_SOURCE_ENABLED
-        ? credentials
-        : credentials.filter((item) => item.slot !== "weixin"),
-    [credentials],
-  );
+  const setPendingAuthSlot = (slot: string | null) => {
+    const next = (slot || "").trim().toLowerCase() || null;
+    setPendingAuthSlotState(next);
+    writePendingAuthSlot(next);
+    if (!next) {
+      setAutoStartDoneForSlot(null);
+      writeAuthAutoStartDone(null);
+    }
+  };
+
+  const visibleCredentials = credentials;
+
+  const activeHandoffItem = useMemo(() => {
+    if (reauthItem) return reauthItem;
+    if (!pendingAuthSlot) return null;
+    return buildReauthItemForSlotFrom(authSlots, credentials, pendingAuthSlot);
+  }, [reauthItem, pendingAuthSlot, authSlots, credentials]);
 
   useEffect(() => {
     const fromUrl = parseSettingsTab(searchParams.get("tab"));
     if (fromUrl) setActiveTab(fromUrl);
+    const slot = (searchParams.get("slot") || "").trim().toLowerCase();
+    if (slot) setPendingAuthSlot(slot);
   }, [searchParams]);
 
   function switchTab(tab: SettingsTab) {
     setActiveTab(tab);
     const next = new URLSearchParams(searchParams);
     next.set("tab", tab);
+    if (pendingAuthSlot) {
+      next.set("slot", pendingAuthSlot);
+    }
+    setSearchParams(next, { replace: true });
+  }
+
+  function clearAuthSlotParam() {
+    if (!searchParams.get("slot")) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("slot");
     setSearchParams(next, { replace: true });
   }
 
@@ -274,6 +377,65 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleResetLlm() {
+    setResettingLlm(true);
+    setLlmError("");
+    setEmbedError("");
+    try {
+      await clearLlmFromServer();
+      setDraft({
+        llmModel: "",
+        embeddingModel: "",
+        llmApiKey: "",
+        llmApiBase: "",
+        llmMaxTokens: DEFAULT_LLM_MAX_TOKENS,
+        thinkingStyle: "",
+        embeddingApiKey: "",
+        embeddingApiBase: "",
+      });
+      setAvailableModels([]);
+      setEmbedModels([]);
+      setLlmSaved(false);
+      setEmbedSaved(false);
+      setEditing(true);
+      setEditingEmbed(true);
+      setResetConfirmOpen(false);
+    } catch (err) {
+      setLlmError(err instanceof Error ? err.message : "重置失败");
+      setResetConfirmOpen(false);
+    } finally {
+      setResettingLlm(false);
+    }
+  }
+
+  async function handleResetEmbed() {
+    setResettingEmbed(true);
+    setEmbedError("");
+    try {
+      await saveLlmToServer({
+        ...settings,
+        embeddingModel: "",
+        embeddingApiKey: "",
+        embeddingApiBase: "",
+      });
+      setDraft((current) => ({
+        ...current,
+        embeddingModel: "",
+        embeddingApiKey: "",
+        embeddingApiBase: "",
+      }));
+      setEmbedModels([]);
+      setEmbedSaved(false);
+      setEditingEmbed(true);
+      setResetEmbedConfirmOpen(false);
+    } catch (err) {
+      setEmbedError(err instanceof Error ? err.message : "重置失败");
+      setResetEmbedConfirmOpen(false);
+    } finally {
+      setResettingEmbed(false);
+    }
+  }
+
   useEffect(() => {
     void (async () => {
       try {
@@ -297,36 +459,69 @@ export default function SettingsPage() {
     setAuthSlots(data.slots);
   }
 
-  function buildReauthItem(cred: CredentialItem): AuthPrecheckItem {
-    const slotMeta = authSlots.find((slot) => slot.id === cred.slot);
-    return {
-      entry_url: slotMeta?.login_url || "",
-      requires_auth: true,
-      slot: cred.slot,
-      slot_label: cred.slot_label || slotMeta?.label || cred.label || cred.slot,
-      login_url: slotMeta?.login_url || "",
-      cookie_hint: slotMeta?.cookie_hint,
-      configured: false,
-      can_proceed: false,
-    };
+  function buildReauthItemForSlot(slotId: string): AuthPrecheckItem | null {
+    return buildReauthItemForSlotFrom(authSlots, credentials, slotId);
   }
 
-  function openReauthForCredential(cred: CredentialItem, reason?: string) {
-    setReauthItem(buildReauthItem(cred));
-    setReauthCookie("");
-    setReauthKey((value) => value + 1);
+  function openReauthForSlot(slotId: string, reason?: string) {
+    const item = buildReauthItemForSlot(slotId);
+    if (!item?.slot) {
+      setCredError(`未找到授权项「${slotId}」，请确认该站点需要登录`);
+      return false;
+    }
+    const slot = item.slot;
+    const sameSlot = reauthItem?.slot === slot || pendingAuthSlot === slot;
+    setPendingAuthSlot(slot);
+    setReauthItem(item);
+    if (!sameSlot) {
+      setReauthCookie("");
+      setReauthKey((value) => value + 1);
+      setAutoStartDoneForSlot(null);
+      writeAuthAutoStartDone(null);
+    }
     if (reason) {
       setCredError(reason);
     } else {
       setCredError("");
     }
     setCredMessage("");
+    const next = new URLSearchParams(searchParams);
+    next.set("slot", slot);
+    next.set("tab", "auth");
+    setActiveTab("auth");
+    setSearchParams(next, { replace: true });
+    return true;
+  }
+
+  function openReauthForCredential(cred: CredentialItem, reason?: string) {
+    openReauthForSlot(cred.slot, reason);
   }
 
   function closeReauthPanel() {
     setReauthItem(null);
     setReauthCookie("");
+    setPendingAuthSlot(null);
+    setAutoStartDoneForSlot(null);
+    writeAuthAutoStartDone(null);
+    clearAuthSlotParam();
   }
+
+  function markHandoffAutoStarted() {
+    if (!pendingAuthSlot) return;
+    setAutoStartDoneForSlot(pendingAuthSlot);
+    writeAuthAutoStartDone(pendingAuthSlot);
+  }
+
+  // 回到「Cookie」Tab 时，按 pendingAuthSlot 恢复引导（切走时面板会卸载，状态仍保留）
+  useEffect(() => {
+    if (activeTab !== "auth") return;
+    if (!pendingAuthSlot) return;
+    if (reauthItem?.slot === pendingAuthSlot) return;
+    const item = buildReauthItemForSlotFrom(authSlots, credentials, pendingAuthSlot);
+    if (!item) return;
+    setReauthItem(item);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, pendingAuthSlot, authSlots, credentials, reauthItem?.slot]);
 
   async function handleVerifyCredential(credId: string) {
     setCredVerifyingId(credId);
@@ -337,6 +532,8 @@ export default function SettingsPage() {
       const result = await verifyCredential(credId);
       setCredMessage(result.message || "校验成功");
       setReauthItem(null);
+      setPendingAuthSlot(null);
+      clearAuthSlotParam();
     } catch (err) {
       const message = err instanceof Error ? err.message : "校验失败";
       setCredError(message);
@@ -349,10 +546,17 @@ export default function SettingsPage() {
   }
 
   async function handleReauthSaved() {
+    const slotLabel = reauthItem?.slot_label || reauthItem?.slot || "";
     setReauthCookie("");
     setReauthItem(null);
+    setPendingAuthSlot(null);
+    setAutoStartDoneForSlot(null);
+    writeAuthAutoStartDone(null);
+    clearAuthSlotParam();
     await reloadCredentials();
-    setCredMessage("已重新授权并保存凭证");
+    setCredMessage(
+      slotLabel ? `已授权并保存「${slotLabel}」凭证` : "已授权并保存凭证",
+    );
     setCredError("");
   }
 
@@ -382,6 +586,7 @@ export default function SettingsPage() {
       setCursorMasked(result.masked);
       setCursorApiKey("");
       setCursorMessage("已保存 Cursor API Key");
+      setEditingCursor(false);
     } catch (err) {
       setCursorError(err instanceof Error ? err.message : "保存失败");
     } finally {
@@ -393,12 +598,9 @@ export default function SettingsPage() {
     <div className="h-full overflow-y-auto bg-[var(--paper)]">
       <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-6 py-4">
         <h1 className="text-lg font-semibold">设置</h1>
-        <p className="mt-1 text-[clamp(0.92rem,0.15vw+0.86rem,1rem)] text-[var(--ink-muted)]">
-          Prompt 与 LLM 配置保存在浏览器本地
-        </p>
       </header>
 
-      <div className="app-content-medium space-y-6 p-6">
+      <div className="app-content-narrow space-y-6 p-6">
         <nav
           aria-label="设置分区"
           className="flex flex-wrap gap-1 rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-1"
@@ -429,9 +631,6 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-semibold">默认时间范围</h2>
               </div>
-              <p className="mt-1 text-sm text-[var(--ink-muted)]">
-                用于库与对话页的默认查询窗口，可随时在页面内临时切换。
-              </p>
               <div className="mt-3 flex gap-4 text-sm">
                 {([1, 3] as DefaultDays[]).map((value) => (
                   <label key={value} className="flex items-center gap-2">
@@ -452,11 +651,7 @@ export default function SettingsPage() {
         {activeTab === "auth" ? (
           <>
         <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
-          <h2 className="text-base font-semibold">数据源授权（Cookie）</h2>
-          <p className="mt-1 text-sm text-[var(--ink-muted)]">
-            已保存的平台登录态如下。可用「测试」检查是否仍有效；失效时点「重新授权」打开登录窗口。
-            新源接入时也会引导授权。
-          </p>
+          <h2 className="text-base font-semibold">数据源 Cookie</h2>
 
           {visibleCredentials.length > 0 ? (
             <ul className="mt-3 space-y-2">
@@ -488,7 +683,7 @@ export default function SettingsPage() {
                       onClick={() => openReauthForCredential(item)}
                       className="text-xs text-[var(--accent)] underline"
                     >
-                      重新授权
+                      重新登录
                     </button>
                     <button
                       type="button"
@@ -503,21 +698,26 @@ export default function SettingsPage() {
             </ul>
           ) : (
             <p className="mt-3 text-xs text-[var(--accent)]">
-              尚未配置任何 Cookie 凭证。添加需登录的数据源时会引导授权。
+              尚未配置任何 Cookie 凭证。
             </p>
           )}
 
-          {reauthItem ? (
+          {activeHandoffItem ? (
             <div className="mt-4">
               <AuthHandoffPanel
-                key={`${reauthItem.slot}-${reauthKey}`}
-                item={reauthItem}
+                key={`${activeHandoffItem.slot}-${reauthKey}`}
+                item={activeHandoffItem}
                 cookieDraft={reauthCookie}
                 onCookieChange={setReauthCookie}
                 onSaved={() => void handleReauthSaved()}
                 onCancel={closeReauthPanel}
-                autoStart
-                title={`请重新授权：${reauthItem.slot_label || reauthItem.slot}`}
+                autoStart={autoStartDoneForSlot !== activeHandoffItem.slot}
+                onAutoStarted={markHandoffAutoStarted}
+                title={
+                  credentials.some((c) => c.slot === activeHandoffItem.slot)
+                    ? `请重新登录：${activeHandoffItem.slot_label || activeHandoffItem.slot}`
+                    : `请完成登录：${activeHandoffItem.slot_label || activeHandoffItem.slot}`
+                }
               />
             </div>
           ) : null}
@@ -525,53 +725,135 @@ export default function SettingsPage() {
           {credError && <p className="mt-3 text-sm text-red-800">{credError}</p>}
           {credMessage && <p className="mt-3 text-sm text-[var(--success)]">{credMessage}</p>}
         </section>
-
-        <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
-          <h2 className="text-base font-semibold">Cursor API Key（数据源接入）</h2>
-          <p className="mt-1 text-sm text-[var(--ink-muted)]">
-            接入未知站点时，Askme 会通过 Cursor Agent 自动编写 discovery skill。请在{" "}
-            <a
-              href="https://cursor.com/settings"
-              target="_blank"
-              rel="noreferrer"
-              className="text-[var(--ink)] underline"
-            >
-              Cursor 设置
-            </a>{" "}
-            创建 API Key 并粘贴保存。已知平台（知乎、金十等）无需配置。
-          </p>
-          <p className={`mt-2 text-xs ${cursorConfigured ? "text-[var(--success)]" : "text-[var(--accent)]"}`}>
-            {cursorConfigured ? `已配置：${cursorMasked}` : "未配置"}
-          </p>
-
-          <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">Cursor API Key</label>
-          <input
-            type="password"
-            value={cursorApiKey}
-            onChange={(e) => setCursorApiKey(e.target.value)}
-            placeholder="cur_..."
-            className="mt-1 w-full rounded-lg border border-[var(--rule)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
-          />
-
-          <div className="mt-3">
-            <button
-              type="button"
-              onClick={() => void handleSaveCursorApiKey()}
-              disabled={cursorSaving}
-              className="rounded-md bg-[var(--ink)] px-3 py-1.5 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)] disabled:opacity-50"
-            >
-              {cursorSaving ? "保存中..." : "保存 API Key"}
-            </button>
-          </div>
-
-          {cursorError && <p className="mt-2 text-sm text-red-800">{cursorError}</p>}
-          {cursorMessage && <p className="mt-2 text-sm text-[var(--success)]">{cursorMessage}</p>}
-        </section>
           </>
         ) : null}
 
         {activeTab === "model" ? (
         <>
+        {/* ── Cursor API Key ── */}
+        <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold">Cursor API Key</h2>
+              {cursorConfigured && !editingCursor ? (
+                <p className="mt-1 text-sm text-[var(--ink-muted)]">
+                  <span className="font-medium text-[var(--ink)]">{cursorMasked}</span> · 已配置
+                </p>
+              ) : null}
+              <p className="mt-1 text-sm text-[var(--ink-muted)]">
+                接入未知网站、需自动编写抓取 Skill 时使用。已知网站无需配置。
+              </p>
+            </div>
+            <span
+              className={`shrink-0 text-xs font-medium ${
+                cursorConfigured ? "text-[var(--success)]" : "text-[var(--accent)]"
+              }`}
+            >
+              {cursorConfigured ? "已配置" : "未配置"}
+            </span>
+          </div>
+
+          {!cursorConfigured && !editingCursor ? (
+            <>
+              <p className="mt-3 text-sm text-[var(--ink-muted)]">
+                尚未配置 Cursor API Key，接入未知网站时需要。
+              </p>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingCursor(true);
+                    setCursorError("");
+                    setCursorMessage("");
+                  }}
+                  className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)]"
+                >
+                  去配置
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          {cursorConfigured || editingCursor ? (
+            <>
+              <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">API Key</label>
+              <input
+                type="password"
+                readOnly={!editingCursor && cursorConfigured}
+                value={cursorApiKey}
+                onChange={(e) => {
+                  setCursorApiKey(e.target.value);
+                  setCursorMessage("");
+                }}
+                placeholder={cursorConfigured && !editingCursor ? cursorMasked : "cur_..."}
+                autoComplete="off"
+                className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none ${
+                  !editingCursor && cursorConfigured
+                    ? "border-[var(--rule)] bg-[var(--paper)] text-[var(--ink-muted)] cursor-default"
+                    : "border-[var(--rule)] bg-white focus:border-[var(--accent)]"
+                }`}
+              />
+              {!editingCursor && cursorConfigured ? (
+                <p className="mt-2 text-xs text-[var(--ink-muted)]">
+                  请在{" "}
+                  <a
+                    href="https://cursor.com/settings"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[var(--ink)] underline"
+                  >
+                    Cursor 设置
+                  </a>{" "}
+                  创建 API Key。
+                </p>
+              ) : null}
+
+              {cursorError && <p className="mt-3 text-sm text-red-800">{cursorError}</p>}
+              {cursorMessage && <p className="mt-3 text-sm text-[var(--success)]">{cursorMessage}</p>}
+
+              <div className="mt-5 flex justify-end gap-2">
+                {editingCursor ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={cursorSaving}
+                      onClick={() => {
+                        setEditingCursor(false);
+                        setCursorApiKey("");
+                        setCursorError("");
+                      }}
+                      className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)] disabled:opacity-50"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      disabled={cursorSaving}
+                      onClick={() => void handleSaveCursorApiKey()}
+                      className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)] disabled:opacity-50"
+                    >
+                      {cursorSaving ? "保存中…" : "保存"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingCursor(true);
+                      setCursorApiKey("");
+                      setCursorError("");
+                      setCursorMessage("");
+                    }}
+                    className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]"
+                  >
+                    修改
+                  </button>
+                )}
+              </div>
+            </>
+          ) : null}
+        </section>
+
         {/* ── 对话模型卡片 ── */}
         <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
           <div className="flex items-center justify-between">
@@ -580,9 +862,6 @@ export default function SettingsPage() {
               {configured ? "已配置" : "未配置"}
             </span>
           </div>
-          <p className="mt-1 text-sm text-[var(--ink-muted)]">
-            用于对话与概览生成。配置保存在本机服务端，Cursor 内置浏览器与 Chrome/Safari 等共用。
-          </p>
 
           {(() => {
             const ro = !editing;
@@ -598,7 +877,6 @@ export default function SettingsPage() {
                 <input type="url" readOnly={ro} value={draft.llmApiBase}
                   onChange={(e) => { setDraft((c) => ({ ...c, llmApiBase: e.target.value })); setLlmSaved(false); invalidateModels(); }}
                   placeholder="https://api.openai.com/v1" className={fieldCls} />
-                {!ro && <p className="mt-1 text-xs text-[var(--ink-muted)]">留空则使用 OpenAI 默认地址，模型列表从 /models 获取</p>}
 
                 <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">API Key</label>
                 <input type="password" readOnly={ro} value={draft.llmApiKey}
@@ -632,13 +910,11 @@ export default function SettingsPage() {
                   className={selectCls}>
                   {THINKING_STYLES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
                 </select>
-                {!ro && <p className="mt-1 text-xs text-[var(--ink-muted)]">控制开启深度思考时向模型传递的参数格式，选「自动推断」时根据模型名判断</p>}
 
                 <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">最大输出 Tokens</label>
                 <input type="text" inputMode="numeric" readOnly={ro} value={draft.llmMaxTokens}
                   onChange={(e) => { setDraft((c) => ({ ...c, llmMaxTokens: e.target.value === "" ? 32768 : Number(e.target.value) })); setLlmSaved(false); }}
                   placeholder="32768" className={fieldCls} />
-                {!ro && <p className="mt-1 text-xs text-[var(--ink-muted)]">控制概览与对话的单次最大生成长度，默认 32768</p>}
               </>
             );
           })()}
@@ -657,23 +933,35 @@ export default function SettingsPage() {
                   className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)]">保存</button>
               </>
             ) : (
-              <button type="button" onClick={() => { setEditing(true); setLlmSaved(false); setLlmError(""); }}
-                className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]">修改</button>
+              <>
+                <button
+                  type="button"
+                  disabled={resettingLlm}
+                  onClick={() => setResetConfirmOpen(true)}
+                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm text-red-800 hover:bg-[var(--error-soft)] disabled:opacity-50"
+                >
+                  重置
+                </button>
+                <button type="button" onClick={() => { setEditing(true); setLlmSaved(false); setLlmError(""); }}
+                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]">修改</button>
+              </>
             )}
           </div>
         </section>
 
-        {/* ── Embedding 模型卡片 ── */}
+        {/* ── Embedding（可选，常驻展开） ── */}
         <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold">Embedding 模型</h2>
-            <span className={`text-xs font-medium ${settings.embeddingModel ? "text-[var(--success)]" : "text-[var(--ink-muted)]"}`}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold">Embedding 模型（可选）</h2>
+              <p className="mt-1 text-sm text-[var(--ink-muted)]">
+                用于检索提问，生成简报可不配。留空 Key / Base URL 则复用对话模型配置。
+              </p>
+            </div>
+            <span className={`shrink-0 text-xs font-medium ${settings.embeddingModel ? "text-[var(--success)]" : "text-[var(--ink-muted)]"}`}>
               {settings.embeddingModel || "未配置"}
             </span>
           </div>
-          <p className="mt-1 text-sm text-[var(--ink-muted)]">
-            用于 RAG 向量检索。可使用与对话模型不同的厂商；留空 Key / Base URL 则复用对话模型的配置。
-          </p>
 
           {(() => {
             const ro = !editingEmbed;
@@ -685,16 +973,15 @@ export default function SettingsPage() {
             const selectCls = fieldCls;
             return (
               <>
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">Base URL（可选）</label>
+                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">Base URL</label>
                 <input type="url" readOnly={ro} value={draft.embeddingApiBase}
                   onChange={(e) => { setDraft((c) => ({ ...c, embeddingApiBase: e.target.value })); setEmbedSaved(false); invalidateEmbedModels(); }}
                   placeholder="留空则使用对话模型的 Base URL" className={fieldCls} />
 
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">API Key（可选）</label>
+                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">API Key</label>
                 <input type="password" readOnly={ro} value={draft.embeddingApiKey}
                   onChange={(e) => { setDraft((c) => ({ ...c, embeddingApiKey: e.target.value })); setEmbedSaved(false); invalidateEmbedModels(); }}
                   placeholder="留空则使用对话模型的 API Key" autoComplete="off" className={fieldCls} />
-                {!ro && <p className="mt-1 text-xs text-[var(--ink-muted)]">不同厂商时才需要单独填写</p>}
 
                 {!ro && (
                   <div className="mt-4 flex items-center gap-2">
@@ -717,7 +1004,6 @@ export default function SettingsPage() {
                   {embedModels.length > 0 && !draft.embeddingModel && <option value="">请选择 Embedding 模型</option>}
                   {embedModels.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
-                {!ro && <p className="mt-1 text-xs text-[var(--ink-muted)]">默认优先展示名称含 embed 的模型</p>}
               </>
             );
           })()}
@@ -736,28 +1022,55 @@ export default function SettingsPage() {
                   className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)]">保存</button>
               </>
             ) : (
-              <button type="button" onClick={() => { setEditingEmbed(true); setEmbedSaved(false); setEmbedError(""); }}
-                className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]">修改</button>
+              <>
+                <button
+                  type="button"
+                  disabled={resettingEmbed}
+                  onClick={() => setResetEmbedConfirmOpen(true)}
+                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm text-red-800 hover:bg-[var(--error-soft)] disabled:opacity-50"
+                >
+                  重置
+                </button>
+                <button type="button" onClick={() => { setEditingEmbed(true); setEmbedSaved(false); setEmbedError(""); }}
+                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]">修改</button>
+              </>
             )}
           </div>
         </section>
         </>) : null}
 
-        {activeTab === "skill" ? (
-          <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
-            <SkillsPanel embedded />
-          </section>
-        ) : null}
-
-        {activeTab === "more" ? (
-          <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
-            <h2 className="text-base font-semibold">其他</h2>
-            <p className="mt-1 text-sm text-[var(--ink-muted)]">
-              预留扩展项。当前常用配置已归入「同步与定时 / 授权 / 模型 / Skill」。
-            </p>
-          </section>
-        ) : null}
+        {activeTab === "skill" ? <SkillsPanel embedded /> : null}
       </div>
+
+      <ConfirmModal
+        open={resetConfirmOpen}
+        title="重置模型配置"
+        message="将清空对话模型与 Embedding 模型的全部已保存配置（含 API Key、Base URL 等），此操作不可撤销。"
+        confirmLabel="确认重置"
+        danger
+        loading={resettingLlm}
+        onCancel={() => {
+          if (!resettingLlm) setResetConfirmOpen(false);
+        }}
+        onConfirm={() => {
+          void handleResetLlm();
+        }}
+      />
+
+      <ConfirmModal
+        open={resetEmbedConfirmOpen}
+        title="重置 Embedding 配置"
+        message="将清空 Embedding 模型、API Key、Base URL 等已保存配置，不影响对话模型。此操作不可撤销。"
+        confirmLabel="确认重置"
+        danger
+        loading={resettingEmbed}
+        onCancel={() => {
+          if (!resettingEmbed) setResetEmbedConfirmOpen(false);
+        }}
+        onConfirm={() => {
+          void handleResetEmbed();
+        }}
+      />
     </div>
   );
 }

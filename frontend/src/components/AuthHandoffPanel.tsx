@@ -16,6 +16,8 @@ interface AuthHandoffPanelProps {
   saving?: boolean;
   /** 挂载后自动打开系统登录窗口（用于授权失效后立刻重登） */
   autoStart?: boolean;
+  /** 自动打开登录窗后回调（父级可据此避免切 tab 回来再次打开） */
+  onAutoStarted?: () => void;
   /** 覆盖默认标题 */
   title?: string;
   /** 提供后显示「取消」：关闭登录会话并回调（如收起重新授权面板） */
@@ -29,6 +31,7 @@ export default function AuthHandoffPanel({
   onSaved,
   saving = false,
   autoStart = false,
+  onAutoStarted,
   title,
   onCancel,
 }: AuthHandoffPanelProps) {
@@ -36,20 +39,37 @@ export default function AuthHandoffPanel({
   const [session, setSession] = useState<LoginSessionStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
-  const [iframeBlocked, setIframeBlocked] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoStartedRef = useRef(false);
   const sessionRef = useRef<LoginSessionStatus | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const userCancelledRef = useRef(false);
+  const aliveRef = useRef(true);
+  const onSavedRef = useRef(onSaved);
+  const onAutoStartedRef = useRef(onAutoStarted);
 
   useEffect(() => {
-    sessionRef.current = session;
-  }, [session]);
+    onSavedRef.current = onSaved;
+  }, [onSaved]);
 
   useEffect(() => {
+    onAutoStartedRef.current = onAutoStarted;
+  }, [onAutoStarted]);
+
+  useEffect(() => {
+    aliveRef.current = true;
     return () => {
+      aliveRef.current = false;
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    sessionRef.current = session;
+    if (session?.session_id) {
+      sessionIdRef.current = session.session_id;
+    }
+  }, [session]);
 
   useEffect(() => {
     if (!session || session.done) {
@@ -62,9 +82,10 @@ export default function AuthHandoffPanel({
     pollRef.current = setInterval(() => {
       void fetchCredentialLoginSession(session.session_id)
         .then((next) => {
+          if (!aliveRef.current || userCancelledRef.current) return;
           setSession(next);
           if (next.status === "done") {
-            onSaved();
+            onSavedRef.current();
           }
         })
         .catch(() => {
@@ -77,10 +98,11 @@ export default function AuthHandoffPanel({
         pollRef.current = null;
       }
     };
-  }, [session, onSaved]);
+  }, [session]);
 
   async function handleOpenLoginWindow() {
     if (!slot) return;
+    userCancelledRef.current = false;
     setStarting(true);
     setError("");
     try {
@@ -90,36 +112,46 @@ export default function AuthHandoffPanel({
         label: item.slot_label || slot,
         entry_url: item.entry_url,
       });
+      sessionIdRef.current = started.session_id;
+      if (userCancelledRef.current) {
+        // 启动过程中点了取消：关掉刚弹出的扫码窗
+        void cancelCredentialLoginSession(started.session_id).catch(() => {});
+        return;
+      }
+      if (!aliveRef.current) return;
       setSession(started);
     } catch (err) {
+      if (!aliveRef.current || userCancelledRef.current) return;
       setError(
         err instanceof Error
           ? err.message
           : "无法打开登录窗口（可改用下方粘贴 Cookie）",
       );
     } finally {
-      setStarting(false);
+      if (aliveRef.current && !userCancelledRef.current) setStarting(false);
     }
   }
 
   useEffect(() => {
     if (!autoStart || autoStartedRef.current || !slot) return;
     autoStartedRef.current = true;
+    onAutoStartedRef.current?.();
     void handleOpenLoginWindow();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only auto-start once per mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only auto-start once when allowed
   }, [autoStart, slot]);
 
   async function handleCancelSession() {
-    const current = sessionRef.current;
-    if (!current || current.done) {
+    userCancelledRef.current = true;
+    const sessionId = sessionIdRef.current || sessionRef.current?.session_id;
+    if (!sessionId) {
       setSession(null);
       return;
     }
     try {
-      const stopped = await cancelCredentialLoginSession(current.session_id);
-      setSession(stopped);
+      const stopped = await cancelCredentialLoginSession(sessionId);
+      if (aliveRef.current) setSession(stopped);
     } catch {
-      setSession(null);
+      if (aliveRef.current) setSession(null);
     }
   }
 
@@ -157,8 +189,16 @@ export default function AuthHandoffPanel({
           </p>
           <p className="mt-1 text-xs text-[var(--ink-muted)]">
             {item.cookie_hint ||
-              "请在登录窗口完成登录；系统会自动读取 Cookie。若窗口无法打开，可改用粘贴。"}
+              "请点击下方按钮在弹出窗口中完成登录，系统会自动读取 Cookie；也可手动粘贴。"}
           </p>
+          {loginUrl ? (
+            <p className="mt-1 truncate text-xs text-[var(--ink-muted)]">
+              登录页：{" "}
+              <a href={loginUrl} target="_blank" rel="noreferrer" className="ui-link">
+                {loginUrl}
+              </a>
+            </p>
+          ) : null}
         </div>
         {onCancel ? (
           <button
@@ -169,36 +209,6 @@ export default function AuthHandoffPanel({
             取消
           </button>
         ) : null}
-      </div>
-
-      <div className="mt-3 overflow-hidden rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper-raised)]">
-        <div className="flex items-center justify-between border-b border-[var(--rule)] px-2 py-1.5 text-xs text-[var(--ink-muted)]">
-          <span className="truncate">{loginUrl}</span>
-          <a href={loginUrl} target="_blank" rel="noreferrer" className="ui-link shrink-0 text-xs">
-            新标签打开
-          </a>
-        </div>
-        {!iframeBlocked ? (
-          <iframe
-            title={`${item.slot_label || slot} 登录预览`}
-            src={loginUrl}
-            className="h-48 w-full bg-[var(--paper-raised)]"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            onError={() => setIframeBlocked(true)}
-            onLoad={(event) => {
-              // 多数站点禁止嵌入；空白/跨域时提示改用系统登录窗
-              try {
-                void event.currentTarget.contentWindow?.location.href;
-              } catch {
-                setIframeBlocked(true);
-              }
-            }}
-          />
-        ) : (
-          <div className="flex h-32 items-center justify-center px-4 text-center text-xs text-[var(--ink-muted)]">
-            该站点禁止页面内嵌登录。请点击「打开登录窗口」，在弹出的浏览器中登录，系统会自动读取 Cookie。
-          </div>
-        )}
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">

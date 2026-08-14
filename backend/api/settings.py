@@ -1,9 +1,6 @@
 """设置：凭证、Cookie、Cursor Key、LLM、调度。"""
 from __future__ import annotations
 
-import asyncio
-import sys
-
 from fastapi import APIRouter, HTTPException
 
 from api.deps import (
@@ -39,14 +36,15 @@ from auth.credential_store import (
 )
 from core.llm import (
     LLMError,
+    clear_stored_llm_config,
     get_llm_status,
+    has_stored_llm_settings,
     load_stored_llm_config,
     save_stored_llm_config,
 )
 from feed.feed_errors import FeedError
 from feed.feed_scheduler import feed_scheduler
 from onboarding.source_onboarding_cursor import load_cursor_api_key, mask_cursor_api_key
-from paths import SKILLS_LIB
 
 router = APIRouter(tags=["settings"])
 
@@ -86,40 +84,6 @@ async def verify_credential(cred_id: str):
     sync_runtime_cookies()
     if cred["slot"] == "zhihu":
         return await verify_zhihu_cookie()
-    if cred["slot"] == "xiaohongshu":
-        from auth.xiaohongshu_auth import verify_xiaohongshu_cookie
-
-        try:
-            result = verify_xiaohongshu_cookie(str(cred.get("cookie") or ""))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {
-            "ok": True,
-            "message": f"小红书登录有效（{result.get('nickname') or result.get('user_id') or '已登录'}）",
-            **result,
-        }
-    if cred["slot"] == "weixin":
-        skills_lib = SKILLS_LIB
-        import sys
-
-        lib_path = str(skills_lib)
-        if lib_path not in sys.path:
-            sys.path.insert(0, lib_path)
-        import weixin_common as w
-
-        try:
-            result = await asyncio.to_thread(w.verify_mp_session)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"微信校验失败: {exc}") from exc
-        if not result.get("ok"):
-            detail = str(result.get("error") or result.get("message") or "微信公众号后台登录无效")
-            status = 400 if "ASKME_AUTH_REQUIRED" in detail else 502
-            raise HTTPException(status_code=status, detail=detail)
-        return {
-            "ok": True,
-            "message": str(result.get("message") or "微信公众号后台登录有效"),
-            "hit_count": result.get("hit_count"),
-        }
     return {"ok": True, "message": f"已保存「{cred['label']}」，暂无自动校验"}
 
 
@@ -225,10 +189,11 @@ async def save_cursor_api_key(body: CursorApiKeyRequest):
 @router.get("/api/settings/llm")
 async def get_llm_settings():
     """返回服务端持久化的 LLM 配置（本机多浏览器共用）。"""
+    persisted = has_stored_llm_settings()
     item = load_stored_llm_config()
-    # 若尚未持久化，回退到当前运行时默认值（环境变量 / 已 apply 的配置）
     status = get_llm_status()
-    if not item.get("api_key") and status.get("configured"):
+    # 从未落盘时，回退到运行时默认值（环境变量）；用户主动清空后不再回退
+    if not persisted and not item.get("api_key") and status.get("configured"):
         from core.llm import LLM_API_BASE, LLM_API_KEY, LLM_EMBEDDING_MODEL, LLM_MAX_TOKENS, LLM_MODEL
 
         item = {
@@ -237,9 +202,13 @@ async def get_llm_settings():
             "api_key": LLM_API_KEY,
             "api_base": LLM_API_BASE,
             "max_tokens": LLM_MAX_TOKENS,
+            "thinking_style": item.get("thinking_style") or "",
+            "embedding_api_key": item.get("embedding_api_key") or "",
+            "embedding_api_base": item.get("embedding_api_base") or "",
         }
     return {
         "configured": bool(item.get("api_key") and item.get("model")),
+        "persisted": persisted,
         "model": item.get("model") or "",
         "embedding_model": item.get("embedding_model") or "",
         "api_key": item.get("api_key") or "",
@@ -261,6 +230,26 @@ async def put_llm_settings(body: LlmSettingsRequest):
     return {
         "ok": True,
         "configured": True,
+        "persisted": True,
+        "model": item["model"],
+        "embedding_model": item["embedding_model"],
+        "api_key": item["api_key"],
+        "api_base": item["api_base"],
+        "max_tokens": item["max_tokens"],
+        "thinking_style": item.get("thinking_style") or "",
+        "embedding_api_key": item.get("embedding_api_key") or "",
+        "embedding_api_base": item.get("embedding_api_base") or "",
+    }
+
+
+@router.delete("/api/settings/llm")
+async def delete_llm_settings():
+    """清空对话模型与 Embedding 的全部已保存配置。"""
+    item = clear_stored_llm_config()
+    return {
+        "ok": True,
+        "configured": False,
+        "persisted": True,
         "model": item["model"],
         "embedding_model": item["embedding_model"],
         "api_key": item["api_key"],

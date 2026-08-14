@@ -96,6 +96,14 @@ class DigestStepCache:
                 (key, step, json.dumps(payload, ensure_ascii=False), time.time()),
             )
 
+    def delete_older_than(self, cutoff_ts: float) -> int:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM digest_steps WHERE updated_at < ?",
+                (float(cutoff_ts),),
+            )
+            return int(cur.rowcount or 0)
+
 
 _store = DigestStepCache()
 

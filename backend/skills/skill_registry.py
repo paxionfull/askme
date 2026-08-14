@@ -6,15 +6,13 @@ from pathlib import Path
 from typing import Any
 
 from feed.website_feed_adapter import WebsiteFeedAdapter
-from paths import SKILLS_ROOT
+from paths import DISCOVERY_SKILLS_ROOT, SKILLS_LIB
 
 DISCOVER_SCRIPT = Path("scripts") / "discover.py"
 
 # platform id → skill 目录名（不含 -discovery）
 PLATFORM_SKILL_SLUGS: dict[str, str] = {
     "zhihu": "zhihu-platform",
-    "weixin": "weixin-platform",
-    "xiaohongshu": "xiaohongshu-platform",
     "reddit": "reddit-platform",
     "x": "x-platform",
 }
@@ -31,8 +29,7 @@ def _load_discover_module(skill_dir: Path):
         return None
 
     module = importlib.util.module_from_spec(spec)
-    lib_root = SKILLS_ROOT / "_lib"
-    for path in (lib_root, SKILLS_ROOT):
+    for path in (SKILLS_LIB, DISCOVERY_SKILLS_ROOT):
         path_str = str(path)
         if path_str not in sys.path:
             sys.path.insert(0, path_str)
@@ -76,11 +73,11 @@ def clear_loaded_skill_modules() -> None:
 
 def load_skill_adapters() -> list[WebsiteFeedAdapter]:
     """仅返回经典「一站一 skill」适配器（不含 PLATFORM 模块）。"""
-    if not SKILLS_ROOT.is_dir():
+    if not DISCOVERY_SKILLS_ROOT.is_dir():
         return []
 
     adapters: list[WebsiteFeedAdapter] = []
-    for skill_dir in sorted(SKILLS_ROOT.iterdir()):
+    for skill_dir in sorted(DISCOVERY_SKILLS_ROOT.iterdir()):
         if not skill_dir.is_dir() or not skill_dir.name.endswith("-discovery"):
             continue
         module = _load_discover_module(skill_dir)
@@ -96,10 +93,10 @@ def load_skill_adapters() -> list[WebsiteFeedAdapter]:
 
 def load_platform_modules() -> dict[str, Any]:
     """返回 platform_id → discover 模块。"""
-    if not SKILLS_ROOT.is_dir():
+    if not DISCOVERY_SKILLS_ROOT.is_dir():
         return {}
     modules: dict[str, Any] = {}
-    for skill_dir in sorted(SKILLS_ROOT.iterdir()):
+    for skill_dir in sorted(DISCOVERY_SKILLS_ROOT.iterdir()):
         if not skill_dir.is_dir() or not skill_dir.name.endswith("-discovery"):
             continue
         module = _load_discover_module(skill_dir)
@@ -112,7 +109,7 @@ def load_platform_modules() -> dict[str, Any]:
     for platform, slug in PLATFORM_SKILL_SLUGS.items():
         if platform in modules:
             continue
-        skill_dir = SKILLS_ROOT / f"{slug}-discovery"
+        skill_dir = DISCOVERY_SKILLS_ROOT / f"{slug}-discovery"
         if not skill_dir.is_dir():
             continue
         module = _load_discover_module(skill_dir)
@@ -132,11 +129,11 @@ def reload_skill_adapters() -> list[WebsiteFeedAdapter]:
 
 
 def list_skill_slugs() -> list[str]:
-    if not SKILLS_ROOT.is_dir():
+    if not DISCOVERY_SKILLS_ROOT.is_dir():
         return []
     return sorted(
         skill_dir.name[: -len("-discovery")]
-        for skill_dir in SKILLS_ROOT.iterdir()
+        for skill_dir in DISCOVERY_SKILLS_ROOT.iterdir()
         if skill_dir.is_dir() and skill_dir.name.endswith("-discovery")
     )
 

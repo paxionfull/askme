@@ -167,7 +167,7 @@ export default function OnboardingBatchPanel({
             {!running && pendingHandoff.length > 0 ? (
               <div className="space-y-3 rounded-md border border-current/15 bg-[var(--paper-raised)]/50 p-3 text-[var(--ink)]">
                 <p className="text-xs font-medium">
-                  以下站点需要登录授权，完成后 Cookie 会写入「设置 → 授权」，再点上方重试接入。
+                  以下站点需要登录，完成后 Cookie 会写入「设置 → Cookie」，再点上方重试接入。
                 </p>
                 {pendingHandoff.map((item) => (
                   <AuthHandoffPanel

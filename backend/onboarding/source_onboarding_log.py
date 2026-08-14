@@ -133,25 +133,41 @@ class OnboardingSession:
         payload.update(extra)
         self.log("cursor_prompt", **payload)
 
-    def cleanup_partial_skill(self) -> None:
+    def cleanup_partial_skill(self, *, feed_id: str | None = None) -> None:
         """接入失败/取消时清理本任务可能留下的 skill 目录。
 
         Cursor Agent 可能在 mark_files_written 之前就已写出部分文件，
         因此不能只依赖 files_written 标志。
+
+        不删除：修复任务、平台级 skill、仓库内置网站 skill。
         """
         if self.kind == "repair":
             return
+        slug = str(self.slug or "").strip()
+        if not slug:
+            return
+        if slug.endswith("-platform"):
+            return
+        # 与 .gitignore 白名单对齐的内置网站 skill，禁止 onboard 失败时误删
+        if slug in {"jiqizhixin", "qbitai"}:
+            return
+
         from onboarding.source_skill_writer import remove_discovery_skill_dir, skill_dir_for
 
-        skill_dir = skill_dir_for(self.slug)
+        skill_dir = skill_dir_for(slug)
         if not skill_dir.is_dir():
             return
-        if remove_discovery_skill_dir(self.slug):
+        if remove_discovery_skill_dir(slug):
             self.log("cleanup", removed=str(skill_dir), files_written=self.files_written)
             try:
                 from feed.feed_registry import feed_registry
 
-                feed_registry.purge_feed(f"website:{self.slug}")
+                for candidate in (
+                    (feed_id or "").strip(),
+                    f"website:{slug}",
+                ):
+                    if candidate:
+                        feed_registry.purge_feed(candidate)
             except Exception:
                 pass
         self.files_written = False

@@ -8,15 +8,14 @@ from typing import Any
 from auth.auth_signals import auth_error_should_skip_repair
 from core.llm import LLMError
 from feed.platform_accounts import ensure_platform_skill, register_platform_account
+from onboarding.async_blocking import run_blocking
 from onboarding.platform_registry import PlatformSpec, get_platform_spec
-from onboarding.source_onboarding_log import OnboardingSession
-from onboarding.source_platform_scaffold import scaffold_jin10_files
+from onboarding.source_onboarding_log import OnboardingCancelled, OnboardingSession
 from onboarding.source_skill_repair import (
     build_probe_failure_feedback,
     build_validation_failure_feedback,
     iter_auto_repair_agent,
 )
-from onboarding.source_skill_writer import write_skill_files
 from skills.skill_registry import platform_skill_slug
 from skills.skill_validate import run_validation_for_account
 
@@ -67,23 +66,11 @@ def _emit_analysis(session: OnboardingSession | None, data: dict[str, Any]) -> d
 
 def _ensure_platform_registered(platform, *, display_name: str) -> dict:
     """登记账号到 feed_registry，并确保平台级 skill 存在（供 validate / auto_repair）。"""
-    if platform.platform == "jin10":
-        files = scaffold_jin10_files(platform, display_name=display_name)
-        write_skill_files(platform.slug, files)
-        return {
-            "feed_id": platform.feed_id,
-            "platform": "jin10",
-            "account_key": "jin10",
-            "display_name": display_name,
-            "slug": platform.slug,
-        }
     ensure_platform_skill(platform.platform)
     return register_platform_account(platform, display_name=display_name)
 
 
 def _platform_repair_slug(platform) -> str:
-    if platform.platform == "jin10":
-        return platform.slug
     return platform_skill_slug(platform.platform)
 
 
@@ -167,7 +154,11 @@ async def _repair_probe_failure(
     if spec.reprobe_must_succeed:
         yield _emit_status(session, phase="recon", message="自动修复完成，重新探测 API…")
 
-    probe = spec.probe(platform)
+    if session:
+        session.check_cancelled()
+    probe = await run_blocking(spec.probe, platform)
+    if session:
+        session.check_cancelled()
     yield _emit_analysis(
         session,
         {"platform": platform.platform, "probe": probe, "reprobed": True},
@@ -203,7 +194,11 @@ async def run_platform_onboarding(
         session.check_cancelled()
 
     fallback_name = (name or "").strip() or platform.user_id or platform.platform
-    probe = spec.probe(platform)
+    if session:
+        session.check_cancelled()
+    probe = await run_blocking(spec.probe, platform)
+    if session:
+        session.check_cancelled()
     yield _emit_analysis(session, {"platform": platform.platform, "probe": probe})
 
     if spec.check_early_auth:
@@ -220,19 +215,11 @@ async def run_platform_onboarding(
             if spec.auth_slot:
                 _raise_if_auth_gate(detail, slot=spec.auth_slot)
             # 失败路径先用占位名落脚手架；成功后再 resolve 真实显示名
-            display_name = (
-                spec.resolve_display_name(platform, probe, fallback_name, name or "")
-                if spec.singleton_skill
-                else fallback_name
-            )
+            display_name = fallback_name
             yield _emit_status(
                 session,
                 phase="scaffold",
-                message=(
-                    "探测失败，先写入脚手架再自动修复…"
-                    if spec.singleton_skill
-                    else f"探测失败，先写入脚手架再自动修复（{display_name}）…"
-                ),
+                message=f"探测失败，先写入脚手架再自动修复（{display_name}）…",
             )
             _ensure_platform_registered(platform, display_name=display_name)
             registered = True
@@ -262,11 +249,7 @@ async def run_platform_onboarding(
         yield _emit_status(
             session,
             phase="scaffold",
-            message=(
-                f"使用 {platform.platform} 模板生成 skill…"
-                if spec.singleton_skill
-                else f"登记{spec.label}账号到平台 skill（{display_name}）…"
-            ),
+            message=f"登记{spec.label}账号到平台 skill（{display_name}）…",
         )
         _ensure_platform_registered(platform, display_name=display_name)
         registered = True
@@ -288,12 +271,21 @@ async def run_platform_onboarding(
             session.mark_files_written()
 
         if spec.after_register_refresh_display:
+            if session:
+                session.check_cancelled()
+            refresh_fn = spec.after_register_refresh_display
             refreshed = (
-                spec.after_register_refresh_display(
-                    platform, _platform_repair_slug(platform), display_name
+                await run_blocking(
+                    refresh_fn,
+                    platform,
+                    _platform_repair_slug(platform),
+                    display_name,
                 )
                 or ""
-            ).strip()
+            )
+            refreshed = str(refreshed).strip()
+            if session:
+                session.check_cancelled()
             if refreshed and refreshed != display_name:
                 display_name = refreshed
                 _ensure_platform_registered(platform, display_name=display_name)
@@ -338,6 +330,8 @@ async def run_platform_onboarding(
 
     validation: dict[str, Any] | None = None
     if auto_validate:
+        if session:
+            session.check_cancelled()
         if spec.skip_full_validate_when_probe_ok and probe.get("ok"):
             yield _emit_status(session, phase="validate", message="探测已通过，跳过完整 list 复验…")
             account = _ensure_platform_registered(platform, display_name=display_name)
@@ -353,6 +347,8 @@ async def run_platform_onboarding(
                 session.log("validation", ok=True, result=validation)
         else:
             for attempt in range(MAX_REPAIR_ATTEMPTS):
+                if session:
+                    session.check_cancelled()
                 yield _emit_status(
                     session,
                     phase="validate" if attempt == 0 else "repair",
@@ -360,18 +356,21 @@ async def run_platform_onboarding(
                     if attempt == 0
                     else f"验证失败，自动修复中（{attempt}/{MAX_REPAIR_ATTEMPTS - 1}）…",
                 )
-                if session:
-                    session.check_cancelled()
                 try:
                     account = _ensure_platform_registered(platform, display_name=display_name)
-                    validation = run_validation_for_account(account)
+                    validation = await run_blocking(run_validation_for_account, account)
                     if session:
+                        session.check_cancelled()
                         session.log("validation", ok=True, result=validation)
                     break
+                except OnboardingCancelled:
+                    raise
                 except Exception as exc:
                     last_error = str(exc)
                     if session:
                         session.log("validation", ok=False, error=last_error, attempt=attempt + 1)
+                    if session and session.cancelled:
+                        raise OnboardingCancelled("接入任务已取消") from exc
                     if attempt >= MAX_REPAIR_ATTEMPTS - 1:
                         raise LLMError(
                             f"skill 验证失败: {last_error}",
