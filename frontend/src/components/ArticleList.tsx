@@ -439,9 +439,9 @@ export default function ArticleList({
                           type="button"
                           onClick={() => void loadBody(article)}
                           title={hasBody ? undefined : "正文尚未拉取，点击尝试加载"}
-                          className={`w-full text-left text-[15px] font-medium leading-[1.45] tracking-tight ${
+                          className={`w-full text-left text-[15px] font-medium leading-[1.45] tracking-tight underline-offset-2 ${
                             hasBody ? "text-[var(--ink)]" : "text-[var(--ink-muted)]"
-                          } hover:text-[var(--ink)]`}
+                          } hover:text-[var(--accent)] hover:underline`}
                         >
                           {article.title}
                         </button>

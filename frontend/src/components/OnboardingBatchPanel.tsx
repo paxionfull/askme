@@ -40,6 +40,7 @@ function statusIcon(status: OnboardBatchItem["status"], phase?: string): string 
 function collectAuthFailedUrls(batch: OnboardBatchStatus): string[] {
   return batch.items
     .filter((item) => {
+      if (item.phase === "auth_ineffective" || item.phase === "refresh_empty") return false;
       if (item.status === "needs_auth") return true;
       if (item.status !== "failed") return false;
       const msg = `${item.error || ""} ${item.message || ""}`;
@@ -52,6 +53,7 @@ function collectAuthFailedUrls(batch: OnboardBatchStatus): string[] {
 function collectAuthHandoffItems(batch: OnboardBatchStatus): AuthPrecheckItem[] {
   const bySlot = new Map<string, AuthPrecheckItem>();
   for (const item of batch.items) {
+    if (item.phase === "auth_ineffective" || item.phase === "refresh_empty") continue;
     const msg = `${item.error || ""} ${item.message || ""}`;
     const needs =
       item.status === "needs_auth" ||

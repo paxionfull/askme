@@ -42,6 +42,7 @@ from auth.credential_store import (
     cookie_satisfies_slot,
     ensure_slot_meta,
     get_cookie_for_slot,
+    get_slot_meta,
     remember_auth_slot_for_url,
     slot_configured,
     sync_runtime_cookies,
@@ -50,39 +51,6 @@ from auth.credential_store import (
 MAX_BATCH_SIZE = 20
 DEFAULT_MAX_CONCURRENCY = 5
 RELOAD_DEBOUNCE_SECONDS = 1.5
-_DEBUG_LOG_PATH = "/Users/zhuyuyao/Documents/llm应用/askme/.cursor/debug-fed963.log"
-
-
-def _agent_log(
-    location: str,
-    message: str,
-    data: dict[str, Any],
-    *,
-    hypothesis_id: str,
-) -> None:
-    # region agent log
-    try:
-        import json
-        import time
-
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(
-                json.dumps(
-                    {
-                        "sessionId": "fed963",
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "hypothesisId": hypothesis_id,
-                        "timestamp": int(time.time() * 1000),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # endregion
 
 ItemStatus = Literal[
     "queued",
@@ -189,6 +157,105 @@ def _user_facing_refresh_failure_message(exc: BaseException) -> str:
     )
 
 
+def _skill_requires_cookie(slug: str) -> bool:
+    source_yaml = skill_dir_for(slug) / "source.yaml"
+    if not source_yaml.is_file():
+        return False
+    text = source_yaml.read_text(encoding="utf-8")
+    return bool(re.search(r"requires_cookie\s*:\s*true", text, re.I))
+
+
+def _is_antibot_auth_message(message: str) -> bool:
+    low = (message or "").lower()
+    return any(
+        marker in low
+        for marker in (
+            "cloudflare",
+            "incapsula",
+            "imperva",
+            "cf_clearance",
+            "incap_ses_",
+            "人机验证",
+            "防护",
+            "bot challenge",
+            "anti_bot",
+        )
+    )
+
+
+def _auth_handoff_message(meta: dict[str, str], message: str, slot: str) -> str:
+    label = str(meta.get("label") or slot)
+    if _is_antibot_auth_message(message):
+        return (
+            f"需要反爬 Cookie（{label}）：请在浏览器通过人机验证后导出完整 Cookie 并授权，"
+            "再重试接入（非账号登录，令牌会过期）。"
+        )
+    return f"需要登录授权（{label}）：请完成 Cookie 授权后重试。"
+
+
+def _auth_exhausted_message(slot: str, message: str, *, slug: str = "") -> str:
+    label = str((get_slot_meta(slot) or {}).get("label") or slot)
+    if _is_antibot_auth_message(message):
+        hint = str((get_slot_meta(slot) or {}).get("cookie_hint") or "").strip()
+        extra = f" 提示：{hint}" if hint else ""
+        return (
+            f"「{label}」Cookie 已保存，但仍无法通过站点反爬防护（Cloudflare/Incapsula 等）。"
+            "这类令牌不是账号登录，会快速过期。"
+            f"{extra}"
+            " 若多次失败，该站点可能无法在本环境稳定接入。"
+        )
+    return (
+        f"「{label}」Cookie 已保存，但拉取仍失败。"
+        f" 原因：{(message or '未知')[:220]}。"
+        " 请确认 Cookie 来自真实登录且未过期；若仍失败，该源可能暂不支持接入。"
+    )
+
+
+def _zero_article_failure_message(item: BatchItem, *, slot: str = "") -> str:
+    if slot and slot_configured(slot):
+        return _auth_exhausted_message(
+            slot,
+            item.error or item.message or "",
+            slug=item.slug,
+        )
+    if _skill_requires_cookie(item.slug):
+        meta = get_slot_meta(slot) if slot else None
+        label = str((meta or {}).get("label") or slot or item.name or item.slug)
+        return (
+            f"「{label}」首拉未获取到文章：需要有效的反爬/登录 Cookie。"
+            " 请完成授权后重试；若已授权仍失败，令牌可能已过期。"
+        )
+    return (
+        f"「{item.name or item.slug}」首拉未获取到文章，"
+        "可能是反爬拦截、网络不可达或列表解析失败，请稍后重试或更换入口 URL。"
+    )
+
+
+def _refresh_has_articles(refresh_result: dict[str, Any]) -> bool:
+    return int(refresh_result.get("article_count") or 0) > 0 or int(
+        refresh_result.get("new_article_count") or 0
+    ) > 0
+
+
+def _mark_refresh_empty_failure(
+    item: BatchItem,
+    *,
+    slot: str,
+    refresh_result: dict[str, Any],
+    session,
+    result_detail: dict[str, Any],
+    detail: str,
+) -> None:
+    item.status = "failed"
+    item.phase = "refresh_empty"
+    item.error = detail
+    item.message = detail
+    session.finish(
+        success=False,
+        detail={**result_detail, "refresh": refresh_result, "empty": True},
+    )
+
+
 def _mark_needs_auth(item: BatchItem, message: str, *, slot: str | None = None) -> None:
     platform_match = detect_platform(item.entry_url)
     if platform_match and not platform_match.requires_cookie:
@@ -197,8 +264,6 @@ def _mark_needs_auth(item: BatchItem, message: str, *, slot: str | None = None) 
         item.error = message
         item.message = _user_facing_failure_message(Exception(message), is_platform=True)
         return
-    item.status = "needs_auth"
-    item.phase = "needs_auth"
     resolved = (
         (slot or "").strip().lower()
         or parse_auth_required_slot(message)
@@ -234,22 +299,14 @@ def _mark_needs_auth(item: BatchItem, message: str, *, slot: str | None = None) 
     item.login_url = str(meta.get("login_url") or item.entry_url)
     item.cookie_hint = str(meta.get("cookie_hint") or "") or None
     item.error = message
-    item.message = (
-        f"需要登录授权（{meta.get('label') or item.auth_slot}）：请完成 Cookie 授权后重试。"
-    )
-    # region agent log
-    _agent_log(
-        "source_onboarding_batch.py:_mark_needs_auth",
-        "marked needs_auth",
-        {
-            "entry_url": item.entry_url,
-            "slot": item.auth_slot,
-            "slot_configured": slot_configured(str(item.auth_slot or "")),
-            "message": message[:300],
-        },
-        hypothesis_id="B,E",
-    )
-    # endregion
+    if slot_configured(resolved):
+        item.status = "failed"
+        item.phase = "auth_ineffective"
+        item.message = _auth_exhausted_message(resolved, message, slug=item.slug)
+        return
+    item.status = "needs_auth"
+    item.phase = "needs_auth"
+    item.message = _auth_handoff_message(meta, message, resolved)
 
 
 def _refresh_indicates_auth(refresh_result: dict[str, Any], entry_url: str, slug: str) -> str | None:
@@ -263,20 +320,6 @@ def _refresh_indicates_auth(refresh_result: dict[str, Any], entry_url: str, slug
         return None
     slot = resolve_slot_from_url(entry_url)
     if slot:
-        # region agent log
-        _agent_log(
-            "source_onboarding_batch.py:_refresh_indicates_auth",
-            "auth from dynamic/known slot mapping",
-            {
-                "entry_url": entry_url,
-                "slug": slug,
-                "slot": slot,
-                "article_count": article_count,
-                "new_count": new_count,
-            },
-            hypothesis_id="B,D",
-        )
-        # endregion
         return slot
     # source.yaml requires_cookie
     source_yaml = skill_dir_for(slug) / "source.yaml"
@@ -286,36 +329,7 @@ def _refresh_indicates_auth(refresh_result: dict[str, Any], entry_url: str, slug
             import re
 
             m = re.search(r"auth_slot:\s*([a-z0-9_-]+)", text, re.I)
-            resolved = (m.group(1).lower() if m else slot) or "unknown"
-            # region agent log
-            _agent_log(
-                "source_onboarding_batch.py:_refresh_indicates_auth",
-                "auth from source.yaml requires_cookie",
-                {
-                    "entry_url": entry_url,
-                    "slug": slug,
-                    "slot": resolved,
-                    "article_count": article_count,
-                    "new_count": new_count,
-                },
-                hypothesis_id="A,D",
-            )
-            # endregion
-            return resolved
-    # region agent log
-    _agent_log(
-        "source_onboarding_batch.py:_refresh_indicates_auth",
-        "no auth slot inferred",
-        {
-            "entry_url": entry_url,
-            "slug": slug,
-            "article_count": article_count,
-            "new_count": new_count,
-            "resolved_slot": slot,
-        },
-        hypothesis_id="D",
-    )
-    # endregion
+            return (m.group(1).lower() if m else slot) or "unknown"
     return None
 
 
@@ -323,57 +337,16 @@ def _empty_refresh_auth_decision(
     slot: str,
     *,
     entry_url: str,
+    slug: str = "",
+    message: str = "",
 ) -> tuple[bool, str]:
-    """首拉 0 篇时判断是否真的缺授权。
-
-    返回 (needs_auth, detail)。
-    - Cookie 缺失 / 访客态 → needs_auth=True
-    - 已真实登录但仍 0 篇 → needs_auth=False（可能是 token/空主页等问题）
-    """
+    """首拉 0 篇：True=引导授权，False=应明确失败（不可假成功）。"""
     sync_runtime_cookies()
     cookie = get_cookie_for_slot(slot)
-    if not cookie_satisfies_slot(slot, cookie):
-        result = (True, "未配置有效 Cookie，请完成登录授权后重试")
-        # region agent log
-        _agent_log(
-            "source_onboarding_batch.py:_empty_refresh_auth_decision",
-            "empty refresh auth decision",
-            {
-                "slot": slot.strip().lower(),
-                "entry_url": entry_url,
-                "cookie_present": bool((cookie or "").strip()),
-                "cookie_satisfies": False,
-                "slot_configured": slot_configured(slot.strip().lower()),
-                "needs_auth": result[0],
-                "detail": result[1],
-            },
-            hypothesis_id="A,E",
-        )
-        # endregion
-        return result
-
     slot_id = slot.strip().lower()
-    if not slot_configured(slot_id):
-        result = (True, "未配置有效 Cookie，请完成登录授权后重试")
-    else:
-        result = (False, "授权已配置，首拉暂无文章（可稍后在库页刷新）")
-    # region agent log
-    _agent_log(
-        "source_onboarding_batch.py:_empty_refresh_auth_decision",
-        "empty refresh auth decision",
-        {
-            "slot": slot_id,
-            "entry_url": entry_url,
-            "cookie_present": bool((cookie or "").strip()),
-            "cookie_satisfies": cookie_satisfies_slot(slot_id, cookie),
-            "slot_configured": slot_configured(slot_id),
-            "needs_auth": result[0],
-            "detail": result[1],
-        },
-        hypothesis_id="A,E",
-    )
-    # endregion
-    return result
+    if not cookie_satisfies_slot(slot, cookie) or not slot_configured(slot_id):
+        return True, "未配置有效 Cookie，请完成登录授权后重试"
+    return False, _auth_exhausted_message(slot_id, message, slug=slug)
 
 
 def _apply_empty_refresh_outcome(
@@ -384,7 +357,12 @@ def _apply_empty_refresh_outcome(
     session,
     result_detail: dict[str, Any],
 ) -> None:
-    needs_auth, detail = _empty_refresh_auth_decision(slot, entry_url=item.entry_url)
+    needs_auth, detail = _empty_refresh_auth_decision(
+        slot,
+        entry_url=item.entry_url,
+        slug=item.slug,
+        message=item.error or item.message or "",
+    )
     if needs_auth:
         _mark_needs_auth(item, detail, slot=slot)
         session.finish(
@@ -392,28 +370,40 @@ def _apply_empty_refresh_outcome(
             detail={**result_detail, "refresh": refresh_result, "needs_auth": True},
         )
         return
-    # region agent log
-    _agent_log(
-        "source_onboarding_batch.py:_apply_empty_refresh_outcome",
-        "marking done despite zero articles (cookie configured)",
-        {
-            "entry_url": item.entry_url,
-            "slot": slot,
-            "feed_id": item.feed_id,
-            "detail": detail,
-            "article_count": int(refresh_result.get("article_count") or 0),
-        },
-        hypothesis_id="A",
+    _mark_refresh_empty_failure(
+        item,
+        slot=slot,
+        refresh_result=refresh_result,
+        session=session,
+        result_detail=result_detail,
+        detail=detail,
     )
-    # endregion
+
+
+def _finish_refresh_success(
+    item: BatchItem,
+    *,
+    refresh_result: dict[str, Any],
+    session,
+    result_detail: dict[str, Any],
+    base_msg: str,
+    phase: str = "done",
+) -> None:
+    if not _refresh_has_articles(refresh_result):
+        detail = _zero_article_failure_message(item)
+        _mark_refresh_empty_failure(
+            item,
+            slot=str(item.auth_slot or resolve_slot_from_url(item.entry_url) or ""),
+            refresh_result=refresh_result,
+            session=session,
+            result_detail=result_detail,
+            detail=detail,
+        )
+        return
     item.status = "done"
-    item.phase = "done"
-    base = str(refresh_result.get("message") or f"已接入 {item.feed_id}")
-    item.message = f"{base}；{detail}"
-    session.finish(
-        success=True,
-        detail={**result_detail, "refresh": refresh_result, "empty_but_authed": True},
-    )
+    item.phase = phase
+    item.message = base_msg
+    session.finish(success=True, detail={**result_detail, "refresh": refresh_result})
 
 
 def _exception_needs_auth(exc: BaseException, *, entry_url: str = "") -> dict[str, Any] | None:
@@ -443,6 +433,19 @@ def _assign_feed_group(feed_id: str | None, group_id: str | None) -> None:
         pass
 
 
+def _assign_item_group(item: BatchItem, batch: OnboardingBatch) -> None:
+    _assign_feed_group(item.feed_id, item.group_id or batch.group_id)
+
+
+def _reassign_completed_item_groups(batch: OnboardingBatch) -> None:
+    for item in batch.items:
+        if not item.feed_id:
+            continue
+        if item.status not in ("done", "needs_auth"):
+            continue
+        _assign_item_group(item, batch)
+
+
 def _attach_existing_feed(
     *,
     feed_id: str,
@@ -453,7 +456,6 @@ def _attach_existing_feed(
     if feed_registry.is_hidden(feed_id):
         feed_registry.unhide_feed(feed_id)
         restored = True
-    _assign_feed_group(feed_id, group_id)
     gid = (group_id or "").strip()
     if restored and gid and gid != UNGROUPED_GROUP_ID:
         return "已恢复并从所选分组接入"
@@ -758,27 +760,31 @@ async def _run_item(
                         result_detail={"attached": True, "display_name": display_name},
                     )
                 else:
-                    item.status = "done"
-                    item.phase = "attached"
                     repaired = bool(refresh_result.get("auto_repaired"))
                     base_msg = str(refresh_result.get("message") or attach_msg)
                     if display_name:
                         base_msg = f"显示名「{display_name}」· {base_msg}"
-                    item.message = f"自动修复后{base_msg}" if repaired else base_msg
-                    session.finish(
-                        success=True,
-                        detail={
-                            "refresh": refresh_result,
+                    if repaired:
+                        base_msg = f"自动修复后{base_msg}"
+                    _finish_refresh_success(
+                        item,
+                        refresh_result=refresh_result,
+                        session=session,
+                        result_detail={
                             "attached": True,
                             "display_name": display_name,
                         },
+                        base_msg=base_msg,
+                        phase="attached",
                     )
+                _assign_item_group(item, batch)
                 if batch.reload:
                     await _schedule_reload(feed_client)
             except Exception as exc:
                 auth = _exception_needs_auth(exc, entry_url=item.entry_url)
                 if auth:
                     _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
+                    _assign_item_group(item, batch)
                     session.finish(
                         success=False,
                         detail={"error": str(exc), "needs_auth": True},
@@ -813,7 +819,6 @@ async def _run_item(
                 if kind == "result":
                     data = event.get("data") or {}
                     item.feed_id = str(data.get("feed_id") or f"website:{item.slug}")
-                    _assign_feed_group(item.feed_id, item.group_id or batch.group_id)
                     try:
                         refresh_result: dict[str, Any] | None = None
                         async for refresh_event in refresh_with_auto_repair(
@@ -857,26 +862,29 @@ async def _run_item(
                                 result_detail=data,
                             )
                         else:
-                            item.status = "done"
-                            item.phase = "done"
                             repaired = bool(refresh_result.get("auto_repaired"))
                             base_msg = str(
                                 refresh_result.get("message")
                                 or f"已接入并更新 {item.feed_id}"
                             )
-                            item.message = (
-                                f"自动修复后{base_msg}" if repaired else base_msg
+                            if repaired:
+                                base_msg = f"自动修复后{base_msg}"
+                            _finish_refresh_success(
+                                item,
+                                refresh_result=refresh_result,
+                                session=session,
+                                result_detail=data,
+                                base_msg=base_msg,
+                                phase="done",
                             )
-                            session.finish(
-                                success=True,
-                                detail={**data, "refresh": refresh_result},
-                            )
+                        _assign_item_group(item, batch)
                         if batch.reload:
                             await _schedule_reload(feed_client)
                     except FeedError as exc:
                         auth = _exception_needs_auth(exc, entry_url=item.entry_url)
                         if auth:
                             _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
+                            _assign_item_group(item, batch)
                             session.finish(
                                 success=False,
                                 detail={**data, "refresh_error": str(exc), "needs_auth": True},
@@ -1017,6 +1025,7 @@ async def _run_batch(batch: OnboardingBatch, feed_client) -> None:
                     await _reload_task
                 except Exception:
                     pass
+            _reassign_completed_item_groups(batch)
         if batch.cancelled:
             batch.status = "cancelled"
         elif batch.needs_auth > 0 and batch.failed == 0:

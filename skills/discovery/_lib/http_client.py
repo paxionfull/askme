@@ -104,7 +104,20 @@ def fetch_bytes_and_headers(
             raise
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            if attempt < retries:
+            # 读超时/对端直接断开：重试几乎无效，只会把单页拖到几十秒，产品上表现为「卡住」
+            exc_name = type(exc).__name__.lower()
+            exc_text = str(exc).lower()
+            is_timeout = (
+                "timeout" in exc_name
+                or "timed out" in exc_text
+                or isinstance(exc, TimeoutError)
+            )
+            is_remote_drop = (
+                "remotedisconnected" in exc_name
+                or "remote end closed" in exc_text
+                or "connection reset" in exc_text
+            )
+            if (not is_timeout and not is_remote_drop) and attempt < retries:
                 _backoff_sleep(attempt)
                 continue
             raise

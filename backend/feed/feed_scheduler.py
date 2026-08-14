@@ -30,13 +30,14 @@ JOB_ID_PREFIX = "feed_refresh_"
 RETENTION_JOB_ID = "data_retention_daily"
 DEFAULT_REFRESH_CONCURRENCY = max(1, int(os.getenv("FEED_REFRESH_CONCURRENCY", "8")))
 # 单个数据源刷新：软超时仅释放并发槽，任务继续跑完并计入真实结果（避免慢源被误标「跳过」）
+# 产品约束：单源长时间卡住不可接受，默认硬上限约 1 分钟。
 DEFAULT_FEED_REFRESH_SOFT_TIMEOUT = max(
-    15.0, float(os.getenv("FEED_REFRESH_TIMEOUT", "120"))
+    10.0, float(os.getenv("FEED_REFRESH_TIMEOUT", "25"))
 )
 # 硬超时：仍未完成则取消该源并记失败
 DEFAULT_FEED_REFRESH_HARD_TIMEOUT = max(
     DEFAULT_FEED_REFRESH_SOFT_TIMEOUT,
-    float(os.getenv("FEED_REFRESH_HARD_TIMEOUT", "600")),
+    float(os.getenv("FEED_REFRESH_HARD_TIMEOUT", "60")),
 )
 # 兼容旧名
 DEFAULT_FEED_REFRESH_TIMEOUT = DEFAULT_FEED_REFRESH_HARD_TIMEOUT

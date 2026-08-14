@@ -5,7 +5,35 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Askme · 简报页原型（可切换）</title>
   <style>
-    :root {
+    /*
+      默认 theme=cool：冷静中性 + 蓝强调（大众接受度更高，偏 Linear / GitHub 工具感）
+      theme=warm：旧奶油纸质 + 陶土橙（对照用）
+    */
+    :root,
+    [data-theme="cool"] {
+      --paper: #f4f5f7;
+      --paper-raised: #ffffff;
+      --ink: #0f172a;
+      --ink-muted: #64748b;
+      --rule: #e2e8f0;
+      --accent: #2563eb;
+      --accent-soft: #eff6ff;
+      --focus-wash: #eff6ff;
+      --link: #334155;
+      --success: #15803d;
+      --success-soft: #f0fdf4;
+      --warning-soft: #fffbeb;
+      --error-soft: #fef2f2;
+      --radius: 0.5rem;
+      --radius-panel: 0.625rem;
+      --radius-control: 0.375rem;
+      --font: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+      --app-content-max-narrow: 44rem;
+      --stage-bg: #dbe1ea;
+      --shadow-app: 0 16px 48px rgba(15, 23, 42, 0.12);
+      --nav-width: 5.25rem;
+    }
+    [data-theme="warm"] {
       --paper: #f7f3ec;
       --paper-raised: #fffcf7;
       --ink: #1c1917;
@@ -19,17 +47,15 @@
       --success-soft: #f7fee7;
       --warning-soft: #fffbeb;
       --error-soft: #fef2f2;
-      --radius: 0.5rem;
-      --radius-panel: 0.625rem;
-      --radius-control: 0.375rem;
-      --font: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-      --app-content-max-narrow: 44rem;
+      --stage-bg: #d6d0c6;
+      --shadow-app: 0 12px 40px rgba(28, 25, 23, 0.18);
+      --nav-width: 4.5rem;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: var(--font);
-      background: #d6d0c6;
+      background: var(--stage-bg);
       color: var(--ink);
       min-height: 100vh;
     }
@@ -92,9 +118,14 @@
     .ctrl-group .opt:hover { border-color: #78716c; }
     .ctrl-group button.active,
     .ctrl-group .opt.active {
+      background: #2563eb;
+      border-color: #2563eb;
+      color: #fff;
+    }
+    body[data-theme="warm"] .ctrl-group button.active,
+    body[data-theme="warm"] .ctrl-group .opt.active {
       background: #b45309;
       border-color: #b45309;
-      color: #fff;
     }
     .opt small { display: block; color: #a8a29e; margin-top: 0.2rem; font-size: 11px; }
     .opt.active small { color: rgba(255,255,255,0.75); }
@@ -132,16 +163,17 @@
       flex: 1;
       display: flex;
       background: var(--paper);
-      border-radius: 10px;
+      border-radius: 12px;
       overflow: hidden;
-      box-shadow: 0 12px 40px rgba(28, 25, 23, 0.18);
+      box-shadow: var(--shadow-app);
+      border: 1px solid color-mix(in srgb, var(--rule) 80%, transparent);
       min-height: 0;
       height: calc(100vh - 3rem);
     }
 
     /* 左导航 */
     .nav {
-      width: 4.5rem;
+      width: var(--nav-width);
       background: var(--paper-raised);
       border-right: 1px solid var(--rule);
       display: flex;
@@ -149,36 +181,72 @@
       flex-shrink: 0;
     }
     .nav .brand {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
       text-align: center;
-      padding: 1rem 0.4rem;
+      padding: 0.9rem 0.4rem 0.85rem;
       border-bottom: 1px solid var(--rule);
-      font-size: 13px;
-      font-weight: 600;
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+    }
+    .nav .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.85rem;
+      height: 1.85rem;
+      border-radius: 0.45rem;
+      background: var(--ink);
+      color: var(--paper-raised);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: -0.04em;
     }
     .nav button {
-      margin: 0.25rem;
+      margin: 0.2rem 0.35rem;
       border: 0;
       background: transparent;
-      border-radius: 6px;
-      padding: 0.65rem 0.25rem;
+      border-radius: 8px;
+      padding: 0.55rem 0.25rem 0.5rem;
       font: inherit;
       font-size: 11px;
       font-weight: 500;
       color: var(--ink-muted);
       cursor: pointer;
       position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.28rem;
+      line-height: 1.2;
+    }
+    .nav button .nav-ico {
+      width: 1.15rem;
+      height: 1.15rem;
+      display: block;
+      opacity: 0.88;
     }
     .nav button:hover { background: var(--paper); color: var(--ink); }
+    .nav button:hover .nav-ico { opacity: 1; }
     .nav button.active {
-      background: var(--paper);
+      background: var(--accent-soft);
       color: var(--ink);
       font-weight: 600;
       box-shadow: inset 3px 0 0 var(--accent);
     }
+    .nav button.active .nav-ico { color: var(--accent); opacity: 1; }
+    body[data-theme="warm"] .nav button.active {
+      background: var(--paper);
+      color: var(--ink);
+    }
     .nav button .dot {
       position: absolute;
-      top: 0.4rem;
-      right: 0.4rem;
+      top: 0.35rem;
+      right: 0.35rem;
       width: 6px;
       height: 6px;
       border-radius: 50%;
@@ -188,8 +256,7 @@
     .nav button.has-job .dot { display: block; }
     .nav-spacer { flex: 1; min-height: 0.5rem; }
     .nav .nav-help {
-      margin: 0.25rem;
-      margin-bottom: 0.5rem;
+      margin: 0.25rem 0.35rem 0.55rem;
     }
 
     .help-modal-card {
@@ -213,34 +280,91 @@
       background: var(--paper);
     }
 
-    /* 顶栏进度 */
+    /* 顶栏通知（长任务 / 结果 / 轻量 Toast 共用） */
     .job-banner {
       display: none;
       padding: 0.55rem 1rem;
       font-size: 13px;
       border-bottom: 1px solid var(--rule);
-      align-items: center;
+      align-items: flex-start;
       gap: 0.75rem;
+      line-height: 1.45;
     }
     .job-banner.show { display: flex; }
-    .job-banner.progress { background: var(--accent-soft); color: var(--accent); }
-    .job-banner.success { background: var(--success-soft); color: var(--success); }
-    .job-banner.error { background: var(--error-soft); color: #991b1b; }
-    .job-banner .bar {
+    .job-banner.progress {
+      background: color-mix(in srgb, var(--accent-soft) 55%, var(--paper-raised));
+      color: var(--ink);
+    }
+    .job-banner.success {
+      background: var(--success-soft);
+      color: var(--success);
+    }
+    .job-banner.warning {
+      background: var(--warning-soft, #fffbeb);
+      color: #b45309;
+    }
+    body[data-theme="cool"] .job-banner.warning {
+      color: #b45309;
+    }
+    .job-banner.error {
+      background: var(--error-soft);
+      color: #991b1b;
+    }
+    .job-banner.neutral {
+      background: var(--paper);
+      color: var(--ink-muted);
+    }
+    .job-banner .notice-main {
+      min-width: 0;
       flex: 1;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem 0.5rem;
+    }
+    .job-banner .notice-main strong {
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .job-banner .notice-main .sep {
+      opacity: 0.55;
+      flex-shrink: 0;
+    }
+    .job-banner .notice-main span.msg {
+      min-width: 0;
+      flex: 1;
+    }
+    .job-banner .notice-main span.msg.pre {
+      white-space: pre-wrap;
+    }
+    .job-banner .notice-detail {
+      width: 100%;
+      margin-top: 0.15rem;
+      font-size: 12px;
+      opacity: 0.82;
+    }
+    .job-banner .bar {
+      flex: 0 0 140px;
+      align-self: center;
       height: 4px;
-      background: color-mix(in srgb, currentColor 18%, transparent);
+      background: color-mix(in srgb, var(--rule) 80%, white);
       border-radius: 2px;
       overflow: hidden;
-      max-width: 180px;
+    }
+    .job-banner.success .bar,
+    .job-banner.error .bar,
+    .job-banner.warning .bar,
+    .job-banner.neutral .bar {
+      display: none;
     }
     .job-banner .bar > i {
       display: block;
       height: 100%;
       width: 62%;
-      background: currentColor;
+      background: var(--accent);
       border-radius: 2px;
     }
+    .job-banner.error .bar > i { background: #991b1b; }
     .job-banner.progress.indeterminate .bar > i {
       width: 40%;
       animation: slide 1.2s ease-in-out infinite;
@@ -249,7 +373,18 @@
       0% { transform: translateX(-20%); }
       100% { transform: translateX(180%); }
     }
-    .job-banner .actions { margin-left: auto; display: flex; gap: 0.4rem; }
+    .job-banner .actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+    .job-banner .progress-meta {
+      font-size: 12px;
+      opacity: 0.7;
+      flex-shrink: 0;
+    }
     .job-banner button {
       border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
       background: var(--paper-raised);
@@ -259,6 +394,13 @@
       font-size: 12px;
       cursor: pointer;
       color: inherit;
+    }
+    .job-banner button.linkish {
+      border: none;
+      background: transparent;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      opacity: 0.85;
     }
 
     /* 简报页 */
@@ -298,10 +440,14 @@
       flex-wrap: wrap;
       align-items: center;
       gap: 0.5rem 0.65rem;
-      padding: 0.65rem 0.85rem;
+      padding: 0.55rem 0.75rem;
       border: 1px solid var(--rule);
       border-radius: var(--radius);
       background: var(--paper);
+    }
+    body[data-theme="cool"] .today-toolbar {
+      background: color-mix(in srgb, var(--paper) 70%, var(--paper-raised));
+      border-color: color-mix(in srgb, var(--rule) 85%, transparent);
     }
     .gen-btn-ready {
       min-width: 5.5rem;
@@ -384,16 +530,6 @@
       color: var(--ink-muted);
     }
 
-    .page-hint {
-      display: none;
-      padding: 0.45rem 1.5rem;
-      font-size: 0.85rem;
-      color: var(--accent);
-      background: color-mix(in srgb, var(--accent-soft) 70%, var(--paper));
-      border-bottom: 1px solid var(--rule);
-    }
-    .page-hint.show { display: block; }
-
     .today-body {
       flex: 1;
       min-height: 0;
@@ -475,8 +611,127 @@
     }
     .overview .empty h3 { margin: 0 0 0.5rem; font-size: 1.1rem; }
     .overview .empty p { color: var(--ink-muted); margin: 0 0 1.25rem; line-height: 1.55; }
+    .overview .empty .empty-eyebrow {
+      margin: 0 0 0.75rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .overview .empty.empty-hero {
+      max-width: 28rem;
+      margin: 4.5rem auto 3rem;
+    }
+    .overview .empty.empty-hero h3 {
+      font-size: 1.55rem;
+      font-weight: 650;
+      letter-spacing: -0.03em;
+      line-height: 1.25;
+      color: var(--ink);
+      margin-bottom: 0.65rem;
+    }
+    .overview .empty.empty-hero > p {
+      font-size: 0.95rem;
+      margin-bottom: 0;
+    }
+    .overview .empty .empty-note-muted {
+      margin: 0.85rem 0 0;
+      font-size: 0.78rem;
+      color: var(--ink-muted);
+      line-height: 1.45;
+    }
+    .app[data-chrome="launch"] .overview .empty .empty-note { display: none; }
 
-    /* 简报目录：置顶文字轨，不用碎标签 */
+    /* —— 发布截图态（PH / 商业完成度） —— */
+    .launch-row {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-bottom: 0;
+    }
+    .app[data-chrome="launch"] .launch-row { display: flex; }
+    .app[data-chrome="launch"] .page-header {
+      padding: 1.35rem 1.6rem 1.1rem;
+      border-bottom-color: color-mix(in srgb, var(--rule) 70%, transparent);
+    }
+    .app[data-chrome="launch"] .page-header-top { margin-bottom: 0.7rem; }
+    .app[data-chrome="launch"] .today-date { font-size: 1.65rem; }
+    .launch-meta {
+      min-width: 0;
+      font-size: 0.88rem;
+      color: var(--ink-muted);
+      line-height: 1.4;
+    }
+    .launch-meta strong {
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .launch-row-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+    .app[data-chrome="launch"] #todayToolbarConfigured {
+      display: none;
+      margin-top: 0.65rem;
+    }
+    .app[data-chrome="launch"] #todayToolbarConfigured.is-expanded {
+      display: flex;
+    }
+    .app[data-chrome="launch"] #toolbarSub,
+    .app[data-chrome="launch"] #todayToolbarOnboarding,
+    .app[data-chrome="launch"] #toolbarSubOnboarding,
+    .app[data-chrome="launch"] #ruleWarn {
+      display: none !important;
+    }
+    .app[data-chrome="launch"] .job-banner.show {
+      display: none !important;
+    }
+    .app[data-chrome="launch"] .overview-export-btn {
+      opacity: 0.55;
+      border: 0;
+      background: transparent;
+      color: var(--ink-muted);
+      padding-left: 0;
+    }
+    .app[data-chrome="launch"] .overview-export-btn:hover {
+      opacity: 1;
+      color: var(--accent);
+    }
+    .ask-empty-launch {
+      display: none;
+      padding: 1.75rem 0.25rem 0.5rem;
+    }
+    .ask-empty-launch .ask-empty-title {
+      margin: 0;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .ask-empty-launch .ask-empty-sub {
+      margin: 0.35rem 0 0;
+      font-size: 0.8rem;
+      color: var(--ink-muted);
+      line-height: 1.45;
+    }
+    .app[data-chrome="launch"] .ask-msgs > p.ask-ops-hint { display: none; }
+    .app[data-chrome="launch"] .ask-empty-launch { display: block; }
+    .app[data-chrome="ops"] .ask-empty-launch { display: none; }
+    .chrome-shot-badge {
+      display: none;
+      font-size: 11px;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      background: #2563eb;
+      color: #fff;
+      margin-left: 0.45rem;
+      vertical-align: middle;
+    }
+    body[data-chrome="launch"] .chrome-shot-badge { display: inline-block; }
     .overview-toc {
       position: sticky;
       top: 0;
@@ -1260,28 +1515,46 @@
       color: var(--ink);
     }
     .ask-msgs .bubble.user { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, var(--rule)); }
+    body[data-theme="cool"] .ask-msgs .bubble.user {
+      background: var(--ink);
+      color: var(--paper-raised);
+      border-color: var(--ink);
+    }
     .ask-input {
       padding: 0.75rem;
       border-top: 1px solid var(--rule);
+    }
+    body[data-theme="cool"] .ask-input {
+      background: color-mix(in srgb, var(--paper) 45%, var(--paper-raised));
     }
     .ask-input textarea {
       width: 100%;
       border: 1px solid var(--rule);
       border-radius: var(--radius);
-      padding: 0.55rem 0.7rem;
+      padding: 0.65rem 0.8rem;
       font: inherit;
       font-size: 0.85rem;
       resize: none;
-      min-height: 2.6rem;
-      background: var(--paper);
+      min-height: 2.75rem;
+      background: var(--paper-raised);
+      color: var(--ink);
+      outline: none;
+      box-shadow: 0 1px 0 color-mix(in srgb, var(--ink) 3%, transparent);
+    }
+    .ask-input textarea:focus {
+      border-color: color-mix(in srgb, var(--accent) 55%, var(--rule));
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
     }
     .ask-input .row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-top: 0.4rem;
+      margin-top: 0.5rem;
       font-size: 11px;
       color: var(--ink-muted);
+    }
+    body[data-theme="cool"] .settings-card {
+      box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 4%, transparent);
     }
 
     /* 源页 */
@@ -3123,8 +3396,8 @@
       position: absolute;
       bottom: 1.25rem;
       right: 1.5rem;
-      background: #1c1917;
-      color: #fffcf7;
+      background: var(--ink);
+      color: var(--paper-raised);
       font-size: 11px;
       padding: 0.35rem 0.6rem;
       border-radius: 999px;
@@ -3135,11 +3408,35 @@
     .preview-frame { position: relative; flex: 1; min-height: 0; }
   </style>
 </head>
-<body>
+<body data-theme="cool" data-chrome="launch">
   <div class="stage">
     <aside class="controls">
       <h1>Askme UI 原型</h1>
-      <p class="sub">假数据、可切换。用来拍板「简报」主次与进度形态，不接后端。已有简报态含<strong>置顶目录轨</strong>与显示区最左<strong>导出为 Markdown</strong>草案。</p>
+      <p class="sub">假数据、可切换。默认<strong>冷静中性</strong>（大众接受度更高）；可切回旧奶油风对照。不接后端。</p>
+
+      <div class="ctrl-group">
+        <label class="title">视觉主题</label>
+        <button type="button" class="opt active" data-set="theme" data-value="cool">
+          冷静中性 · 蓝强调
+          <small>默认 · Linear / GitHub 工具感</small>
+        </button>
+        <button type="button" class="opt" data-set="theme" data-value="warm">
+          奶油纸质 · 陶土橙
+          <small>旧方案 · 对照用</small>
+        </button>
+      </div>
+
+      <div class="ctrl-group">
+        <label class="title">产品完成度</label>
+        <button type="button" class="opt active" data-set="chrome" data-value="launch">
+          发布截图态
+          <small>无顶栏告警 · 筛选收纳 · 商业空状态</small>
+        </button>
+        <button type="button" class="opt" data-set="chrome" data-value="ops">
+          操作态
+          <small>完整工具条与任务横幅</small>
+        </button>
+      </div>
 
       <div class="ctrl-group">
         <label class="title">当前页面</label>
@@ -3174,21 +3471,24 @@
           无任务
         </button>
         <button type="button" class="opt" data-set="job" data-value="banner">
-          A · 仅顶栏 Banner
-          <small>进行中：更新源信息 3/7</small>
-        </button>
-        <button type="button" class="opt" data-set="job" data-value="combo">
-          C · 顶栏 + 简报页一行弱提示
-          <small>推荐对比项</small>
+          进行中 · 更新源
+          <small>顶栏 progress + 停止</small>
         </button>
         <button type="button" class="opt" data-set="job" data-value="summarize">
-          生成简报中（不定进度）
+          进行中 · 生成简报
         </button>
         <button type="button" class="opt" data-set="job" data-value="done">
-          刚完成（成功可关闭）
+          完成 · 成功可关闭
         </button>
         <button type="button" class="opt" data-set="job" data-value="fail">
-          失败（带下一步）
+          失败 · 带下一步
+        </button>
+        <button type="button" class="opt" data-set="toastDemo" data-value="success">
+          Toast · 操作成功
+          <small>3.5s 自动消失</small>
+        </button>
+        <button type="button" class="opt" data-set="toastDemo" data-value="error">
+          Toast · 操作失败
         </button>
       </div>
 
@@ -3199,9 +3499,9 @@
 
       <div class="ctrl-group" data-show-when-page="settings">
         <label class="title">设置分区</label>
-        <button type="button" class="active" data-set="settingsTab" data-value="model">API Key</button>
         <button type="button" data-set="settingsTab" data-value="rules">Skills</button>
         <button type="button" data-set="settingsTab" data-value="sync">定时</button>
+        <button type="button" class="active" data-set="settingsTab" data-value="model">API Key</button>
         <button type="button" data-set="settingsTab" data-value="auth">Cookie</button>
       </div>
 
@@ -3212,30 +3512,62 @@
       </div>
 
       <div class="hint">
-        源页：侧栏勾选工作集；组右键菜单（重命名/添加源/设置定时/删除）· 组 ↻ / 源 ⋯；闹钟表示已进定时。设置 → 定时与组右键弹窗共用同一套规则。
+        默认「冷静 + 发布截图态」。用「产品完成度」对照操作态。顶栏任务仅在操作态显示。打开：
+        <code style="color:#e7e0d5">/prototypes/today-overview.html</code>
       </div>
     </aside>
 
     <div class="preview-wrap">
       <div class="preview-label">
-        <span>应用预览</span>
-        <code id="stateLabel">简报 · 阅读 · 提问常驻 · 无任务</code>
+        <span>应用预览<span class="chrome-shot-badge">PH 截图态</span></span>
+        <code id="stateLabel">冷静 · 发布 · 简报 · 阅读 · 提问常驻 · 无任务</code>
       </div>
       <div class="preview-frame">
-        <div class="app" id="app" data-page="today" data-ask="open" data-overview="ready" data-job="none">
+        <div class="app" id="app" data-theme="cool" data-chrome="launch" data-page="today" data-ask="open" data-overview="ready" data-job="none">
           <aside class="nav">
-            <div class="brand">Askme</div>
-            <button type="button" class="active" data-nav="today">简报<span class="dot"></span></button>
-            <button type="button" data-nav="sources">源<span class="dot"></span></button>
-            <button type="button" data-nav="settings">设置<span class="dot"></span></button>
+            <div class="brand">
+              <span class="brand-mark" aria-hidden="true">A</span>
+              <span class="brand-text">Askme</span>
+            </div>
+            <button type="button" class="active" data-nav="today">
+              <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 6.5h16M4 12h10M4 17.5h13" />
+              </svg>
+              简报<span class="dot"></span>
+            </button>
+            <button type="button" data-nav="sources">
+              <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 5.5h14v13H5zM9 5.5V18.5M5 10h14" />
+              </svg>
+              源<span class="dot"></span>
+            </button>
+            <button type="button" data-nav="settings">
+              <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                <circle cx="12" cy="12" r="3.25" />
+                <path stroke-linecap="round" d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6.1 6.1l1.55 1.55M16.35 16.35l1.55 1.55M17.9 6.1l-1.55 1.55M7.65 16.35l-1.55 1.55" />
+              </svg>
+              设置<span class="dot"></span>
+            </button>
             <div class="nav-spacer" aria-hidden="true"></div>
-            <button type="button" class="nav-help" id="navHelpBtn" aria-haspopup="dialog">帮助</button>
+            <button type="button" class="nav-help" id="navHelpBtn" aria-haspopup="dialog">
+              <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                <circle cx="12" cy="12" r="8.25" />
+                <path stroke-linecap="round" d="M9.75 9.5a2.25 2.25 0 1 1 3.4 1.9c-.7.45-1.15.9-1.15 1.85V14" />
+                <circle cx="12" cy="16.75" r="0.9" fill="currentColor" stroke="none" />
+              </svg>
+              帮助
+            </button>
           </aside>
 
           <div class="main">
             <div class="job-banner" id="jobBanner">
-              <strong id="jobTitle">更新源信息</strong>
-              <span id="jobMsg">正在刷新文章列表… 3 / 7</span>
+              <div class="notice-main" id="jobMain">
+                <strong id="jobTitle">更新源信息</strong>
+                <span class="sep" id="jobSep">·</span>
+                <span class="msg" id="jobMsg">正在刷新文章列表… 3 / 7</span>
+                <div class="notice-detail" id="jobDetail" hidden></div>
+              </div>
+              <span class="progress-meta" id="jobProgressMeta"></span>
               <div class="bar" id="jobBar"><i></i></div>
               <div class="actions" id="jobActions"></div>
             </div>
@@ -3251,6 +3583,17 @@
                   </p>
                 </div>
                 <div id="todayToolbarWrap">
+                  <div class="launch-row" id="launchRow">
+                    <p class="launch-meta" id="launchMeta">
+                      <strong>AI 技术</strong> · 近 3 天 · 14 个要点
+                    </p>
+                    <div class="launch-row-actions">
+                      <button type="button" class="btn btn-ghost" id="launchFilterBtn" aria-expanded="false">
+                        筛选
+                      </button>
+                      <button type="button" class="btn btn-ghost" id="launchGenBtn" data-ready="1">已生成</button>
+                    </div>
+                  </div>
                   <div class="today-toolbar" id="todayToolbarConfigured">
                     <label class="toolbar-field">
                       <span class="field-k">板块</span>
@@ -3289,7 +3632,6 @@
                   </p>
                 </div>
               </header>
-              <div class="page-hint" id="pageHint">正在更新源信息，完成后请为板块设置规则再生成简报。</div>
 
               <div class="today-body" id="todayBody">
                 <section class="overview" id="overviewReady">
@@ -3422,68 +3764,101 @@
                 </section>
 
                 <section class="overview" id="overviewEmpty" style="display:none">
-                  <div class="empty" id="emptyNeedRule" style="display:none">
-                    <h3>还不能生成简报</h3>
-                    <p>本板块尚未设置整理规则。简报按规则分类与取舍，系统不会自动选用默认规则。</p>
-                    <p class="empty-note">未设置规则时无法生成简报。请先为当前板块选择规则。</p>
-                    <div class="empty-actions">
-                      <button type="button" class="btn btn-primary" id="emptyPickRuleBtn">选择规则</button>
-                      <button type="button" class="btn btn-ghost" data-nav="sources">去更新源信息</button>
+                  <div id="emptyNeedRule" style="display:none">
+                    <div class="empty empty-ops">
+                      <h3>还不能生成简报</h3>
+                      <p>本板块尚未设置整理规则。简报按规则分类与取舍，系统不会自动选用默认规则。</p>
+                      <p class="empty-note">未设置规则时无法生成简报。请先为当前板块选择规则。</p>
+                      <div class="empty-actions">
+                        <button type="button" class="btn btn-primary" id="emptyPickRuleBtn">选择规则</button>
+                        <button type="button" class="btn btn-ghost" data-nav="sources">去更新源信息</button>
+                      </div>
+                    </div>
+                    <div class="empty empty-hero empty-launch" hidden>
+                      <p class="empty-eyebrow">差一步</p>
+                      <h3>为这个板块选一条整理规则</h3>
+                      <p>规则决定分类与取舍；选好后即可生成今日简报。</p>
+                      <div class="empty-actions">
+                        <button type="button" class="btn btn-primary" id="emptyPickRuleBtnLaunch">选择规则</button>
+                      </div>
                     </div>
                   </div>
-                  <div class="empty" id="emptyHasSources">
-                    <h3>还没有这份简报</h3>
-                    <p id="emptyHasSourcesDesc">将按已绑定的整理规则生成。选择时间范围后点击「生成简报」。</p>
-                    <p class="empty-note">每个板块必须手动指定规则；更换规则后需重新生成。</p>
-                    <div class="empty-actions">
-                      <button type="button" class="btn btn-primary" id="emptyGenBtn">生成简报</button>
-                      <button type="button" class="btn btn-ghost" id="emptyViewRuleBtn">查看规则</button>
+                  <div id="emptyHasSources">
+                    <div class="empty empty-ops">
+                      <h3>还没有这份简报</h3>
+                      <p id="emptyHasSourcesDesc">将按已绑定的整理规则生成。选择时间范围后点击「生成简报」。</p>
+                      <p class="empty-note">每个板块必须手动指定规则；更换规则后需重新生成。</p>
+                      <div class="empty-actions">
+                        <button type="button" class="btn btn-primary" id="emptyGenBtn">生成简报</button>
+                        <button type="button" class="btn btn-ghost" id="emptyViewRuleBtn">查看规则</button>
+                      </div>
+                    </div>
+                    <div class="empty empty-hero empty-launch" hidden>
+                      <p class="empty-eyebrow">今日简报</p>
+                      <h3>还差一次生成</h3>
+                      <p id="emptyHasSourcesDescLaunch">源与规则已就绪。生成后，要点会按主题整理在这里。</p>
+                      <div class="empty-actions">
+                        <button type="button" class="btn btn-primary" id="emptyGenBtnLaunch">生成简报</button>
+                        <button type="button" class="btn btn-ghost" id="emptyViewRuleBtnLaunch">查看规则</button>
+                      </div>
                     </div>
                   </div>
-                  <div class="empty" id="emptyOnboarding" style="display:none">
-                    <h3>从这里开始</h3>
-                    <p>Askme 按你为每个板块指定的整理规则，把订阅源整理成可读简报。添加数据源前须先配置密钥。</p>
-                    <ol class="guide-steps">
-                      <li>
-                        <strong>配置 API Key</strong>
-                        <span>
-                          去
-                          <button type="button" class="guide-step-link" data-nav="settings" data-settings-tab="model">API Key</button>
-                          添加 LLM API Key（简报与提问）和 Cursor API Key（接入源）
-                        </span>
-                      </li>
-                      <li>
-                        <strong>添加数据源</strong>
-                        <span>
-                          在「
-                          <button type="button" class="guide-step-link" data-nav="sources">源</button>
-                          」页接入网站或平台账号
-                        </span>
-                      </li>
-                      <li>
-                        <strong>更新源信息</strong>
-                        <span>刷新文章列表；进度在顶部可见</span>
-                      </li>
-                      <li>
-                        <strong>为板块设置整理规则</strong>
-                        <span>
-                          决定如何分类与取舍；每组须手动指定，无默认
-                          <button type="button" class="guide-step-hint" id="onboardingRuleHintBtn">规则是什么？</button>
-                        </span>
-                      </li>
-                      <li>
-                        <strong>生成简报</strong>
-                        <span>回到简报页，按规则浏览要点</span>
-                      </li>
-                      <li>
-                        <strong>设置定时</strong>
-                        <span>
-                          在
-                          <button type="button" class="guide-step-link" data-nav="settings" data-settings-tab="sync">定时</button>
-                          里为分组安排自动更新
-                        </span>
-                      </li>
-                    </ol>
+                  <div id="emptyOnboarding" style="display:none">
+                    <div class="empty empty-ops">
+                      <h3>从这里开始</h3>
+                      <p>Askme 按你为每个板块指定的整理规则，把订阅源整理成可读简报。添加数据源前须先配置密钥。</p>
+                      <ol class="guide-steps">
+                        <li>
+                          <strong>配置 API Key</strong>
+                          <span>
+                            去
+                            <button type="button" class="guide-step-link" data-nav="settings" data-settings-tab="model">API Key</button>
+                            添加 LLM API Key（简报与提问）和 Cursor API Key（接入源）
+                          </span>
+                        </li>
+                        <li>
+                          <strong>添加数据源</strong>
+                          <span>
+                            在「
+                            <button type="button" class="guide-step-link" data-nav="sources">源</button>
+                            」页接入网站或平台账号
+                          </span>
+                        </li>
+                        <li>
+                          <strong>更新源信息</strong>
+                          <span>刷新文章列表；进度在顶部可见</span>
+                        </li>
+                        <li>
+                          <strong>为板块设置整理规则</strong>
+                          <span>
+                            决定如何分类与取舍；每组须手动指定，无默认
+                            <button type="button" class="guide-step-hint" id="onboardingRuleHintBtn">规则是什么？</button>
+                          </span>
+                        </li>
+                        <li>
+                          <strong>生成简报</strong>
+                          <span>回到简报页，按规则浏览要点</span>
+                        </li>
+                        <li>
+                          <strong>设置定时</strong>
+                          <span>
+                            在
+                            <button type="button" class="guide-step-link" data-nav="settings" data-settings-tab="sync">定时</button>
+                            里为分组安排自动更新
+                          </span>
+                        </li>
+                      </ol>
+                    </div>
+                    <div class="empty empty-hero empty-launch" hidden>
+                      <p class="empty-eyebrow">Askme</p>
+                      <h3>把订阅源变成每日可读简报</h3>
+                      <p>选好源与整理规则，一键生成要点；需要时再追问细节。</p>
+                      <div class="empty-actions">
+                        <button type="button" class="btn btn-primary" data-nav="sources">添加第一个源</button>
+                        <button type="button" class="btn btn-ghost" data-nav="settings" data-settings-tab="model">配置 API Key</button>
+                      </div>
+                      <p class="empty-note-muted">详细步骤可在「帮助」查看</p>
+                    </div>
                   </div>
                 </section>
 
@@ -3509,7 +3884,11 @@
                       <span id="askHint">可选 · 拖入文章或点「加入对话」生成摘要</span>
                     </div>
                     <div class="ask-msgs" id="askMsgs">
-                      <p>拖入左侧章节或文章链接，将直接发送并生成摘要；也可输入问题后 Enter 发送。</p>
+                      <div class="ask-empty-launch">
+                        <p class="ask-empty-title">问问今天的简报</p>
+                        <p class="ask-empty-sub">拖入要点，或直接输入问题</p>
+                      </div>
+                      <p class="ask-ops-hint">拖入左侧章节或文章链接，将直接发送并生成摘要；也可输入问题后 Enter 发送。</p>
                     </div>
                     <div class="ask-input">
                       <textarea id="askInput" placeholder="拖入左侧内容生成摘要，或输入问题…" rows="2"></textarea>
@@ -3555,7 +3934,7 @@
                       data-tip="仅为勾选分组内的正文建立检索索引（提问用）。&#10;生成简报不需要索引。"
                     >建立索引</button>
                   </div>
-                  <p class="toolbar-sub" id="sourcesNextHint">勾选分组后更新 / 建索引；组行右键管理 · ↻ 刷新本组；右侧可刷新当前源。闹钟表示该组已出现在某条定时。</p>
+                  <p class="toolbar-sub" id="sourcesNextHint">勾选分组后更新 / 建索引；组行右键管理 · ↻ 刷新本组；右侧可刷新当前源。</p>
                 </div>
               </header>
               <div class="sources-main" id="sourcesMain">
@@ -3605,9 +3984,9 @@
               </header>
               <div class="settings-body app-content-narrow">
                 <nav class="settings-tabs" aria-label="设置分区">
-                  <button type="button" class="active" data-settings-tab="model">API Key<span class="tab-badge" id="modelTabBadge" hidden>未配置</span></button>
                   <button type="button" data-settings-tab="rules">Skills</button>
                   <button type="button" data-settings-tab="sync">定时</button>
+                  <button type="button" class="active" data-settings-tab="model">API Key<span class="tab-badge" id="modelTabBadge" hidden>未配置</span></button>
                   <button type="button" data-settings-tab="auth">Cookie</button>
                 </nav>
 
@@ -4189,6 +4568,8 @@
     const controlsEl = document.querySelector(".controls");
     const settingsPage = document.getElementById("settingsPage");
     const state = {
+      theme: "cool",
+      chrome: "launch",
       page: "today",
       ask: "open",
       overview: "ready",
@@ -4199,6 +4580,7 @@
       cursorConfigured: "1",
       ruleModal: null, // "pick" | "view" | "explain" | null
       pendingRuleId: null,
+      filterOpen: false,
     };
 
     /** 可选整理规则（无系统默认；绑定须手动） */
@@ -5488,73 +5870,175 @@
       });
     }
 
-    function applyJob() {
+    let toastDismissTimer = null;
+
+    function hideNotice() {
+      const banner = document.getElementById("jobBanner");
+      if (!banner) return;
+      banner.className = "job-banner";
+      document.getElementById("jobActions").innerHTML = "";
+      document.getElementById("jobProgressMeta").textContent = "";
+      document.getElementById("jobDetail").hidden = true;
+      document.getElementById("jobDetail").textContent = "";
+      document.getElementById("jobBar").style.display = "";
+      document.querySelectorAll(".nav button").forEach((b) => b.classList.remove("has-job"));
+      if (toastDismissTimer) {
+        clearTimeout(toastDismissTimer);
+        toastDismissTimer = null;
+      }
+    }
+
+    function showNotice(opts) {
       const banner = document.getElementById("jobBanner");
       const title = document.getElementById("jobTitle");
+      const sep = document.getElementById("jobSep");
       const msg = document.getElementById("jobMsg");
+      const detail = document.getElementById("jobDetail");
       const bar = document.getElementById("jobBar");
+      const progressMeta = document.getElementById("jobProgressMeta");
       const actions = document.getElementById("jobActions");
-      const hint = document.getElementById("pageHint");
-      const navBtns = document.querySelectorAll(".nav button");
 
-      banner.className = "job-banner";
-      bar.classList.remove("indeterminate");
-      hint.classList.remove("show");
-      navBtns.forEach((b) => b.classList.remove("has-job"));
+      if (toastDismissTimer) {
+        clearTimeout(toastDismissTimer);
+        toastDismissTimer = null;
+      }
+
+      banner.className = `job-banner show ${opts.tone || "neutral"}`;
+      if (opts.indeterminate) banner.classList.add("indeterminate");
       actions.innerHTML = "";
+      progressMeta.textContent = opts.progressLabel || "";
 
-      const showBanner = (tone, t, m, opts = {}) => {
-        banner.classList.add("show", tone);
-        if (opts.indeterminate) banner.classList.add("indeterminate");
-        title.textContent = t;
-        msg.textContent = m;
-        bar.style.display = opts.hideBar ? "none" : "block";
-        if (opts.stop) {
-          actions.innerHTML = `<button type="button">停止</button>`;
-        }
-        if (opts.close) {
-          actions.innerHTML = `<button type="button" id="closeJob">关闭</button>`;
-          document.getElementById("closeJob").onclick = () => setState("job", "none");
-        }
-        if (opts.retry) {
-          actions.innerHTML = `<button type="button">去 Cookie</button><button type="button" id="closeJob">关闭</button>`;
-          document.getElementById("closeJob").onclick = () => setState("job", "none");
-        }
-      };
+      const hasTitle = Boolean(opts.title);
+      title.hidden = !hasTitle;
+      sep.hidden = !hasTitle;
+      title.textContent = opts.title || "";
+      msg.textContent = opts.message || "";
+      msg.classList.toggle("pre", Boolean(opts.pre));
 
+      if (opts.detail) {
+        detail.hidden = false;
+        detail.textContent = opts.detail;
+      } else {
+        detail.hidden = true;
+        detail.textContent = "";
+      }
+
+      if (opts.hideBar) {
+        bar.style.display = "none";
+      } else {
+        bar.style.display = opts.tone === "progress" ? "block" : "none";
+      }
+
+      if (opts.stop) {
+        actions.innerHTML = `<button type="button" id="jobStopBtn">停止</button>`;
+        document.getElementById("jobStopBtn").onclick = () => setState("job", "none");
+      }
+      if (opts.close) {
+        actions.innerHTML = `<button type="button" class="linkish" id="closeJob">关闭</button>`;
+        document.getElementById("closeJob").onclick = () => {
+          setState("job", "none");
+          applyGlobalNotice();
+        };
+      }
+      if (opts.retry) {
+        actions.innerHTML = `<button type="button">去 Cookie</button><button type="button" class="linkish" id="closeJob">关闭</button>`;
+        document.getElementById("closeJob").onclick = () => {
+          setState("job", "none");
+          applyGlobalNotice();
+        };
+      }
+
+      if (opts.navDot) {
+        document.querySelector(`[data-nav="${opts.navDot}"]`)?.classList.add("has-job");
+      }
+
+      if (opts.autoDismissMs) {
+        toastDismissTimer = window.setTimeout(() => {
+          toastDismissTimer = null;
+          if (state.job === "none") applyGlobalNotice();
+          else hideNotice();
+        }, opts.autoDismissMs);
+      }
+    }
+
+    function showToast(message, tone = "success", title = "") {
+      if (state.job !== "none") return;
+      const sticky = tone === "error" || tone === "warning";
+      showNotice({
+        tone,
+        title,
+        message,
+        hideBar: true,
+        // 错误/警告需用户手动关闭；成功类短反馈可自动消失
+        close: sticky,
+        autoDismissMs: sticky ? undefined : 3500,
+      });
+    }
+
+    function applyGlobalNotice() {
+      hideNotice();
+      if (state.chrome === "launch") return;
+      if (state.job !== "none") {
+        applyJob();
+        return;
+      }
+      if (state.modelConfigured !== "1") {
+        showNotice({
+          tone: "warning",
+          title: "LLM 未配置",
+          message: "请在「设置 → API Key」填写 API Key 和模型名称。",
+          hideBar: true,
+        });
+        return;
+      }
+    }
+
+    function applyJob() {
+      if (state.chrome === "launch") {
+        hideNotice();
+        return;
+      }
       switch (state.job) {
         case "none":
+          applyGlobalNotice();
           break;
         case "banner":
-          showBanner("progress", "更新源信息", "正在刷新文章列表… 3 / 7", { stop: true });
-          document.querySelector('[data-nav="sources"]').classList.add("has-job");
-          break;
-        case "combo":
-          showBanner("progress", "更新源信息", "正在刷新文章列表… 3 / 7", { stop: true });
-          hint.textContent = "正在更新源信息；完成后请确认板块已设置整理规则，再生成简报。";
-          hint.classList.add("show");
-          document.querySelector('[data-nav="sources"]').classList.add("has-job");
+          showNotice({
+            tone: "progress",
+            title: "更新源信息",
+            message: "正在刷新文章列表… 3 / 7",
+            progressLabel: "3/7",
+            stop: true,
+            navDot: "sources",
+          });
           break;
         case "summarize": {
           const rule = currentRule();
           const group = currentGroupLabel();
-          showBanner("progress", "生成简报", `正在按「${rule?.name || "规则"}」整理「${group}」…`, {
+          showNotice({
+            tone: "progress",
+            title: "生成简报",
+            message: `正在按「${rule?.name || "规则"}」整理「${group}」…`,
             indeterminate: true,
             stop: true,
+            navDot: "today",
           });
-          hint.textContent = `正在按规则「${rule?.name || "—"}」生成当前板块简报。`;
-          hint.classList.add("show");
-          document.querySelector('[data-nav="today"]').classList.add("has-job");
           break;
         }
         case "done":
-          showBanner("success", "简报已更新", "AI 技术 · 近 3 天 · 14 个要点", {
+          showNotice({
+            tone: "success",
+            title: "简报已更新",
+            message: "AI 技术 · 近 3 天 · 14 个要点",
             hideBar: true,
             close: true,
           });
           break;
         case "fail":
-          showBanner("error", "刷新失败", "Bloomberg Cookie 失效，部分源未更新", {
+          showNotice({
+            tone: "error",
+            title: "刷新失败",
+            message: "Bloomberg Cookie 失效，部分源未更新",
             hideBar: true,
             retry: true,
           });
@@ -5628,41 +6112,66 @@
       const toolbarSubOnboarding = document.getElementById("toolbarSubOnboarding");
       const status = document.getElementById("toolbarStatus");
       const rangeSelect = document.getElementById("rangeSelect");
+      const launchMeta = document.getElementById("launchMeta");
+      const launchRow = document.getElementById("launchRow");
+      const rangeLabel = rangeSelect.value === "1" ? "今天" : "近 3 天";
       const rangeDetail = rangeSelect.value === "1" ? "仅 7/29" : "7/27–7/29";
       const view = effectiveOverview();
+      const groupName = currentGroupLabel();
 
       if (view === "onboarding") {
         toolbarConfigured.style.display = "none";
         toolbarSub.style.display = "none";
-        toolbarOnboarding.style.display = "";
-        toolbarSubOnboarding.style.display = "";
+        if (state.chrome === "launch") {
+          toolbarOnboarding.style.display = "none";
+          toolbarSubOnboarding.style.display = "none";
+          if (launchRow) launchRow.style.display = "none";
+        } else {
+          toolbarOnboarding.style.display = "";
+          toolbarSubOnboarding.style.display = "";
+        }
         renderRuleBar();
+        syncLaunchGenBtn();
         return;
       }
 
+      if (launchRow) launchRow.style.display = "";
       toolbarConfigured.style.display = "";
       toolbarOnboarding.style.display = "none";
       toolbarSubOnboarding.style.display = "none";
       toolbarSub.style.display = "";
 
       const bound = hasRuleBound();
+      let statusText = "尚未生成";
+      let statusClass = "toolbar-status warn";
       if (view === "ready") {
-        status.textContent = "14 个要点";
-        status.className = "toolbar-status ok";
+        statusText = "14 个要点";
+        statusClass = "toolbar-status ok";
         toolbarSub.textContent = `覆盖 ${rangeDetail} · 按「${currentRule()?.name}」生成于今天 14:32`;
         setGenEnabled(true, "ready");
       } else if (view === "need_rule") {
-        status.textContent = "未设规则";
-        status.className = "toolbar-status warn";
+        statusText = "未设规则";
+        statusClass = "toolbar-status warn";
         toolbarSub.textContent = `源已就绪，覆盖 ${rangeDetail} · 请先设置整理规则`;
         setGenEnabled(false, "empty");
       } else {
-        status.textContent = "尚未生成";
-        status.className = "toolbar-status warn";
+        statusText = "尚未生成";
+        statusClass = "toolbar-status warn";
         toolbarSub.textContent = `源已就绪，覆盖 ${rangeDetail} · 将按「${currentRule()?.name}」生成`;
         setGenEnabled(bound, "empty");
       }
+      status.textContent = statusText;
+      status.className = statusClass;
+      if (launchMeta) {
+        launchMeta.innerHTML = `<strong>${groupName}</strong> · ${rangeLabel} · ${statusText}`;
+      }
+      if (state.chrome === "launch") {
+        toolbarConfigured.classList.toggle("is-expanded", state.filterOpen);
+        toolbarConfigured.style.display = state.filterOpen ? "flex" : "none";
+        toolbarSub.style.display = "none";
+      }
       renderRuleBar();
+      syncLaunchGenBtn();
     }
 
     function applyOverview() {
@@ -5706,8 +6215,15 @@
         emptyHasSourcesDesc.textContent = rule
           ? `将按「${rule.name}」整理近段文章。选择时间范围后点击「生成简报」。`
           : "选择时间范围后点击「生成简报」。";
+        const launchDesc = document.getElementById("emptyHasSourcesDescLaunch");
+        if (launchDesc) {
+          launchDesc.textContent = rule
+            ? `将按「${rule.name}」整理。生成后，要点会按主题出现在这里。`
+            : "源与规则已就绪。生成后，要点会按主题整理在这里。";
+        }
       }
 
+      syncEmptyChrome();
       renderTodayToolbar();
     }
 
@@ -6091,6 +6607,74 @@
       });
     }
 
+    function applyTheme() {
+      const theme = state.theme === "warm" ? "warm" : "cool";
+      state.theme = theme;
+      document.body.dataset.theme = theme;
+      app.dataset.theme = theme;
+    }
+
+    function syncEmptyChrome() {
+      const launch = state.chrome === "launch";
+      document.querySelectorAll("#overviewEmpty .empty-ops").forEach((el) => {
+        el.hidden = launch;
+      });
+      document.querySelectorAll("#overviewEmpty .empty-launch").forEach((el) => {
+        el.hidden = !launch;
+      });
+    }
+
+    function syncLaunchGenBtn() {
+      const launchGen = document.getElementById("launchGenBtn");
+      const genBtn = document.getElementById("genBtn");
+      if (!launchGen || !genBtn) return;
+      const view = effectiveOverview();
+      if (view === "onboarding") {
+        launchGen.style.display = "none";
+        return;
+      }
+      launchGen.style.display = "";
+      launchGen.disabled = genBtn.disabled;
+      if (genBtn.dataset.ready === "1") {
+        launchGen.textContent = "已生成";
+        launchGen.className = "btn btn-ghost";
+        launchGen.dataset.ready = "1";
+      } else if (genBtn.disabled) {
+        launchGen.textContent = "需先设规则";
+        launchGen.className = "btn btn-ghost is-disabled";
+        launchGen.dataset.ready = "0";
+      } else {
+        launchGen.textContent = "生成简报";
+        launchGen.className = "btn btn-primary";
+        launchGen.dataset.ready = "0";
+      }
+    }
+
+    function applyChrome() {
+      const chrome = state.chrome === "ops" ? "ops" : "launch";
+      state.chrome = chrome;
+      document.body.dataset.chrome = chrome;
+      app.dataset.chrome = chrome;
+      const toolbar = document.getElementById("todayToolbarConfigured");
+      const filterBtn = document.getElementById("launchFilterBtn");
+      if (chrome === "ops") {
+        state.filterOpen = false;
+        toolbar?.classList.remove("is-expanded");
+        if (toolbar) toolbar.style.display = "";
+        if (filterBtn) filterBtn.setAttribute("aria-expanded", "false");
+      } else if (toolbar) {
+        toolbar.classList.toggle("is-expanded", state.filterOpen);
+        toolbar.style.display = state.filterOpen ? "flex" : "none";
+        if (filterBtn) filterBtn.setAttribute("aria-expanded", state.filterOpen ? "true" : "false");
+      }
+      syncEmptyChrome();
+      if (chrome === "launch") {
+        hideNotice();
+      } else {
+        applyJob();
+      }
+    }
+
     function applyPage() {
       app.dataset.page = state.page;
       if (controlsEl) controlsEl.dataset.page = state.page;
@@ -6209,6 +6793,8 @@
 
     function updateLabel() {
       const pageMap = { today: "简报", sources: "源", settings: "设置" };
+      const themeMap = { cool: "冷静", warm: "奶油" };
+      const chromeMap = { launch: "发布", ops: "操作" };
       const ovMap = {
         ready: "阅读",
         empty: "有规则未生成",
@@ -6229,12 +6815,13 @@
       };
       const jobMap = {
         none: "无任务",
-        banner: "进度A顶栏",
-        combo: "进度C组合",
+        banner: "更新中",
         summarize: "生成中",
         done: "刚完成",
         fail: "失败",
       };
+      const themeBit = themeMap[state.theme] || state.theme;
+      const chromeBit = chromeMap[state.chrome] || state.chrome;
       const phase =
         state.page === "sources" ? ` · ${phaseMap[state.sourcesPhase]}` : "";
       const settingsBit =
@@ -6245,10 +6832,14 @@
         state.page === "today" && view !== "onboarding"
           ? ` · 规则${hasRuleBound() ? "已绑" : "未绑"}`
           : "";
+      const jobBit =
+        state.chrome === "launch" && state.job !== "none"
+          ? " · 任务已隐藏"
+          : ` · ${jobMap[state.job]}`;
       document.getElementById("stateLabel").textContent =
         state.page === "settings"
-          ? `${pageMap[state.page]}${settingsBit} · ${jobMap[state.job]}`
-          : `${pageMap[state.page]}${phase}${ruleBit} · ${ov} · ${ask} · ${jobMap[state.job]}`;
+          ? `${themeBit} · ${chromeBit} · ${pageMap[state.page]}${settingsBit}${jobBit}`
+          : `${themeBit} · ${chromeBit} · ${pageMap[state.page]}${phase}${ruleBit} · ${ov} · ${ask}${jobBit}`;
     }
 
     function setState(key, value) {
@@ -6260,12 +6851,39 @@
       if (key === "cursorConfigured" && value === "0") {
         setCardEditing(document.getElementById("cursorApiCard"), false);
       }
+      if (key === "theme") applyTheme();
+      if (key === "chrome") applyChrome();
       if (key === "page") applyPage();
       if (key === "ask") applyAsk();
       if (key === "overview") applyOverview();
       if (key === "job") applyJob();
+      if (key === "toastDemo") {
+        state.job = "none";
+        if (state.chrome === "launch") {
+          // 发布态不打断首屏；仍可用操作态看 toast
+          syncControls();
+          updateLabel();
+          return;
+        }
+        if (value === "success") {
+          showToast("已将「机器之心」重命名为「机器之心 Pro」", "success");
+        } else if (value === "error") {
+          showNotice({
+            tone: "error",
+            title: "重命名失败",
+            message: "名称不能为空",
+            hideBar: true,
+            close: true,
+          });
+        }
+        syncControls();
+        updateLabel();
+        return;
+      }
       if (key === "sourcesPhase") renderSourcesPage();
       if (key === "settingsTab") applySettingsTab();
+      applyTheme();
+      applyChrome();
       applyPage();
       applyAsk();
       applyOverview();
@@ -6273,6 +6891,7 @@
       applySettingsTab();
       applyModelConfigured();
       applyCursorConfigured();
+      if (key === "modelConfigured") applyGlobalNotice();
       if (key !== "sourcesPhase") renderSourcesPage();
       syncControls();
       updateLabel();
@@ -6493,6 +7112,12 @@
     initExportMarkdown();
 
     document.getElementById("genBtn").addEventListener("click", () => tryGenerate());
+    document.getElementById("launchGenBtn")?.addEventListener("click", () => tryGenerate());
+    document.getElementById("launchFilterBtn")?.addEventListener("click", () => {
+      state.filterOpen = !state.filterOpen;
+      applyChrome();
+      renderTodayToolbar();
+    });
     document.getElementById("groupSelect").addEventListener("change", () => {
       applyOverview();
       updateLabel();
@@ -6505,8 +7130,11 @@
     document.getElementById("ruleBarPrimary").addEventListener("click", () => openRuleModal("pick"));
     document.getElementById("ruleBarSecondary").addEventListener("click", () => openRuleModal("view"));
     document.getElementById("emptyPickRuleBtn").addEventListener("click", () => openRuleModal("pick"));
+    document.getElementById("emptyPickRuleBtnLaunch")?.addEventListener("click", () => openRuleModal("pick"));
     document.getElementById("emptyGenBtn").addEventListener("click", () => tryGenerate());
+    document.getElementById("emptyGenBtnLaunch")?.addEventListener("click", () => tryGenerate());
     document.getElementById("emptyViewRuleBtn").addEventListener("click", () => openRuleModal("view"));
+    document.getElementById("emptyViewRuleBtnLaunch")?.addEventListener("click", () => openRuleModal("view"));
     document.getElementById("onboardingRuleHintBtn")?.addEventListener("click", () => openRuleModal("explain"));
     document.getElementById("ruleModalClose").addEventListener("click", () => closeRuleModal());
     document.getElementById("ruleModalConfirm").addEventListener("click", () => confirmBindRule());
@@ -6756,14 +7384,19 @@
 
     function commitGroupRename(groupId, name) {
       const next = name.trim();
-      if (!next) return false;
+      if (!next) {
+        showToast("分组名称不能为空", "error", "重命名失败");
+        return false;
+      }
       const fg = FEED_GROUPS.find((g) => g.id === groupId);
       if (!fg || fg.system) return false;
+      const prev = fg.name;
       fg.name = next;
       boardGroups = boardGroups.map((g) => (g.id === groupId ? { ...g, name: next } : g));
       syncGroupSelectOptions();
       renderRulesUsage();
       renderSyncScopeHint();
+      showToast(`已将分组「${prev}」重命名为「${next}」`, "success");
       return true;
     }
 
@@ -6908,6 +7541,7 @@
       }
       refreshScheduleUi();
       closeGroupScheduleModal();
+      showToast("定时已保存", "success");
     }
 
     function handleGroupCtxAction(action) {
@@ -6975,26 +7609,23 @@
       const range = rangeSelect.value === "1" ? "今天" : "近 3 天";
       const detail = rangeSelect.value === "1" ? "7/29" : "7/27–7/29";
       const readiness = document.getElementById("sourcesReadiness");
-      const hint = document.getElementById("sourcesNextHint");
       const updateBtn = document.getElementById("sourcesUpdateBtn");
       const indexBtn = document.getElementById("sourcesIndexBtn");
       updateBtn.style.display = "";
 
-      const { groups, feedCount, names } = selectedScopeStats();
+      const { groups, feedCount } = selectedScopeStats();
       if (groups.length === 0) {
         readiness.textContent = `未勾选分组 · ${range}（${detail}）`;
         readiness.className = "toolbar-status warn";
         updateBtn.disabled = true;
         indexBtn.disabled = true;
         updateBtn.textContent = "更新所选";
-        hint.textContent = "先在侧栏勾选至少一个分组，再更新或建索引。组行 ↻ 仍可单组刷新。";
       } else {
         readiness.textContent = `已选 ${groups.length} 组 · ${feedCount} 源 · ${range}（${detail}）`;
         readiness.className = "toolbar-status ok";
         updateBtn.disabled = false;
         indexBtn.disabled = false;
         updateBtn.textContent = groups.length === selectableGroups().length ? "更新全部" : "更新所选";
-        hint.textContent = `将对「${names.join("、")}」更新列表并拉取正文；建立索引也只覆盖这些组。`;
       }
       updateBtn.className = "btn btn-primary btn-tip";
 
@@ -7013,30 +7644,19 @@
     }
 
     function handleSourcesUpdate() {
-      const { groups, feedCount, names } = selectedScopeStats();
+      const { groups } = selectedScopeStats();
       if (groups.length === 0) return;
       setState("job", "banner");
-      const title = document.getElementById("jobTitle");
-      const msg = document.getElementById("jobMsg");
-      title.textContent = "更新所选";
-      msg.textContent = `正在刷新「${names.join("、")}」… 0 / ${feedCount}`;
     }
 
     function handleSourcesIndex() {
-      const { groups, feedCount, names } = selectedScopeStats();
+      const { groups } = selectedScopeStats();
       if (groups.length === 0) return;
-      setState("job", "combo");
-      const title = document.getElementById("jobTitle");
-      const msg = document.getElementById("jobMsg");
-      title.textContent = "建立索引";
-      msg.textContent = `正在为「${names.join("、")}」共 ${feedCount} 个源建立索引…`;
+      setState("job", "banner");
     }
 
     function handleRefreshGroup(group) {
       setState("job", "banner");
-      document.getElementById("jobTitle").textContent = "更新本组";
-      document.getElementById("jobMsg").textContent =
-        `正在刷新「${group.name}」… 0 / ${group.feeds.length}`;
     }
 
     function toggleGroupScope(groupId, checked) {
@@ -7049,8 +7669,6 @@
     function handleRefreshFeed(feed) {
       if (!feed) return;
       setState("job", "banner");
-      document.getElementById("jobTitle").textContent = "更新源信息";
-      document.getElementById("jobMsg").textContent = `正在刷新「${feed.name}」…`;
     }
 
     function moveFeedToGroup(feedId, fromGroupId, toGroupId) {
@@ -7067,11 +7685,13 @@
       renderArticles();
       renderSourcesPage();
       renderSyncScopeHint();
+      showToast(`已将「${feed.name}」移动到「${to.name}」`, "success");
     }
 
     function deleteFeedFromGroup(feedId, groupId, removeSkill = false) {
       const group = FEED_GROUPS.find((g) => g.id === groupId);
       if (!group) return;
+      const feed = group.feeds.find((f) => f.id === feedId);
       group.feeds = group.feeds.filter((f) => f.id !== feedId);
       if (removeSkill) {
         for (let i = DISCOVERY_SKILLS.length - 1; i >= 0; i -= 1) {
@@ -7088,6 +7708,12 @@
       renderFeedGroups();
       renderArticles();
       renderSourcesPage();
+      if (feed) {
+        showToast(
+          removeSkill ? `已删除「${feed.name}」并移除本地 skill` : `已删除「${feed.name}」`,
+          "success",
+        );
+      }
     }
 
     let pendingDeleteFeed = null;
@@ -7284,12 +7910,18 @@
               });
               editor.querySelector("[data-rename-ok]").addEventListener("click", (e) => {
                 e.stopPropagation();
+                const prev = feed.name;
                 const next = input.value.trim();
-                if (next) feed.name = next;
+                if (!next) {
+                  showToast("名称不能为空", "error", "重命名失败");
+                  return;
+                }
+                feed.name = next;
                 renamingFeedId = null;
                 renameDraft = "";
                 renderFeedGroups();
                 renderArticles();
+                showToast(`已将「${prev}」重命名为「${next}」`, "success");
               });
               editor.querySelector("[data-rename-cancel]").addEventListener("click", (e) => {
                 e.stopPropagation();
@@ -7396,6 +8028,8 @@
     });
     document.addEventListener("click", () => closeAllSchGroupPops());
     document.getElementById("syncAddSchedule")?.addEventListener("click", () => addSyncSchedule());
+    applyTheme();
+    applyChrome();
     applyAskRatio();
     bindAskSplit();
     syncGroupSelectOptions();
@@ -7410,7 +8044,7 @@
     renderArticles();
     renderSourcesPage();
 
-    setState("page", "sources");
+    setState("page", "today");
   </script>
 </body>
 </html>

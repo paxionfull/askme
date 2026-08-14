@@ -9,11 +9,14 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import {
+  cancelChatJob,
   fetchCachedSummary,
+  fetchChatJobStatus,
   fetchRagStatus,
   SCOPED_SUMMARIZE_DEFAULT_MESSAGE,
   streamChat,
   type ArticleScopeItem,
+  type ChatJobStatus,
   type ChatMessagePayload,
   type CitationItem,
   type DigestTree,
@@ -78,6 +81,14 @@ interface ChatContextValue {
 const ChatContext = createContext<ChatContextValue | null>(null);
 
 const RAG_STATUS_CACHE_KEY = "askme.ragStatus";
+const CHAT_BUCKETS_KEY = "askme.chat.buckets";
+
+type ChatBucket = {
+  messages: ChatUiMessage[];
+  scopedArticles: ScopedArticle[];
+  /** 发送时记录的后台任务 id；生成期间刷新页面后用它重新接上未完成的回复。 */
+  pendingJobId?: string;
+};
 
 function loadRagStatusCache(days: number): { ready: boolean; chunk_count: number } | null {
   try {
@@ -101,6 +112,63 @@ function saveRagStatusCache(days: number, ready: boolean, chunk_count: number) {
   );
 }
 
+function isChatUiMessage(value: unknown): value is ChatUiMessage {
+  if (!value || typeof value !== "object") return false;
+  const item = value as ChatUiMessage;
+  return (item.role === "user" || item.role === "assistant") && typeof item.content === "string";
+}
+
+function isScopedArticle(value: unknown): value is ScopedArticle {
+  if (!value || typeof value !== "object") return false;
+  const item = value as ScopedArticle;
+  return (
+    typeof item.feed_id === "string" &&
+    typeof item.article_id === "string" &&
+    typeof item.title === "string" &&
+    typeof item.url === "string"
+  );
+}
+
+function loadChatBuckets(): Record<string, ChatBucket> {
+  try {
+    // 优先 localStorage（与时间范围一致，刷新可恢复）；兼容旧 sessionStorage
+    const raw =
+      localStorage.getItem(CHAT_BUCKETS_KEY) ?? sessionStorage.getItem(CHAT_BUCKETS_KEY);
+    if (!raw || raw === "undefined") return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, ChatBucket> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!value || typeof value !== "object") continue;
+      const bucket = value as {
+        messages?: unknown;
+        scopedArticles?: unknown;
+        pendingJobId?: unknown;
+      };
+      const messages = Array.isArray(bucket.messages)
+        ? bucket.messages.filter(isChatUiMessage)
+        : [];
+      const scopedArticles = Array.isArray(bucket.scopedArticles)
+        ? bucket.scopedArticles.filter(isScopedArticle)
+        : [];
+      const pendingJobId =
+        typeof bucket.pendingJobId === "string" && bucket.pendingJobId ? bucket.pendingJobId : undefined;
+      result[key] = { messages, scopedArticles, pendingJobId };
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function persistChatBuckets(buckets: Record<string, ChatBucket>) {
+  try {
+    localStorage.setItem(CHAT_BUCKETS_KEY, JSON.stringify(buckets));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
 const PHASE_LABELS: Record<string, string> = {
   planning_queries: "正在分析问题…",
   retrieving: "正在检索…",
@@ -109,6 +177,14 @@ const PHASE_LABELS: Record<string, string> = {
 
 function shanghaiDateKey(now = new Date()): string {
   return now.toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+}
+
+function chatScopeKey(days: number, date = shanghaiDateKey()): string {
+  return `${date}:${days}`;
+}
+
+function readBucket(buckets: Record<string, ChatBucket>, key: string): ChatBucket {
+  return buckets[key] ?? { messages: [], scopedArticles: [] };
 }
 
 export function ChatProvider({ children }: { children: ReactNode }) {
@@ -122,17 +198,29 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     selectedGroupIds,
   } = useDigest();
   const initialRagCache = loadRagStatusCache(days);
+  const initialScopeKeyRef = useRef(chatScopeKey(days));
+  const chatBucketsRef = useRef<Record<string, ChatBucket>>(loadChatBuckets());
+  const initialBucketRef = useRef(readBucket(chatBucketsRef.current, initialScopeKeyRef.current));
   const [panelSummary, setPanelSummary] = useState("");
   const [digestTree, setDigestTree] = useState<DigestTree | null>(null);
   const [articleRefs, setArticleRefs] = useState<ScopedArticle[]>([]);
-  const [scopedArticles, setScopedArticles] = useState<ScopedArticle[]>([]);
+  const [scopedArticles, setScopedArticles] = useState<ScopedArticle[]>(
+    () => initialBucketRef.current.scopedArticles,
+  );
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [ragReady, setRagReady] = useState(initialRagCache?.ready ?? false);
   const [chunkCount, setChunkCount] = useState(initialRagCache?.chunk_count ?? 0);
   const [loadingStatus, setLoadingStatus] = useState(!initialRagCache);
   const [statusRevalidating, setStatusRevalidating] = useState(false);
-  const [messages, setMessages] = useState<ChatUiMessage[]>([]);
-  const [citations, setCitations] = useState<CitationItem[]>([]);
+  const [messages, setMessages] = useState<ChatUiMessage[]>(
+    () => initialBucketRef.current.messages,
+  );
+  const [citations, setCitations] = useState<CitationItem[]>(() => {
+    const lastAssistant = [...initialBucketRef.current.messages]
+      .reverse()
+      .find((item) => item.role === "assistant");
+    return lastAssistant?.citations ?? [];
+  });
   const [activeCitationIndex, setActiveCitationIndex] = useState<number | null>(null);
   const [promptPreview, setPromptPreview] = useState("");
   const [input, setInput] = useState("");
@@ -144,12 +232,123 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const prevDigestGeneratingRef = useRef(digestGenerating);
   const messagesRef = useRef(messages);
   const scopedArticlesRef = useRef(scopedArticles);
-  const chatScopeRef = useRef<{ key: string; days: number; date: string } | null>(null);
-  const chatBucketsRef = useRef<
-    Record<string, { messages: ChatUiMessage[]; scopedArticles: ScopedArticle[] }>
-  >({});
+  const chatScopeRef = useRef<{ key: string; days: number; date: string } | null>({
+    key: initialScopeKeyRef.current,
+    days,
+    date: shanghaiDateKey(),
+  });
+  const persistTimerRef = useRef<number | null>(null);
+  const pendingJobIdRef = useRef<string | undefined>(initialBucketRef.current.pendingJobId);
+  const reattachGenerationRef = useRef(0);
+  const reattachTimerRef = useRef<number | null>(null);
   messagesRef.current = messages;
   scopedArticlesRef.current = scopedArticles;
+
+  const persistCurrentChat = useCallback(
+    (next?: { messages?: ChatUiMessage[]; scopedArticles?: ScopedArticle[] }) => {
+      const key = chatScopeRef.current?.key;
+      if (!key) return;
+      const bucket: ChatBucket = {
+        messages: next?.messages ?? messagesRef.current,
+        scopedArticles: next?.scopedArticles ?? scopedArticlesRef.current,
+        pendingJobId: pendingJobIdRef.current,
+      };
+      chatBucketsRef.current[key] = bucket;
+      persistChatBuckets(chatBucketsRef.current);
+    },
+    [],
+  );
+
+  const schedulePersistCurrentChat = useCallback(() => {
+    if (persistTimerRef.current != null) return;
+    persistTimerRef.current = window.setTimeout(() => {
+      persistTimerRef.current = null;
+      persistCurrentChat();
+    }, 200);
+  }, [persistCurrentChat]);
+
+  /** 生成完成 / 出错 / 取消后统一收尾：清掉待恢复任务标记并落盘最终内容。 */
+  const finalizeReattach = useCallback(
+    (finalMessages: ChatUiMessage[], options?: { error?: string }) => {
+      messagesRef.current = finalMessages;
+      setMessages(finalMessages);
+      setSending(false);
+      setStatusMessage("");
+      pendingJobIdRef.current = undefined;
+      if (options?.error) setError(options.error);
+      persistCurrentChat({ messages: finalMessages });
+    },
+    [persistCurrentChat],
+  );
+
+  /** 页面刷新后，若上次生成仍挂着未完成的后台任务，重新接上并继续展示其产出。 */
+  const reattachChatJob = useCallback(
+    (jobId: string) => {
+      const generation = ++reattachGenerationRef.current;
+      const assistantIndex = messagesRef.current.length - 1;
+      if (assistantIndex < 0 || messagesRef.current[assistantIndex]?.role !== "assistant") {
+        pendingJobIdRef.current = undefined;
+        persistCurrentChat();
+        return;
+      }
+
+      setSending(true);
+      setStatusMessage("正在恢复上次生成…");
+      setError("");
+
+      const applyStatus = (data: ChatJobStatus) => {
+        if (reattachGenerationRef.current !== generation) return;
+        const updated = [...messagesRef.current];
+        const prev = updated[assistantIndex];
+        updated[assistantIndex] = {
+          role: "assistant",
+          content: data.content || "",
+          thinking: data.thinking || "",
+          citations: data.citations ?? prev?.citations ?? [],
+        };
+        messagesRef.current = updated;
+        setMessages(updated);
+        if (data.citations) setCitations(data.citations);
+      };
+
+      const poll = async () => {
+        if (reattachGenerationRef.current !== generation) return;
+        let data: ChatJobStatus | null = null;
+        try {
+          data = await fetchChatJobStatus();
+        } catch {
+          reattachTimerRef.current = window.setTimeout(poll, 800);
+          return;
+        }
+        if (reattachGenerationRef.current !== generation) return;
+        if (!data.job_id || data.job_id !== jobId) {
+          finalizeReattach(messagesRef.current, { error: "生成结果已丢失，请重新提问" });
+          return;
+        }
+        applyStatus(data);
+        if (data.status === "running") {
+          reattachTimerRef.current = window.setTimeout(poll, 300);
+          return;
+        }
+        if (data.status === "error") {
+          finalizeReattach(messagesRef.current, { error: data.error || "对话失败" });
+          return;
+        }
+        if (data.status === "cancelled") {
+          const current = messagesRef.current;
+          const last = current[current.length - 1];
+          if (last?.role === "assistant" && !last.content.trim() && !last.thinking?.trim()) {
+            finalizeReattach(current.slice(0, -1));
+            return;
+          }
+        }
+        finalizeReattach(messagesRef.current);
+      };
+
+      void poll();
+    },
+    [finalizeReattach, persistCurrentChat],
+  );
 
   const chatSummary = panelSummary.trim();
   const llmConfigured = Boolean(settings.llmApiKey.trim() && settings.llmModel.trim());
@@ -184,36 +383,57 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [days]);
 
-  const addScopedArticle = useCallback((article: ScopedArticle) => {
-    if (!article.feed_id || !article.article_id) return;
-    if (article.title.includes("尚未建立索引")) return;
-    setScopedArticles([article]);
-  }, []);
+  const addScopedArticle = useCallback(
+    (article: ScopedArticle) => {
+      if (!article.feed_id || !article.article_id) return;
+      if (article.title.includes("尚未建立索引")) return;
+      const next = [article];
+      scopedArticlesRef.current = next;
+      setScopedArticles(next);
+      persistCurrentChat({ scopedArticles: next });
+    },
+    [persistCurrentChat],
+  );
 
-  const addScopedArticles = useCallback((articles: ScopedArticle[]) => {
-    if (articles.length === 0) return;
-    const next: ScopedArticle[] = [];
-    for (const article of articles) {
-      if (!article.feed_id || !article.article_id) continue;
-      if (article.title.includes("尚未建立索引")) continue;
-      if (next.some((item) => item.feed_id === article.feed_id && item.article_id === article.article_id)) {
-        continue;
+  const addScopedArticles = useCallback(
+    (articles: ScopedArticle[]) => {
+      if (articles.length === 0) return;
+      const next: ScopedArticle[] = [];
+      for (const article of articles) {
+        if (!article.feed_id || !article.article_id) continue;
+        if (article.title.includes("尚未建立索引")) continue;
+        if (
+          next.some((item) => item.feed_id === article.feed_id && item.article_id === article.article_id)
+        ) {
+          continue;
+        }
+        next.push(article);
       }
-      next.push(article);
-    }
-    if (next.length === 0) return;
-    setScopedArticles(next);
-  }, []);
+      if (next.length === 0) return;
+      scopedArticlesRef.current = next;
+      setScopedArticles(next);
+      persistCurrentChat({ scopedArticles: next });
+    },
+    [persistCurrentChat],
+  );
 
-  const removeScopedArticle = useCallback((feedId: string, articleId: string) => {
-    setScopedArticles((current) =>
-      current.filter((item) => !(item.feed_id === feedId && item.article_id === articleId)),
-    );
-  }, []);
+  const removeScopedArticle = useCallback(
+    (feedId: string, articleId: string) => {
+      const next = scopedArticlesRef.current.filter(
+        (item) => !(item.feed_id === feedId && item.article_id === articleId),
+      );
+      scopedArticlesRef.current = next;
+      setScopedArticles(next);
+      persistCurrentChat({ scopedArticles: next });
+    },
+    [persistCurrentChat],
+  );
 
   const clearScopedArticles = useCallback(() => {
+    scopedArticlesRef.current = [];
     setScopedArticles([]);
-  }, []);
+    persistCurrentChat({ scopedArticles: [] });
+  }, [persistCurrentChat]);
 
   const loadPanelSummary = useCallback(async () => {
     if (selectedGroupIds.length === 0) {
@@ -277,49 +497,61 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const stopGeneration = useCallback(() => {
     abortRef.current?.abort();
     setStatusMessage("");
+    if (pendingJobIdRef.current) {
+      void cancelChatJob().catch(() => {});
+    }
   }, []);
 
   const applyChatBucket = useCallback(
-    (bucket: { messages: ChatUiMessage[]; scopedArticles: ScopedArticle[] }) => {
+    (bucket: ChatBucket) => {
       abortRef.current?.abort();
       abortRef.current = null;
+      reattachGenerationRef.current += 1;
+      if (reattachTimerRef.current != null) {
+        window.clearTimeout(reattachTimerRef.current);
+        reattachTimerRef.current = null;
+      }
       setSending(false);
       setStatusMessage("");
       setError("");
       setPromptPreview("");
       setActiveCitationIndex(null);
+      messagesRef.current = bucket.messages;
+      scopedArticlesRef.current = bucket.scopedArticles;
+      pendingJobIdRef.current = bucket.pendingJobId;
       setMessages(bucket.messages);
       setScopedArticles(bucket.scopedArticles);
       const lastAssistant = [...bucket.messages]
         .reverse()
         .find((item) => item.role === "assistant");
       setCitations(lastAssistant?.citations ?? []);
+      persistCurrentChat({
+        messages: bucket.messages,
+        scopedArticles: bucket.scopedArticles,
+      });
+      if (bucket.pendingJobId) {
+        reattachChatJob(bucket.pendingJobId);
+      }
     },
-    [],
+    [persistCurrentChat, reattachChatJob],
   );
 
   const switchChatScope = useCallback(
     (nextDays: number, nextDate: string) => {
-      const nextKey = `${nextDate}:${nextDays}`;
+      const nextKey = chatScopeKey(nextDays, nextDate);
       const prev = chatScopeRef.current;
       if (prev?.key === nextKey) return false;
 
       if (prev) {
-        chatBucketsRef.current[prev.key] = {
-          messages: messagesRef.current,
-          scopedArticles: scopedArticlesRef.current,
-        };
+        persistCurrentChat();
       }
 
-      const restored = chatBucketsRef.current[nextKey] ?? {
-        messages: [],
-        scopedArticles: [],
-      };
+      const restored = readBucket(chatBucketsRef.current, nextKey);
       chatScopeRef.current = { key: nextKey, days: nextDays, date: nextDate };
       applyChatBucket(restored);
       return true;
     },
-    [applyChatBucket],
+    [applyChatBucket, persistCurrentChat],
   );
 
   const clearMessages = useCallback(() => {
@@ -332,18 +564,44 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setError("");
     setStatusMessage("");
     setSending(false);
-    const key = chatScopeRef.current?.key;
-    if (key) {
-      chatBucketsRef.current[key] = {
-        messages: [],
-        scopedArticles: scopedArticlesRef.current,
-      };
-    }
-  }, []);
+    messagesRef.current = [];
+    persistCurrentChat({ messages: [], scopedArticles: scopedArticlesRef.current });
+  }, [persistCurrentChat]);
 
   useEffect(() => {
     switchChatScope(days, shanghaiDateKey());
   }, [days, switchChatScope]);
+
+  // 首次挂载：若刷新前正巧在生成中，恢复该任务的产出（switchChatScope 因 scope 未变不会触发）
+  useEffect(() => {
+    if (initialBucketRef.current.pendingJobId) {
+      reattachChatJob(initialBucketRef.current.pendingJobId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 刷新 / 切后台时强制落盘（生成中 useEffect 来不及写也会保住）
+  useEffect(() => {
+    const flush = () => {
+      if (persistTimerRef.current != null) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+      persistCurrentChat();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      flush();
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [persistCurrentChat]);
 
   useEffect(() => {
     const syncCalendarDay = () => {
@@ -411,7 +669,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         { role: "user", content, scoped_articles: scopedSnapshot },
       ];
       const assistantIndex = nextMessages.length;
-      setMessages([...nextMessages, { role: "assistant", content: "", thinking: "", citations: [] }]);
+      const seededMessages: ChatUiMessage[] = [
+        ...nextMessages,
+        { role: "assistant", content: "", thinking: "", citations: [] },
+      ];
+      messagesRef.current = seededMessages;
+      pendingJobIdRef.current = undefined;
+      setMessages(seededMessages);
+      persistCurrentChat({ messages: seededMessages });
       setInput("");
       setSending(true);
       setError("");
@@ -441,6 +706,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             }))
           : undefined;
 
+      const commitAssistant = (options?: { flushUi?: boolean; persistNow?: boolean }) => {
+        const updated = [...messagesRef.current];
+        updated[assistantIndex] = {
+          role: "assistant",
+          content: assistantContent,
+          thinking: assistantThinking,
+          citations: assistantCitations,
+        };
+        // 先写 ref，刷新时 pagehide 能读到最新内容
+        messagesRef.current = updated;
+        if (options?.flushUi) {
+          flushSync(() => setMessages(updated));
+        } else {
+          setMessages(updated);
+        }
+        if (options?.persistNow) {
+          persistCurrentChat({ messages: updated });
+        } else {
+          schedulePersistCurrentChat();
+        }
+      };
+
       try {
         await streamChat(
           {
@@ -457,92 +744,101 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           },
           (token) => {
             assistantContent += token;
-            flushSync(() => {
-              setMessages((current) => {
-                const updated = [...current];
-                updated[assistantIndex] = {
-                  role: "assistant",
-                  content: assistantContent,
-                  thinking: assistantThinking,
-                  citations: assistantCitations,
-                };
-                return updated;
-              });
-            });
+            commitAssistant({ flushUi: true });
           },
           () => {
+            // 走到这里说明后端确实发了 done：生成已真正结束，可以放心清掉 pendingJobId。
             setSending(false);
             setStatusMessage("");
-            if (controller.signal.aborted) {
-              setMessages((current) => {
-                const last = current[current.length - 1];
-                if (
-                  last?.role === "assistant" &&
-                  !last.content.trim() &&
-                  !last.thinking?.trim()
-                ) {
-                  return current.slice(0, -1);
-                }
-                return current;
-              });
-            }
+            pendingJobIdRef.current = undefined;
+            persistCurrentChat({ messages: messagesRef.current });
           },
           (message) => {
             setError(message);
             setSending(false);
             setStatusMessage("");
+            pendingJobIdRef.current = undefined;
+            persistCurrentChat({ messages: messagesRef.current });
           },
           (status) => {
             const label = status.message || (status.phase ? PHASE_LABELS[status.phase] : "");
             if (label) setStatusMessage(label);
+            if (status.job_id && status.job_id !== pendingJobIdRef.current) {
+              pendingJobIdRef.current = status.job_id;
+              persistCurrentChat();
+            }
           },
           (chunk) => {
             assistantThinking += chunk;
-            flushSync(() => {
-              setMessages((current) => {
-                const updated = [...current];
-                updated[assistantIndex] = {
-                  role: "assistant",
-                  content: assistantContent,
-                  thinking: assistantThinking,
-                  citations: assistantCitations,
-                };
-                return updated;
-              });
-            });
+            commitAssistant({ flushUi: true });
           },
           (items) => {
             assistantCitations = items;
             setCitations(items);
-            setMessages((current) => {
-              const updated = [...current];
-              updated[assistantIndex] = {
-                role: "assistant",
-                content: assistantContent,
-                thinking: assistantThinking,
-                citations: items,
-              };
-              return updated;
-            });
+            commitAssistant({ persistNow: true });
           },
           (preview) => {
             setPromptPreview(preview);
           },
           controller.signal,
+          {
+            // 连接中断（页面刷新/卸载、网络抖动，或我们自己调用 stopGeneration 主动断开）：
+            // 后台任务与本次连接生命周期无关，很可能仍在运行，不能像 onDone 那样直接清空
+            // pendingJobId——否则刷新后就再也接不上这次生成了。标签页还活着就立刻续上继续显示；
+            // 真的被刷新掉的话，pendingJobId 已经落盘，下次挂载时会自动重新接上。
+            onCancelled: () => {
+              if (pendingJobIdRef.current) {
+                reattachChatJob(pendingJobIdRef.current);
+                return;
+              }
+              setSending(false);
+              setStatusMessage("");
+              const current = messagesRef.current;
+              const last = current[current.length - 1];
+              if (last?.role === "assistant" && !last.content.trim() && !last.thinking?.trim()) {
+                const trimmedMessages = current.slice(0, -1);
+                messagesRef.current = trimmedMessages;
+                setMessages(trimmedMessages);
+                persistCurrentChat({ messages: trimmedMessages });
+                return;
+              }
+              persistCurrentChat({ messages: messagesRef.current });
+            },
+          },
         );
       } catch (err) {
-        if (!(err instanceof DOMException && err.name === "AbortError")) {
+        const isAbort = err instanceof DOMException && err.name === "AbortError";
+        if (!isAbort) {
           setError(err instanceof Error ? err.message : "发送失败");
         }
         setSending(false);
         setStatusMessage("");
+        // 注意：这里不清空 pendingJobIdRef——极早期（连响应头都没收到）就断连时才会走到这里，
+        // 此时若已经拿到过 job_id，后台任务可能已经起来了，清空会导致刷新后接不上。
       } finally {
+        if (persistTimerRef.current != null) {
+          window.clearTimeout(persistTimerRef.current);
+          persistTimerRef.current = null;
+        }
+        persistCurrentChat();
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
       }
     },
-    [chatSummary, days, effectiveRagReady, enableDeepThinking, llmConfigured, messages, scopedArticles, sending],
+    [
+      chatSummary,
+      days,
+      effectiveRagReady,
+      enableDeepThinking,
+      llmConfigured,
+      messages,
+      persistCurrentChat,
+      reattachChatJob,
+      schedulePersistCurrentChat,
+      scopedArticles,
+      sending,
+    ],
   );
 
   return (

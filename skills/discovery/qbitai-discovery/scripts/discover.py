@@ -69,7 +69,8 @@ def fetch_list_page(page: int = 1, per: int = 20) -> dict:
         {
             "page": page,
             "per_page": per,
-            "_fields": "id,link,title,date,excerpt,content",
+            # 列表只需元数据；带 content 会把整页正文塞进 JSON，慢源上极易读超时
+            "_fields": "id,link,title,date,excerpt",
         }
     )
     body, headers = _request(f"{API_URL}?{query}")

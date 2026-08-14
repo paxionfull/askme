@@ -99,8 +99,6 @@ async def _sse_onboard_stream(body: OnboardSourceRequest, request: Request):
                     feed_client.reload_skills()
                     result_data["feed_count"] = len(await feed_client.list_feeds())
                 feed_id = str(result_data.get("feed_id") or "").strip()
-                if target_group_id and feed_id:
-                    feed_registry.assign_feed_to_group(feed_id, target_group_id)
                 if feed_id:
                     yield sse_event(
                         "status",
@@ -155,6 +153,8 @@ async def _sse_onboard_stream(body: OnboardSourceRequest, request: Request):
                             },
                         )
                         return
+                    if target_group_id and feed_id:
+                        feed_registry.assign_feed_to_group(feed_id, target_group_id)
                     result_data["refresh"] = refresh_result
                     repaired = bool(refresh_result.get("auto_repaired"))
                     done_msg = str(refresh_result.get("message") or "文章拉取完成")
@@ -344,8 +344,6 @@ async def onboard_source(body: OnboardSourceRequest, request: Request):
         feed_client.reload_skills()
         result_data["feed_count"] = len(await feed_client.list_feeds())
     feed_id = str(result_data.get("feed_id") or "").strip()
-    if target_group_id and feed_id:
-        feed_registry.assign_feed_to_group(feed_id, target_group_id)
     if feed_id:
         refresh_result: dict | None = None
         async for refresh_event in refresh_with_auto_repair(
@@ -359,6 +357,8 @@ async def onboard_source(body: OnboardSourceRequest, request: Request):
                 refresh_result = refresh_event.get("data") or {}
         if refresh_result is None:
             raise HTTPException(status_code=502, detail="首拉未返回结果")
+        if target_group_id and feed_id:
+            feed_registry.assign_feed_to_group(feed_id, target_group_id)
         result_data["refresh"] = refresh_result
     return result_data
 

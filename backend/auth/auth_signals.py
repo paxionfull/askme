@@ -227,44 +227,12 @@ def classify_exception_as_auth(exc: BaseException | str) -> dict[str, Any] | Non
     message = str(exc)
     slot = parse_auth_required_slot(message)
     if is_auth_gate_error(message) or slot or looks_like_auth_error(message):
-        result = {
+        return {
             "auth_required": True,
             "slot": slot,
             "message": message,
             "gate": is_auth_gate_error(message) or bool(slot),
         }
-        # region agent log
-        try:
-            import json
-            import time
-
-            with open(
-                "/Users/zhuyuyao/Documents/llm应用/askme/.cursor/debug-fed963.log",
-                "a",
-                encoding="utf-8",
-            ) as fh:
-                fh.write(
-                    json.dumps(
-                        {
-                            "sessionId": "fed963",
-                            "location": "auth_signals.py:classify_exception_as_auth",
-                            "message": "classified as auth error",
-                            "data": {
-                                "slot": slot,
-                                "gate": result["gate"],
-                                "snippet": message[:240],
-                            },
-                            "hypothesisId": "C",
-                            "timestamp": int(time.time() * 1000),
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-        # endregion
-        return result
     return None
 
 

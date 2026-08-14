@@ -5,6 +5,7 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from typing import AsyncIterator, Callable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -73,14 +74,26 @@ async def lifespan(app: FastAPI):
     feed_scheduler.shutdown()
 
 
-app = FastAPI(title="Askme API", lifespan=lifespan)
+@asynccontextmanager
+async def empty_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """测试用：跳过调度器、迁移与后台刷新。"""
+    yield
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-register_routers(app)
+def create_app(
+    *,
+    lifespan_override: Callable[[FastAPI], AsyncIterator[None]] | None = None,
+) -> FastAPI:
+    app = FastAPI(title="Askme API", lifespan=lifespan_override or lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    register_routers(app)
+    return app
+
+
+app = create_app()

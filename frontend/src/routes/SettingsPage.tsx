@@ -41,9 +41,9 @@ interface LlmDraft {
 type SettingsTab = "model" | "skill" | "sync" | "auth";
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "model", label: "API Key" },
   { id: "skill", label: "Skills" },
   { id: "sync", label: "定时" },
+  { id: "model", label: "API Key" },
   { id: "auth", label: "Cookie" },
 ];
 

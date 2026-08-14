@@ -1,4 +1,4 @@
-"""可刷新后恢复的后台任务：拉取正文、建立索引、生成概览。"""
+"""可刷新后恢复的后台任务：拉取正文、建立索引、生成概览、对话生成。"""
 
 from __future__ import annotations
 
@@ -15,6 +15,51 @@ def _new_job_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
+class ChatJobCallbacks:
+    """传给对话生成 runner 的回调；runner 内调用即写入任务缓冲区，与请求连接生命周期无关。"""
+
+    def __init__(self, manager: "ContentJobManager", job_id: str) -> None:
+        self._manager = manager
+        self._job_id = job_id
+
+    def _live(self) -> bool:
+        return self._manager._chat.get("job_id") == self._job_id
+
+    def append_content(self, token: str) -> None:
+        if not token or not self._live():
+            return
+        self._manager._chat["content"] = self._manager._chat.get("content", "") + token
+
+    def append_thinking(self, chunk: str) -> None:
+        if not chunk or not self._live():
+            return
+        self._manager._chat["thinking"] = self._manager._chat.get("thinking", "") + chunk
+
+    def set_citations(self, items: list[dict[str, Any]]) -> None:
+        if not self._live():
+            return
+        self._manager._chat["citations"] = items
+
+    def set_prompt_preview(self, preview: dict[str, Any]) -> None:
+        if not self._live():
+            return
+        self._manager._chat["prompt_preview"] = preview
+
+    def set_status(self, phase: str, message: str = "") -> None:
+        if not self._live():
+            return
+        if phase:
+            self._manager._chat["phase"] = phase
+        if message:
+            self._manager._chat["message"] = message
+
+    def is_cancelled(self) -> bool:
+        if not self._live():
+            return True
+        cancel = self._manager._chat_cancel
+        return cancel is not None and cancel.is_set()
+
+
 class ContentJobManager:
     """单例式后台任务管理。同类型同时只允许一个运行。"""
 
@@ -22,11 +67,14 @@ class ContentJobManager:
         self._lock = asyncio.Lock()
         self._bodies_task: asyncio.Task | None = None
         self._index_task: asyncio.Task | None = None
+        self._chat_task: asyncio.Task | None = None
         self._bodies: dict[str, Any] = self._idle_state("bodies")
         self._index: dict[str, Any] = self._idle_state("index")
         self._summarize: dict[str, Any] = self._idle_state("summarize")
+        self._chat: dict[str, Any] = self._idle_chat_state()
         self._summarize_cancel: asyncio.Event | None = None
         self._bodies_cancel: asyncio.Event | None = None
+        self._chat_cancel: asyncio.Event | None = None
 
     @staticmethod
     def _idle_state(kind: str) -> dict[str, Any]:
@@ -43,6 +91,24 @@ class ContentJobManager:
             "started_at": None,
             "finished_at": None,
             "phase": "",
+        }
+
+    @staticmethod
+    def _idle_chat_state() -> dict[str, Any]:
+        return {
+            "job_id": None,
+            "kind": "chat",
+            "status": "idle",
+            "phase": "",
+            "message": "",
+            "content": "",
+            "thinking": "",
+            "citations": None,
+            "prompt_preview": None,
+            "error": None,
+            "result": None,
+            "started_at": None,
+            "finished_at": None,
         }
 
     def get_bodies_status(self) -> dict[str, Any]:
@@ -331,6 +397,82 @@ class ContentJobManager:
 
             self._index_task = asyncio.create_task(worker())
             return {"started": True, **self.get_index_status()}
+
+    def get_chat_status(self) -> dict[str, Any]:
+        return dict(self._chat)
+
+    def is_chat_running(self) -> bool:
+        return self._chat.get("status") == "running"
+
+    def start_chat(
+        self,
+        *,
+        runner: Callable[[ChatJobCallbacks], Awaitable[dict[str, Any] | None]],
+    ) -> dict[str, Any]:
+        """启动对话生成后台任务，与请求/响应生命周期解耦；页面刷新不会中断生成。
+
+        若已有对话任务在跑（如用户编辑重发、或旧任务未及时结束），新请求直接抢占：
+        取消旧任务并立刻开始新的，旧任务的回调会因 job_id 不匹配自动失效。
+        """
+        if self.is_chat_running():
+            if self._chat_cancel is not None:
+                self._chat_cancel.set()
+            if self._chat_task is not None and not self._chat_task.done():
+                self._chat_task.cancel()
+        job_id = _new_job_id("chat")
+        self._chat_cancel = asyncio.Event()
+        self._chat = {
+            **self._idle_chat_state(),
+            "job_id": job_id,
+            "status": "running",
+            "started_at": time.time(),
+        }
+        callbacks = ChatJobCallbacks(self, job_id)
+
+        async def worker() -> None:
+            try:
+                result = await runner(callbacks)
+                if self._chat.get("job_id") != job_id:
+                    return
+                if callbacks.is_cancelled():
+                    self._chat.update({"status": "cancelled", "finished_at": time.time()})
+                else:
+                    self._chat.update(
+                        {
+                            "status": "done",
+                            "result": result or {},
+                            "finished_at": time.time(),
+                        }
+                    )
+            except asyncio.CancelledError:
+                if self._chat.get("job_id") == job_id:
+                    self._chat.update({"status": "cancelled", "finished_at": time.time()})
+            except Exception as exc:
+                logger.exception("对话生成后台任务失败")
+                if self._chat.get("job_id") != job_id:
+                    return
+                self._chat.update(
+                    {
+                        "status": "error",
+                        "error": str(exc) or "对话生成失败",
+                        "finished_at": time.time(),
+                    }
+                )
+            finally:
+                # 被新任务抢占时 job_id 已不同，不能清掉新任务的 task/cancel 引用
+                if self._chat.get("job_id") == job_id:
+                    self._chat_task = None
+                    self._chat_cancel = None
+
+        self._chat_task = asyncio.create_task(worker())
+        return {"started": True, **self.get_chat_status()}
+
+    def request_chat_cancel(self) -> bool:
+        if not self.is_chat_running():
+            return False
+        if self._chat_cancel is not None:
+            self._chat_cancel.set()
+        return True
 
 
 content_job_manager = ContentJobManager()

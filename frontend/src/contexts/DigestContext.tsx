@@ -43,8 +43,27 @@ export interface SummaryGroupOption {
 }
 
 const SELECTED_GROUPS_KEY = "askme.digest.selectedGroupIds";
+const DAYS_KEY = "askme.digest.days";
 const SUMMARIZE_JOB_SYNC_KEY = "askme.summarizeJobTick";
 const SUMMARIZE_JOB_CHANNEL = "askme.summarizeJob";
+
+function loadStoredDays(fallback: DefaultDays): DefaultDays {
+  try {
+    const raw = localStorage.getItem(DAYS_KEY);
+    if (raw === null) return fallback;
+    return normalizeDefaultDays(Number(raw));
+  } catch {
+    return fallback;
+  }
+}
+
+function persistDays(days: DefaultDays) {
+  try {
+    localStorage.setItem(DAYS_KEY, String(days));
+  } catch {
+    // ignore quota / private mode
+  }
+}
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => {
@@ -70,15 +89,14 @@ function notifySummarizeJobSync() {
 function buildSummaryGroupOptions(feeds: Feed[], groups: FeedGroup[]): SummaryGroupOption[] {
   const assigned = new Set(groups.flatMap((group) => group.feed_ids));
   const ungroupedFeedIds = feeds.filter((feed) => !assigned.has(feed.id)).map((feed) => feed.id);
-  const options: SummaryGroupOption[] = groups
-    .map((group) => ({
-      id: group.id,
-      name: group.name,
-      feedCount: group.feed_ids.length,
-      feedIds: [...group.feed_ids],
-      digestSkillId: group.digest_skill_id,
-    }))
-    .filter((group) => group.feedCount > 0);
+  // 空分组也展示：新建后即可在简报页绑定整理规则；有源后再生成
+  const options: SummaryGroupOption[] = groups.map((group) => ({
+    id: group.id,
+    name: group.name,
+    feedCount: group.feed_ids.length,
+    feedIds: [...group.feed_ids],
+    digestSkillId: group.digest_skill_id,
+  }));
 
   if (ungroupedFeedIds.length > 0) {
     options.push({
@@ -142,6 +160,8 @@ interface DigestContextValue {
   truncated: boolean;
   metaCount: number;
   bodyCount: number;
+  /** 当前选中分组 + 时间范围内的文章数（列表篇数） */
+  scopeArticleCount: number | null;
   cachedCount: number;
   fetchedCount: number;
   bodyProgress: { current: number; total: number; message: string };
@@ -179,9 +199,13 @@ const DigestContext = createContext<DigestContextValue | null>(null);
 
 export function DigestProvider({ children }: { children: ReactNode }) {
   const { settings } = useSettings();
-  const [days, setDaysState] = useState<DefaultDays>(normalizeDefaultDays(settings.defaultDays));
+  const [days, setDaysState] = useState<DefaultDays>(() =>
+    loadStoredDays(normalizeDefaultDays(settings.defaultDays)),
+  );
   const setDays = useCallback((value: DefaultDays) => {
-    setDaysState(normalizeDefaultDays(value));
+    const next = normalizeDefaultDays(value);
+    setDaysState(next);
+    persistDays(next);
   }, []);
   const [summaryGroupOptions, setSummaryGroupOptions] = useState<SummaryGroupOption[]>([]);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
@@ -192,6 +216,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
   const [truncated, setTruncated] = useState(false);
   const [metaCount, setMetaCount] = useState(0);
   const [bodyCount, setBodyCount] = useState(0);
+  const [scopeArticleCount, setScopeArticleCount] = useState<number | null>(null);
   const [cachedCount, setCachedCount] = useState(0);
   const [fetchedCount, setFetchedCount] = useState(0);
   const [bodyProgress, setBodyProgress] = useState({ current: 0, total: 0, message: "" });
@@ -220,6 +245,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
   const indexBuildInFlightRef = useRef(false);
   const indexBuildGenerationRef = useRef(0);
   const bodiesInFlightRef = useRef(false);
+  const syncedDefaultDaysRef = useRef(settings.defaultDays);
 
   const bodiesReady = bodiesLoadedForDays === days && bodyCount > 0;
   const indexReady = indexBuiltForDays === days && indexChunkCount > 0;
@@ -247,7 +273,10 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // 设置页修改「默认时间范围」时同步；首屏不覆盖已持久化的当前选择
   useEffect(() => {
+    if (syncedDefaultDaysRef.current === settings.defaultDays) return;
+    syncedDefaultDaysRef.current = settings.defaultDays;
     setDays(normalizeDefaultDays(settings.defaultDays));
   }, [settings.defaultDays, setDays]);
 
@@ -300,6 +329,35 @@ export function DigestProvider({ children }: { children: ReactNode }) {
   }, [days]);
 
   const selectedGroupIdsKey = selectedGroupIds.join("\0");
+  const selectedScopeFeedIdsKey = selectedGroupIds
+    .map((id) => summaryGroupOptions.find((group) => group.id === id)?.feedIds.join(",") ?? "")
+    .join("|");
+
+  useEffect(() => {
+    let cancelled = false;
+    const selected = summaryGroupOptions.find((group) => group.id === selectedGroupIds[0]);
+    const feedIds = selected?.feedIds ?? [];
+
+    if (!selected || feedIds.length === 0) {
+      setScopeArticleCount(selected ? 0 : null);
+      return;
+    }
+
+    void fetchRecentArticles(days, feedIds, false)
+      .then((data) => {
+        if (cancelled) return;
+        setScopeArticleCount(data.meta_count ?? data.articles?.length ?? 0);
+      })
+      .catch(() => {
+        if (!cancelled) setScopeArticleCount(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // selectedGroupIds / summaryGroupOptions 通过 key 追踪；loadingBodies 结束后刷新篇数
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional key-based deps
+  }, [days, selectedGroupIdsKey, selectedScopeFeedIdsKey, loadingBodies]);
 
   const loadCachedSummary = useCallback(async () => {
     if (generatingRef.current) {
@@ -717,6 +775,10 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       setSummaryError("当前板块尚未设置整理规则，无法生成简报");
       return;
     }
+    if (scopeArticleCount === 0) {
+      setSummaryError("所选时间范围内没有文章");
+      return;
+    }
     if (summarizeInFlightRef.current) {
       return;
     }
@@ -831,6 +893,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     days,
     loadCachedSummary,
     resetSummarizeUi,
+    scopeArticleCount,
     selectedGroupIds,
     summaryGroupOptions,
     watchSummarizeJob,
@@ -902,6 +965,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         truncated,
         metaCount,
         bodyCount,
+        scopeArticleCount,
         cachedCount,
         fetchedCount,
         bodyProgress,

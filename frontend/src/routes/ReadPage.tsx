@@ -536,6 +536,7 @@ export default function ReadPage() {
       setDeleteTarget(null);
       setDeleteRemoveSkill(false);
       setInfo(deleteFeedSuccessMessage(result));
+      await reloadSummaryGroups();
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除失败");
     } finally {
@@ -575,6 +576,7 @@ export default function ReadPage() {
         setInfo(`已删除 ${feedIds.length} 个源`);
       }
     }
+    await reloadSummaryGroups();
     return { removedSkill };
   }
 
@@ -711,6 +713,7 @@ export default function ReadPage() {
     setGroupOrder(result.group_order ?? []);
     const latest = await fetchFeeds();
     setFeeds(latest.feeds);
+    await reloadSummaryGroups();
   }
 
   const combinedError = error || digestError;

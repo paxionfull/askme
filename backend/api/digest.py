@@ -55,7 +55,7 @@ def _no_body_detail(meta_count: int) -> str:
             f"找到 {meta_count} 篇文章，但均无法获取正文。"
             "请先在「数据源」页刷新订阅后重试。"
         )
-    return "所选时间范围内暂无文章，请先到「数据源」页刷新订阅。"
+    return "所选时间范围内没有文章"
 
 
 NO_CACHED_CONTEXT_DETAIL = "请先在数据源页点击「拉取正文」后再生成概览。"
@@ -82,6 +82,8 @@ async def _resolve_summarize_context(body: SummarizeRequest) -> dict:
 
 
 def _summarize_context_error(body: SummarizeRequest, meta_count: int) -> str:
+    if meta_count <= 0:
+        return "所选时间范围内没有文章"
     if body.use_cached_context:
         return NO_CACHED_CONTEXT_DETAIL
     return _no_body_detail(meta_count)

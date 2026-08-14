@@ -318,32 +318,6 @@ export default function AddSourceModal({
       void precheckSourceAuth(parsedUrls)
         .then((result) => {
           if (!cancelled) setPrecheck(result);
-          // #region agent log
-          fetch("http://127.0.0.1:7634/ingest/b537ae99-3d07-4783-ab5c-dba4b6f73463", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Debug-Session-Id": "fed963",
-            },
-            body: JSON.stringify({
-              sessionId: "fed963",
-              location: "AddSourceModal.tsx:precheck",
-              message: "auth precheck result",
-              data: {
-                urls: parsedUrls,
-                can_proceed: result.can_proceed,
-                items: (result.items || []).map((item) => ({
-                  entry_url: item.entry_url,
-                  requires_auth: item.requires_auth,
-                  configured: item.configured,
-                  slot: item.slot,
-                })),
-              },
-              hypothesisId: "B",
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion
         })
         .catch((err) => {
           if (!cancelled) {

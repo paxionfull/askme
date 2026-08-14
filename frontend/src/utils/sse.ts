@@ -165,6 +165,13 @@ export async function streamPost(
       }
       return;
     }
+    // 任何在读取过程中抛出的异常（网络中断、页面刷新导致连接被浏览器强制关闭等）
+    // 都无法确定后端任务是否仍在运行，因此优先按“连接中断”处理以便重新挂载，
+    // 而不是当作明确的业务错误（onError）直接判定任务失败。
+    if (onCancelled) {
+      onCancelled(err instanceof Error ? err.message : "连接已断开");
+      return;
+    }
     onError(err instanceof Error ? err.message : "流式读取失败");
   }
 }

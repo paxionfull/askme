@@ -101,6 +101,10 @@ class FeedClient:
         for feed_id in sorted(new_ids):
             if feed_registry.is_hidden(feed_id):
                 continue
+            # 接入流程会先把源分到目标组，再 ensure_feed_visible → reload。
+            # hide_feed 会清空分组；若已在分组中说明用户刚接入，不要默认隐藏。
+            if feed_registry.group_id_for_feed(feed_id):
+                continue
             feed_registry.hide_feed(feed_id)
             hidden_count += 1
 

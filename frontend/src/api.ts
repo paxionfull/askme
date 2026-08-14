@@ -872,6 +872,7 @@ export function streamChat(
   onCitations?: (items: CitationItem[]) => void,
   onPromptPreview?: (system: string) => void,
   signal?: AbortSignal,
+  options?: { onCancelled?: (detail: string, jobId?: string) => void },
 ) {
   return streamPost(
     "/api/chat",
@@ -885,9 +886,30 @@ export function streamChat(
     onPromptPreview,
     undefined,
     undefined,
-    undefined,
+    options?.onCancelled,
     signal,
   );
+}
+
+export interface ChatJobStatus {
+  job_id: string | null;
+  status: "idle" | "running" | "done" | "error" | "cancelled";
+  phase?: string;
+  message?: string;
+  content: string;
+  thinking: string;
+  citations: CitationItem[] | null;
+  prompt_preview?: { system?: string } | null;
+  error: string | null;
+  result?: { has_summary?: boolean } | null;
+}
+
+export function fetchChatJobStatus() {
+  return request<ChatJobStatus>("/api/chat/jobs/current");
+}
+
+export function cancelChatJob() {
+  return request<{ ok: boolean }>("/api/chat/jobs/cancel", { method: "POST" });
 }
 
 export interface RepairSourceBody {

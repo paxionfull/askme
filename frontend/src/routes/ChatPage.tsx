@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   fetchDigestSkills,
@@ -53,6 +53,41 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
       'a, button, input, textarea, select, summary, label, [role="button"], [role="menuitem"], [contenteditable="true"]',
     ),
   );
+}
+
+const CHAT_MESSAGES_SCROLL_KEY = "askme.chat.messagesScroll";
+
+type SavedMessagesScroll = {
+  scopeKey: string;
+  top: number;
+  stick: boolean;
+};
+
+function messagesScrollScopeKey(days: number): string {
+  return String(days);
+}
+
+function loadSavedMessagesScroll(scopeKey: string): SavedMessagesScroll | null {
+  try {
+    const raw = sessionStorage.getItem(CHAT_MESSAGES_SCROLL_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SavedMessagesScroll>;
+    if (parsed.scopeKey !== scopeKey || typeof parsed.top !== "number") return null;
+    return { scopeKey, top: parsed.top, stick: Boolean(parsed.stick) };
+  } catch {
+    return null;
+  }
+}
+
+function persistMessagesScroll(scopeKey: string, top: number, stick: boolean) {
+  try {
+    sessionStorage.setItem(
+      CHAT_MESSAGES_SCROLL_KEY,
+      JSON.stringify({ scopeKey, top, stick } satisfies SavedMessagesScroll),
+    );
+  } catch {
+    // ignore quota / private mode
+  }
 }
 
 function getSubmitDisabledTitle(params: {
@@ -138,6 +173,14 @@ export default function ChatPage() {
     useIndexBuildConfirm();
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
+  /** 仅当用户已在底部附近时才跟滚；刷新后先恢复保存的滚动位置。 */
+  const stickToBottomRef = useRef(false);
+  const pendingScrollRestoreRef = useRef<SavedMessagesScroll | null>(
+    loadSavedMessagesScroll(messagesScrollScopeKey(days)),
+  );
+  const suppressScrollPersistRef = useRef(false);
+  const scrollScopeKeyRef = useRef(messagesScrollScopeKey(days));
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const overviewScrollRef = useRef<HTMLDivElement>(null);
@@ -317,6 +360,11 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
+    // 从源页切回时刷新板块列表（DigestProvider 常驻，不会自动重载）
+    void reloadSummaryGroups();
+  }, [reloadSummaryGroups]);
+
+  useEffect(() => {
     void fetchDigestSkills()
       .then((data) => setDigestSkills(data.skills))
       .catch(() => setDigestSkills([]));
@@ -384,6 +432,9 @@ export default function ChatPage() {
     if (sending) return;
     if (canSubmit) {
       setComposerNudge(false);
+      stickToBottomRef.current = true;
+      pendingScrollRestoreRef.current = null;
+      persistMessagesScroll(scrollScopeKeyRef.current, Number.MAX_SAFE_INTEGER, true);
       void sendMessage(input);
       return;
     }
@@ -487,7 +538,72 @@ export default function ChatPage() {
   );
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const nextKey = messagesScrollScopeKey(days);
+    if (scrollScopeKeyRef.current === nextKey) return;
+    scrollScopeKeyRef.current = nextKey;
+    pendingScrollRestoreRef.current = loadSavedMessagesScroll(nextKey);
+    stickToBottomRef.current = Boolean(pendingScrollRestoreRef.current?.stick);
+  }, [days]);
+
+  useEffect(() => {
+    const scroller = messagesScrollRef.current;
+    if (!scroller) return;
+
+    const onScroll = () => {
+      if (suppressScrollPersistRef.current) return;
+      pendingScrollRestoreRef.current = null;
+      const distanceFromBottom =
+        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      const stick = distanceFromBottom < 80;
+      stickToBottomRef.current = stick;
+      persistMessagesScroll(scrollScopeKeyRef.current, scroller.scrollTop, stick);
+    };
+
+    const flush = () => {
+      persistMessagesScroll(
+        scrollScopeKeyRef.current,
+        scroller.scrollTop,
+        stickToBottomRef.current,
+      );
+    };
+
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", flush);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const scroller = messagesScrollRef.current;
+    if (!scroller) return;
+
+    const pending = pendingScrollRestoreRef.current;
+    if (pending) {
+      stickToBottomRef.current = pending.stick;
+      suppressScrollPersistRef.current = true;
+      if (pending.stick) {
+        scroller.scrollTop = scroller.scrollHeight;
+        pendingScrollRestoreRef.current = null;
+      } else {
+        const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        scroller.scrollTop = Math.min(pending.top, maxTop);
+        // 内容尚未撑开到原先高度时继续等下一轮消息/渲染再恢复
+        if (pending.top <= maxTop + 1) {
+          pendingScrollRestoreRef.current = null;
+        }
+      }
+      requestAnimationFrame(() => {
+        suppressScrollPersistRef.current = false;
+      });
+      return;
+    }
+
+    if (!stickToBottomRef.current) return;
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages, sending, statusMessage]);
 
   useEffect(() => {
@@ -542,6 +658,9 @@ export default function ChatPage() {
     const text = editingText;
     setEditingIndex(null);
     setEditingText("");
+    stickToBottomRef.current = true;
+    pendingScrollRestoreRef.current = null;
+    persistMessagesScroll(scrollScopeKeyRef.current, Number.MAX_SAFE_INTEGER, true);
     void sendMessage(text, { replaceFromIndex: index });
   }, [editingIndex, editingText, sendMessage]);
 
@@ -559,6 +678,9 @@ export default function ChatPage() {
       onClick: () => {
         cancelInlineEdit();
         setCitationOpen(false);
+        stickToBottomRef.current = false;
+        pendingScrollRestoreRef.current = null;
+        persistMessagesScroll(scrollScopeKeyRef.current, 0, false);
         clearMessages();
       },
     });
@@ -878,7 +1000,7 @@ export default function ChatPage() {
           </details>
         ) : null}
 
-        <div className="flex-1 overflow-y-auto px-5 py-5">
+        <div ref={messagesScrollRef} className="flex-1 overflow-y-auto px-5 py-5">
           {messages.length === 0 ? (
             emptyState?.kind === "generating" ? (
               <div className="flex h-full items-start justify-center pt-8">

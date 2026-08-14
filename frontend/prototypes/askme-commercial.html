@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Askme · 商用简报原型</title>
+  <style>
+    :root {
+      --paper: #f4f5f7;
+      --paper-raised: #ffffff;
+      --ink: #0f172a;
+      --ink-muted: #64748b;
+      --rule: #e2e8f0;
+      --accent: #2563eb;
+      --accent-soft: #eff6ff;
+      --radius: 8px;
+      --radius-panel: 10px;
+      --font: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Inter", system-ui, sans-serif;
+      --nav-width: 84px;
+      --ask-width: 360px;
+      --shadow-app: 0 16px 48px rgba(15, 23, 42, 0.12);
+      --stage: #dbe1ea;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: var(--stage);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .stage {
+      min-height: 100vh;
+      padding: 20px 20px 28px;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .controls {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 12px;
+      padding: 16px 14px;
+      font-size: 13px;
+      height: fit-content;
+      position: sticky;
+      top: 20px;
+    }
+    .controls h1 {
+      margin: 0 0 4px;
+      font-size: 14px;
+      font-weight: 650;
+      color: #fff;
+    }
+    .controls .sub {
+      margin: 0 0 14px;
+      color: #94a3b8;
+      line-height: 1.45;
+      font-size: 12px;
+    }
+    .controls label {
+      display: block;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+      margin: 12px 0 8px;
+    }
+    .controls button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 9px 10px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+    }
+    .controls button:hover { border-color: #64748b; }
+    .controls button.active {
+      background: #2563eb;
+      border-color: #2563eb;
+      color: #fff;
+      font-weight: 600;
+    }
+    .controls a {
+      color: #93c5fd;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .preview-shell {
+      max-width: 1440px;
+    }
+    .preview-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin: 0 0 10px 4px;
+      font-size: 12px;
+      color: #475569;
+    }
+    .preview-label code {
+      font-size: 11px;
+      color: #64748b;
+    }
+
+    .app {
+      height: min(900px, calc(100vh - 72px));
+      background: var(--paper);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: var(--shadow-app);
+      border: 1px solid color-mix(in srgb, var(--rule) 85%, transparent);
+      display: flex;
+    }
+
+    /* —— Nav —— */
+    .nav {
+      width: var(--nav-width);
+      background: var(--paper-raised);
+      border-right: 1px solid var(--rule);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px 0;
+      flex-shrink: 0;
+    }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 20px;
+    }
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: var(--ink);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: -0.04em;
+    }
+    .brand-text {
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0.02em;
+      color: var(--ink);
+    }
+    .nav-item {
+      width: 56px;
+      border: 0;
+      background: transparent;
+      border-radius: 8px;
+      padding: 10px 4px 8px;
+      margin: 0 0 4px;
+      color: var(--ink-muted);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .nav-item svg { width: 18px; height: 18px; opacity: 0.9; }
+    .nav-item:hover { background: var(--paper); color: var(--ink); }
+    .nav-item.active {
+      background: var(--accent-soft);
+      color: var(--ink);
+      font-weight: 600;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .nav-item.active svg { color: var(--accent); }
+    .nav-spacer { flex: 1; }
+
+    .main { flex: 1; min-width: 0; display: flex; overflow: hidden; }
+
+    /* —— Reading —— */
+    .reading {
+      flex: 1;
+      min-width: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .toc {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: color-mix(in srgb, var(--paper) 88%, transparent);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--rule);
+      padding: 12px 0;
+    }
+    .toc-inner {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 0 40px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+    }
+    .toc a {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ink-muted);
+      text-decoration: none;
+    }
+    .toc a:hover,
+    .toc a.active { color: var(--ink); }
+
+    .column {
+      max-width: 720px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 40px 40px 48px;
+    }
+
+    .date-header { margin-bottom: 28px; }
+    .date-eyebrow {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    .date-title {
+      margin: 0 0 10px;
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+    }
+    .date-title .wd {
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--ink-muted);
+      letter-spacing: 0;
+    }
+    .date-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 10px;
+      font-size: 13px;
+      color: var(--ink-muted);
+    }
+    .date-meta strong { color: var(--ink); font-weight: 600; }
+    .dot {
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: #cbd5e1;
+    }
+    .header-actions {
+      margin-left: auto;
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      border-radius: var(--radius);
+      border: 1px solid var(--rule);
+      background: var(--paper-raised);
+      color: var(--ink);
+      padding: 7px 12px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 550;
+      cursor: pointer;
+    }
+    .btn:hover { background: var(--paper); }
+    .btn-primary {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: #fff;
+    }
+    .btn-primary:hover { background: #1e293b; }
+
+    .digest {
+      background: var(--paper-raised);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-panel);
+      padding: 28px 28px 8px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+    }
+    .sec { margin-bottom: 8px; }
+    .sec-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--rule);
+      margin: 28px 0 14px;
+    }
+    .sec:first-child .sec-title { margin-top: 0; }
+    .sec-title .n { font-weight: 500; text-transform: none; letter-spacing: 0; opacity: 0.75; }
+    .event-heading {
+      margin: 0 0 6px;
+      font-size: 16px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+    .arts { list-style: none; margin: 0 0 18px; padding: 0; }
+    .arts li {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 0;
+    }
+    .arts a {
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 14.5px;
+      line-height: 1.55;
+      flex: 1;
+    }
+    .arts a:hover { color: var(--accent); }
+    .arts a::before {
+      content: "";
+      display: inline-block;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: #cbd5e1;
+      margin-right: 10px;
+      vertical-align: middle;
+      transform: translateY(-1px);
+    }
+    .add {
+      border: 0;
+      background: transparent;
+      color: var(--ink-muted);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      padding: 2px 0;
+    }
+    .add:hover { color: var(--accent); }
+
+    .foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 28px;
+      padding-top: 18px;
+      border-top: 1px solid var(--rule);
+      font-size: 12px;
+      color: var(--ink-muted);
+    }
+    .foot button {
+      border: 0;
+      background: transparent;
+      color: var(--ink-muted);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .foot button:hover { color: var(--ink); }
+
+    /* —— Empty —— */
+    .empty-hero {
+      min-height: 420px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 48px 24px;
+    }
+    .empty-hero .eyebrow {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+    .empty-hero h2 {
+      margin: 0 0 10px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .empty-hero p {
+      margin: 0 0 22px;
+      max-width: 28rem;
+      font-size: 15px;
+      line-height: 1.55;
+      color: var(--ink-muted);
+    }
+    .empty-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+
+    /* —— Ask —— */
+    .ask {
+      width: var(--ask-width);
+      flex-shrink: 0;
+      background: var(--paper-raised);
+      border-left: 1px solid var(--rule);
+      display: flex;
+      flex-direction: column;
+    }
+    .ask-head {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--rule);
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .ask-msgs {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .ask-empty { text-align: center; max-width: 220px; }
+    .ask-empty .ico {
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 12px;
+      border-radius: 999px;
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      display: grid;
+      place-items: center;
+      color: var(--ink-muted);
+    }
+    .ask-empty h3 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .ask-empty p {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--ink-muted);
+    }
+    .composer-wrap { padding: 16px; }
+    .composer {
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .composer:focus-within {
+      border-color: color-mix(in srgb, var(--accent) 55%, var(--rule));
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .composer textarea {
+      width: 100%;
+      border: 0;
+      resize: none;
+      outline: none;
+      background: transparent;
+      font: inherit;
+      font-size: 13px;
+      color: var(--ink);
+      min-height: 72px;
+    }
+    .composer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 6px;
+    }
+    .composer-row span {
+      font-size: 11px;
+      color: var(--ink-muted);
+    }
+
+    .view-ready .empty-panel,
+    .view-empty-gen .ready-panel,
+    .view-empty-onboarding .ready-panel,
+    .view-empty-gen .empty-onboarding,
+    .view-empty-onboarding .empty-gen { display: none; }
+    .view-empty-gen .empty-panel,
+    .view-empty-onboarding .empty-panel { display: block; }
+    .view-empty-gen .toc,
+    .view-empty-onboarding .toc { display: none; }
+
+    @media (max-width: 1100px) {
+      .stage { grid-template-columns: 1fr; }
+      .controls { position: static; }
+      .ask { width: 300px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <aside class="controls">
+      <h1>Askme 商用原型</h1>
+      <p class="sub">基于现有 launch 原型，经 Superdesign 商用方向定稿。冷灰底 + 墨色主按钮 + 蓝强调。</p>
+      <label>视图</label>
+      <button type="button" class="active" data-view="ready">简报已就绪</button>
+      <button type="button" data-view="empty-gen">空态 · 还差一次生成</button>
+      <button type="button" data-view="empty-onboarding">空态 · 新用户</button>
+      <label>设计稿</label>
+      <p class="sub" style="margin:0">
+        <a href="https://superdesign.dev/teams/6671d59b-4051-4dfd-a948-199c5217ee3c/projects/2a19d7af-781b-41ba-ae56-d296937f20f2?live=1" target="_blank" rel="noreferrer">Superdesign canvas</a>
+      </p>
+    </aside>
+
+    <div class="preview-shell">
+      <div class="preview-label">
+        <span>应用预览 · PH / 商用截图态</span>
+        <code id="stateLabel">cool · launch · ready</code>
+      </div>
+
+      <div class="app view-ready" id="app">
+        <aside class="nav" aria-label="主导航">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">A</span>
+            <span class="brand-text">Askme</span>
+          </div>
+          <button type="button" class="nav-item active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" d="M4 6.5h16M4 12h10M4 17.5h13"/></svg>
+            简报
+          </button>
+          <button type="button" class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" d="M5 5.5h14v13H5zM9 5.5V18.5M5 10h14"/></svg>
+            源
+          </button>
+          <button type="button" class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3.25"/><path stroke-linecap="round" d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2"/></svg>
+            设置
+          </button>
+          <div class="nav-spacer"></div>
+          <button type="button" class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="8.25"/><path stroke-linecap="round" d="M9.75 9.5a2.25 2.25 0 1 1 3.4 1.9c-.7.45-1.15.9-1.15 1.85V14"/><circle cx="12" cy="16.75" r="0.9" fill="currentColor" stroke="none"/></svg>
+            帮助
+          </button>
+        </aside>
+
+        <div class="main">
+          <section class="reading">
+            <nav class="toc" aria-label="简报目录">
+              <div class="toc-inner">
+                <a href="#focus" class="active">重点</a>
+                <a href="#models">模型</a>
+                <a href="#oss">开源</a>
+                <a href="#biz">产业</a>
+              </div>
+            </nav>
+
+            <div class="column">
+              <div class="ready-panel">
+                <header class="date-header">
+                  <span class="date-eyebrow">今日简报</span>
+                  <h1 class="date-title">8 月 7 日 <span class="wd">星期五</span></h1>
+                  <div class="date-meta">
+                    <strong>AI 技术</strong>
+                    <span class="dot"></span>
+                    <span>近 3 天</span>
+                    <span class="dot"></span>
+                    <span>14 个要点</span>
+                    <div class="header-actions">
+                      <button type="button" class="btn">筛选</button>
+                    </div>
+                  </div>
+                </header>
+
+                <div class="digest">
+                  <section class="sec" id="focus">
+                    <div class="sec-title"><span>重点关注</span><span class="n">2</span></div>
+                    <h3 class="event-heading">新一代长上下文模型上线</h3>
+                    <ul class="arts">
+                      <li>
+                        <a href="#">OpenAI 发布新模型更新，强调长上下文与工具调用稳定性</a>
+                        <button type="button" class="add">加入对话</button>
+                      </li>
+                      <li>
+                        <a href="#">评测指出工具调用在复杂任务上仍有波动</a>
+                        <button type="button" class="add">加入对话</button>
+                      </li>
+                    </ul>
+                  </section>
+
+                  <section class="sec" id="models">
+                    <div class="sec-title"><span>模型发布</span><span class="n">2</span></div>
+                    <ul class="arts">
+                      <li>
+                        <a href="#">Anthropic 研究博客讨论可解释性新方法</a>
+                        <button type="button" class="add">加入对话</button>
+                      </li>
+                      <li>
+                        <a href="#">国内团队开源推理框架更新，吞吐提升显著</a>
+                        <button type="button" class="add">加入对话</button>
+                      </li>
+                    </ul>
+                  </section>
+
+                  <section class="sec" id="oss">
+                    <div class="sec-title"><span>开源与生态</span><span class="n">2</span></div>
+                    <ul class="arts">
+                      <li>
+                        <a href="#">多篇评测对比主流开源权重在中文任务上的表现</a>
+                        <button type="button" class="add">加入对话</button>
+                      </li>
+                      <li>
+                        <a href="#">推理框架适配主流硬件的社区实践汇总</a>
+                        <button type="button" class="add">加入对话</button>
+                      </li>
+                    </ul>
+                  </section>
+
+                  <section class="sec" id="biz">
+                    <div class="sec-title"><span>产业与资本</span><span class="n">1</span></div>
+                    <ul class="arts">
+                      <li>
+                        <a href="#">云厂商下调推理单价，企业侧采购节奏加快</a>
+                        <button type="button" class="add">加入对话</button>
+                      </li>
+                    </ul>
+                  </section>
+                </div>
+
+                <div class="foot">
+                  <span>生成于今天 14:32</span>
+                  <button type="button">导出 Markdown</button>
+                </div>
+              </div>
+
+              <div class="empty-panel">
+                <div class="empty-hero empty-gen">
+                  <p class="eyebrow">今日简报</p>
+                  <h2>还差一次生成</h2>
+                  <p>源与规则已就绪。生成后，要点会按主题整理在这里。</p>
+                  <div class="empty-actions">
+                    <button type="button" class="btn btn-primary">生成简报</button>
+                    <button type="button" class="btn">查看规则</button>
+                  </div>
+                </div>
+                <div class="empty-hero empty-onboarding">
+                  <p class="eyebrow">Askme</p>
+                  <h2>把订阅变成每日可读简报</h2>
+                  <p>按你的规则整理信息源，一屏看完今日要点；需要时再追问细节。</p>
+                  <div class="empty-actions">
+                    <button type="button" class="btn btn-primary">添加第一个源</button>
+                    <button type="button" class="btn">配置 API Key</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <aside class="ask" aria-label="提问">
+            <div class="ask-head">提问</div>
+            <div class="ask-msgs">
+              <div class="ask-empty">
+                <div class="ico" aria-hidden="true">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" d="M7 8h10M7 12h6M6 19l2.5-2.5H18a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11z"/></svg>
+                </div>
+                <h3>问问今天的简报</h3>
+                <p>拖入要点生成摘要，或直接输入问题深挖。</p>
+              </div>
+            </div>
+            <div class="composer-wrap">
+              <div class="composer">
+                <textarea placeholder="针对今日简报提问…" rows="3"></textarea>
+                <div class="composer-row">
+                  <span>Enter 发送</span>
+                  <button type="button" class="btn btn-primary">发送</button>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const app = document.getElementById("app");
+    const label = document.getElementById("stateLabel");
+    const labels = {
+      ready: "cool · launch · ready",
+      "empty-gen": "cool · launch · empty-generate",
+      "empty-onboarding": "cool · launch · empty-onboarding",
+    };
+    document.querySelectorAll(".controls [data-view]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".controls [data-view]").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const view = btn.dataset.view;
+        app.className = "app view-" + view;
+        label.textContent = labels[view] || view;
+      });
+    });
+  </script>
+</body>
+</html>

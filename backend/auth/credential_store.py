@@ -28,39 +28,6 @@ SECRETS_PATH = DATA_DIR / "integrations.json"
 CREDENTIALS_KEY = "credentials"
 ZHIHU_COOKIE_KEY = "zhihu_cookie"
 AUTH_SLOT_DEFS_KEY = "auth_slot_defs"
-_DEBUG_LOG_PATH = "/Users/zhuyuyao/Documents/llm应用/askme/.cursor/debug-fed963.log"
-
-
-def _agent_log(
-    location: str,
-    message: str,
-    data: dict[str, Any],
-    *,
-    hypothesis_id: str,
-) -> None:
-    # region agent log
-    try:
-        import json
-        import time
-
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(
-                json.dumps(
-                    {
-                        "sessionId": "fed963",
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "hypothesisId": hypothesis_id,
-                        "timestamp": int(time.time() * 1000),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # endregion
 
 SLOT_DEFS: dict[str, dict[str, str]] = {
     "zhihu": {
@@ -327,35 +294,46 @@ def _required_token_keys(token: str) -> list[str]:
     return keys
 
 
-def cookie_has_required_token(cookie: str, token: str) -> bool:
-    """校验 required_token 对应键均存在且值非空（可多字段）。"""
-    keys = _required_token_keys(token)
-    if not keys:
-        return True
-    present: set[str] = set()
+def _cookie_name_value_pairs(cookie: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
     for part in (cookie or "").split(";"):
         part = part.strip()
         if not part or "=" not in part:
             continue
         name, value = part.split("=", 1)
-        if name.strip() and value.strip():
-            present.add(name.strip())
-    return all(key in present for key in keys)
+        name = name.strip()
+        value = value.strip()
+        if name and value:
+            pairs.append((name, value))
+    return pairs
+
+
+def _required_key_present(key: str, present: set[str], cookie: str) -> bool:
+    if key in present:
+        return True
+    # 前缀令牌：incap_ses_ 匹配 incap_ses_123_456 等动态 cookie 名
+    if key.endswith("_"):
+        if any(name.startswith(key) for name in present):
+            return True
+        return key in (cookie or "")
+    return False
+
+
+def cookie_has_required_token(cookie: str, token: str) -> bool:
+    """校验 required_token 对应键均存在且值非空（可多字段）。"""
+    keys = _required_token_keys(token)
+    if not keys:
+        return True
+    present = {name for name, _ in _cookie_name_value_pairs(cookie)}
+    return all(_required_key_present(key, present, cookie) for key in keys)
 
 
 def missing_required_tokens(cookie: str, token: str) -> list[str]:
     keys = _required_token_keys(token)
     if not keys:
         return []
-    present: set[str] = set()
-    for part in (cookie or "").split(";"):
-        part = part.strip()
-        if not part or "=" not in part:
-            continue
-        name, value = part.split("=", 1)
-        if name.strip() and value.strip():
-            present.add(name.strip())
-    return [key for key in keys if key not in present]
+    present = {name for name, _ in _cookie_name_value_pairs(cookie)}
+    return [key for key in keys if not _required_key_present(key, present, cookie)]
 
 
 def cookie_satisfies_slot(slot: str, cookie: str) -> bool:
@@ -583,6 +561,85 @@ def _auth_item_for_slot(url: str, slot: str, *, platform: str | None = None) -> 
     }
 
 
+def _skill_auth_slot_for_url(url: str) -> str | None:
+    """按 source.yaml 的 homepage/entry_url 匹配已有 skill（避免 slug 冲突时漏检）。"""
+    host = normalize_host(url)
+    if not host:
+        return None
+    try:
+        from paths import DISCOVERY_SKILLS_ROOT
+        from onboarding.source_skill_writer import is_complete_discovery_skill
+    except Exception:
+        return None
+
+    for skill_dir in sorted(DISCOVERY_SKILLS_ROOT.glob("*-discovery")):
+        slug = skill_dir.name[: -len("-discovery")]
+        if not is_complete_discovery_skill(slug):
+            continue
+        source_yaml = skill_dir / "source.yaml"
+        if not source_yaml.is_file():
+            continue
+        text = source_yaml.read_text(encoding="utf-8")
+        if not re.search(r"requires_cookie\s*:\s*true", text, re.I):
+            continue
+        skill_hosts: set[str] = set()
+        for pattern in (r"^homepage:\s*(\S+)", r"^entry_url:\s*(\S+)"):
+            for match in re.finditer(pattern, text, re.I | re.M):
+                skill_host = normalize_host(match.group(1))
+                if skill_host:
+                    skill_hosts.add(skill_host)
+        if host not in skill_hosts:
+            continue
+        m = re.search(r"auth_slot:\s*([a-z0-9_-]+)", text, re.I)
+        return (m.group(1).lower() if m else None) or slot_id_from_host(url)
+    return None
+
+
+def _precheck_auth_slot_for_url(url: str) -> str | None:
+    """预检仅拦截「已知平台」或「已有 skill 声明 requires_cookie」的源。
+
+    不因接入失败时登记的动态 slot 误拦首次接入。
+    """
+    match = detect_platform(url)
+    if match and match.requires_cookie:
+        return match.platform
+    if match and match.platform and not match.requires_cookie:
+        return None
+
+    by_skill_url = _skill_auth_slot_for_url(url)
+    if by_skill_url:
+        return by_skill_url
+
+    try:
+        from onboarding.source_skill_writer import (
+            is_complete_discovery_skill,
+            resolve_onboard_target,
+            skill_dir_for,
+        )
+
+        slug, _, _ = resolve_onboard_target(url)
+        if is_complete_discovery_skill(slug):
+            source_yaml = skill_dir_for(slug) / "source.yaml"
+            if source_yaml.is_file():
+                text = source_yaml.read_text(encoding="utf-8")
+                if re.search(r"requires_cookie\s*:\s*true", text, re.I):
+                    m = re.search(r"auth_slot:\s*([a-z0-9_-]+)", text, re.I)
+                    if m:
+                        return m.group(1).lower()
+                    return slot_id_from_host(url)
+    except Exception:
+        pass
+
+    # 接入过程中已登记、且明确所需令牌（如 cf_clearance / incap_ses_）的 slot
+    slot = resolve_slot_from_url(url)
+    if slot:
+        meta = get_slot_meta(slot) or {}
+        if str(meta.get("required_token") or "").strip():
+            return slot
+
+    return None
+
+
 def precheck_entry_urls(entry_urls: list[str]) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     missing_slots: list[str] = []
@@ -594,27 +651,7 @@ def precheck_entry_urls(entry_urls: list[str]) -> dict[str, Any]:
             continue
 
         match = detect_platform(url)
-        slot = None
-        if match and match.requires_cookie:
-            slot = match.platform
-        elif not (match and match.platform and not match.requires_cookie):
-            # 已知平台且 Cookie 可选（如 Reddit）→ 不因动态 auth_slot 强制预检登录
-            slot = resolve_slot_from_url(url)
-
-        # region agent log
-        _agent_log(
-            "credential_store.py:precheck_entry_urls",
-            "precheck slot resolution",
-            {
-                "entry_url": url,
-                "platform": match.platform if match else None,
-                "platform_requires_cookie": bool(match and match.requires_cookie),
-                "resolved_slot": slot,
-                "slot_configured": slot_configured(slot) if slot else None,
-            },
-            hypothesis_id="B",
-        )
-        # endregion
+        slot = _precheck_auth_slot_for_url(url)
 
         if not slot:
             items.append(

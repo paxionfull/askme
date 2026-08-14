@@ -6,7 +6,11 @@
 
 | name | description | path |
 | --- | --- | --- |
+| aei-discovery | Discovers articles from AEI (aei.org) via WordPress REST API `/wp/v2/posts`. Requires Cloudflare clearance Cookie (cf_clearance). Use when fetching updates from aei.org or American Enterprise Institute only. | skills/discovery/aei-discovery/ |
 | anthropic-3-discovery | Discovers articles from Anthropic Research (anthropic.com/research) via static HTML parsing. Use when fetching updates from anthropic.com/research. | skills/discovery/anthropic-3-discovery/ |
+| anthropic-discovery | Discovers articles from Anthropic News (anthropic.com/news) via static HTML parsing. Use when fetching updates from anthropic.com/news. | skills/discovery/anthropic-discovery/ |
+| cato-discovery | Discovers articles from Cato Institute (cato.org) via Drupal HTML listing on /blog (Cato at Liberty), with HTML or Markdown alternate body extraction. Requires Incapsula session Cookie (auth_slot=cato). Use when fetching updates from cato.org or Cato only. | skills/discovery/cato-discovery/ |
+| heritage-discovery | Discovers articles from The Heritage Foundation (heritage.org) via Drupal site search HTML listing, with Cloudflare Cookie required for article body pages. Use when fetching updates from heritage.org or Heritage only. | skills/discovery/heritage-discovery/ |
 | jiqizhixin-discovery | Discovers articles from 机器之心 (jiqizhixin.com) via the official article library JSON API. Returns title, URL, publish time, author, tags, and summary. Use when fetching updates from jiqizhixin.com or 机器之心 only. | skills/discovery/jiqizhixin-discovery/ |
 | openai-discovery | Discovers OpenAI News pages from OpenAI sitemap and fetches article HTML. | skills/discovery/openai-discovery/ |
 | qbitai-discovery | Discovers articles from 量子位 (qbitai.com) via WordPress REST API. Use when fetching updates from qbitai.com or 量子位 only. | skills/discovery/qbitai-discovery/ |
