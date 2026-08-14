@@ -143,13 +143,26 @@ def _build_cursor_prompt(
 5. 若验证失败，根据报错修复 discover.py 并重跑，直到通过
 
 ## 硬性约束
-- discover.py 只能用标准库 + `.cursor/skills/_lib`（如 content_utils、http_client），禁止 import backend
+- discover.py 只能用标准库 + `.cursor/skills/_lib`（如 content_utils、http_client、auth_cookie），禁止 import backend
 - 所有 HTTP 必须 `from http_client import ...`（统一 5s 超时、重试、429/502/503 退避）；禁止 urlopen 与自定义 timeout=
-- `fetch_article_detail(article_id, **hints)` 必须优先 `resolve_detail_url` / `meta.get("url")`；禁止为查元数据重复拉整表列表或仅靠首页第一页；大列表用 `_lib/list_index.py`，快讯类用 id 内存索引；`discovery_validate.py` 会用 hints.url 实测详情
+- `fetch_article_detail(article_id, **hints)` 必须优先 `resolve_detail_url` / `meta.get("url")`；禁止为查元数据重复拉整表列表或仅靠首页第一页；大列表用 `_lib/list_index.ListByIdIndex`（`rebuild(items)` 或 `clear()`+`put(id,item)`，`get(id)` 读取）；`discovery_validate.py` 会用 hints.url 实测详情
 - 脚本内分页循环须调用 sleep_between_pages()
 - 不要写 markdown 代码块包裹整个 discover.py 文件本身
 - published_at 转 ISO8601 Asia/Shanghai
 - 金十 jin10.com 若接入：flash-api 必须带 x-app-id 与 x-version 请求头
+
+## 登录 / Cookie（重要）
+若侦察发现站点必须登录才能拿到列表（401/403、跳转登录页、页面提示请先登录、空列表且明显为登录墙）：
+1. 在 `source.yaml` 写入：
+   ```yaml
+   discovery:
+     requires_cookie: true
+     auth_slot: <平台名，如 xiaohongshu>
+   ```
+2. discover.py 通过 `from auth_cookie import get_request_cookie` 读取 Cookie，并放入请求头 `Cookie`
+3. 若当前环境没有 Cookie、验证必然失败：不要伪造数据；让验证报错信息以
+   `ASKME_AUTH_REQUIRED:slot=<auth_slot>` 开头，便于 Askme 引导用户登录
+4. 禁止用 RSS 绕过登录墙
 
 完成后用一句话说明 feed_id 与验证结果。"""
 
@@ -162,8 +175,10 @@ async def run_cursor_skill_task(
     session: OnboardingSession | None,
     result_engine: str = "cursor_sdk",
     mark_files_written: bool = False,
+    auto_repair: bool = True,
+    max_repair_attempts: int = 4,
 ) -> AsyncIterator[dict[str, Any]]:
-    """运行 Cursor Agent 任务（接入或修复），完成后可选验证。"""
+    """运行 Cursor Agent 任务（接入或修复），完成后可选验证；验证失败可自动修复重试。"""
     api_key = load_cursor_api_key()
     if not api_key:
         raise LLMError(
@@ -269,18 +284,58 @@ async def run_cursor_skill_task(
 
                 validation: dict[str, Any] | None = None
                 if auto_validate:
-                    yield _emit_status(session, phase="validate", message="正在验证 skill…")
-                    try:
-                        validation = run_validation(safe_slug)
-                        if session:
-                            session.log("validation", ok=True, result=validation)
-                    except Exception as exc:
-                        if session:
-                            session.log("validation", ok=False, error=str(exc))
-                        raise LLMError(
-                            f"Cursor 已执行但 skill 验证失败: {exc}",
-                            status_code=502,
-                        ) from exc
+                    from source_skill_repair import (
+                        build_validation_failure_feedback,
+                        iter_auto_repair_agent,
+                    )
+
+                    last_error = ""
+                    attempts = max(1, int(max_repair_attempts))
+                    for attempt in range(attempts):
+                        yield _emit_status(
+                            session,
+                            phase="validate" if attempt == 0 else "auto_repair",
+                            message="正在验证 skill…"
+                            if attempt == 0
+                            else f"验证失败，正在根据报错自动修复（{attempt}/{attempts - 1}）…",
+                        )
+                        try:
+                            validation = run_validation(safe_slug)
+                            if session:
+                                session.log("validation", ok=True, result=validation)
+                            break
+                        except Exception as exc:
+                            last_error = str(exc)
+                            if session:
+                                session.log(
+                                    "validation",
+                                    ok=False,
+                                    error=last_error,
+                                    attempt=attempt + 1,
+                                )
+                            if attempt >= attempts - 1:
+                                raise LLMError(
+                                    f"Cursor 已执行但 skill 验证失败: {last_error}",
+                                    status_code=502,
+                                ) from exc
+                            if not auto_repair:
+                                raise LLMError(
+                                    f"Cursor 已执行但 skill 验证失败（未开启自动修复）: {last_error}",
+                                    status_code=502,
+                                ) from exc
+                            async for event in iter_auto_repair_agent(
+                                slug=safe_slug,
+                                feedback=build_validation_failure_feedback(
+                                    last_error, slug=safe_slug
+                                ),
+                                error=last_error,
+                                issue_types=["wrong_fields", "other"],
+                                auto_validate=False,
+                                session=session,
+                            ):
+                                if event.get("event") == "auto_repair_succeeded":
+                                    continue
+                                yield event
 
                 result_data = {
                     "ok": True,
@@ -315,6 +370,7 @@ async def _run_cursor_onboarding(
     list_api_hint: str,
     auto_validate: bool,
     session: OnboardingSession | None,
+    auto_repair: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
     prompt = _build_cursor_prompt(
         slug=slug,
@@ -333,6 +389,7 @@ async def _run_cursor_onboarding(
         session=session,
         result_engine="cursor_sdk",
         mark_files_written=True,
+        auto_repair=auto_repair,
     ):
         yield event
 
@@ -422,5 +479,6 @@ async def run_onboarding_agent(
         list_api_hint=list_api_hint,
         auto_validate=auto_validate,
         session=session,
+        auto_repair=auto_repair,
     ):
         yield event

@@ -21,18 +21,25 @@ Askme 通过 **Cursor SDK** 为**具体网站**编写 discovery skill，而不�
 
 ## 自动化流程（UI / API）
 
-### 已知平台（知乎、金十等）— 确定性脚手架
+### 已知平台（知乎、小红书、Reddit、X、微信、金十等）— 平台 skill + 账号配置
 
-无需 Cursor API Key。
+多账号平台：**一平台一个 skill**（`{platform}-platform-discovery`），账号参数写入 `feed_registry.platform_accounts`，不再为每个号生成目录。`auto_repair` 默认开启，修复目标是**平台 skill / `_lib/*_common`**，不是按账号关修复。
 
 ```text
-detect_platform（识别 zhihu people/org、jin10.com 等）
-  → probe API（知乎需 ZHIHU_COOKIE）
-  → scaffold 模板填充 discover.py / source.yaml / SKILL.md
-  → write → validate
+detect_platform（zhihu / xiaohongshu / reddit / x / weixin / jin10 等）
+  → probe API（知乎/小红书/微信需 Cookie）
+  → upsert platform_accounts + 确保平台 skill 存在
+  → validate（绑定账号上下文）
 ```
 
+- 知乎 / 微信 / Reddit：ContextVar 绑定账号，共用平台 `discover.py`
+- 小红书 / X：按账号从 `_lib/*_scaffold` **内存编译**适配器；平台目录供 auto_repair 占位
+- 金十：仍为单例经典 skill（`jin10-discovery`）
+
+微信列表走公众号后台 `list_ex`（设置页「微信」凭证，须【公众号】登录非小程序）；正文走公开文章页。
+
 Playbook 示例：`data/onboarding-playbooks/zhihu-people-khazix.md`
+
 
 ### 未知站点 — Cursor SDK Agent
 
@@ -54,9 +61,11 @@ AsyncClient.launch_bridge(workspace=项目根)
 
 任一步失败且已启用 `auto_repair`（默认 true）时，系统会用 Cursor Agent **按报错迭代修复**：
 
-1. **API 探测失败**（知乎/金十等脚手架）：先写入脚手架 skill，再 repair → 重探
-2. **discovery_validate 失败**：repair → 再验证（最多数次）
+1. **API 探测失败**（平台脚手架）：登记账号后 repair **平台 skill** → 重探
+2. **discovery_validate 失败**：repair 平台 skill → 再验证（最多数次）
 3. **首拉 refresh 失败**：repair → reload-skills → 再拉一次
+
+平台源默认 **保留** `auto_repair`；修复改平台共享代码，不影响其它账号登记。
 
 仍失败才标记该源接入失败（skill 文件通常保留，可手动「反馈并修复」）。
 

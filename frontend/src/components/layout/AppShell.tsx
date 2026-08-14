@@ -8,9 +8,9 @@ import { OnboardingProvider, useOnboarding } from "../../contexts/OnboardingCont
 import { isLlmConfigured, useSettings } from "../../hooks/useSettings";
 
 const navItems = [
-  { to: "/", label: "数据源", end: true },
+  { to: "/", label: "库", end: true },
   { to: "/chat", label: "对话", end: false },
-  { to: "/skills", label: "Skill管理", end: false },
+  { to: "/skills", label: "Skill", end: false },
   { to: "/settings", label: "设置", end: false },
 ];
 
@@ -22,8 +22,11 @@ function FeedRefreshBanner() {
     error,
     progress,
     bannerTitle,
+    authFailureUrls,
+    authFailureDetected,
     clearResult,
   } = useFeedRefresh();
+  const { requestAuthRetry } = useOnboarding();
 
   if (refreshBusy && statusMessage) {
     return (
@@ -40,12 +43,38 @@ function FeedRefreshBanner() {
 
   if (!refreshBusy && (resultMessage || error)) {
     const message = [resultMessage, error].filter(Boolean).join("\n\n");
+    const showAuth = Boolean(error) && (authFailureUrls.length > 0 || authFailureDetected);
     return (
       <TopJobBanner
         tone={error ? "warning" : "success"}
         title={bannerTitle}
         message={message}
         onClose={clearResult}
+        actions={
+          showAuth ? (
+            authFailureUrls.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const urls = [...authFailureUrls];
+                  clearResult();
+                  requestAuthRetry(urls);
+                }}
+                className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+              >
+                去授权并重试
+              </button>
+            ) : (
+              <NavLink
+                to="/settings"
+                onClick={clearResult}
+                className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+              >
+                去设置授权
+              </NavLink>
+            )
+          ) : null
+        }
       />
     );
   }
@@ -94,7 +123,15 @@ function DigestJobBanner() {
 }
 
 function OnboardingBanner() {
-  const { job, batch, clearJob, stopOnboarding, stopBatch, clearBatch } = useOnboarding();
+  const {
+    job,
+    batch,
+    clearJob,
+    stopOnboarding,
+    stopBatch,
+    clearBatch,
+    requestAuthRetry,
+  } = useOnboarding();
 
   if (batch) {
     return (
@@ -102,6 +139,10 @@ function OnboardingBanner() {
         batch={batch}
         onStop={stopBatch}
         onClose={clearBatch}
+        onAuthRetry={(urls) => {
+          clearBatch();
+          requestAuthRetry(urls);
+        }}
       />
     );
   }
@@ -129,7 +170,7 @@ function OnboardingBanner() {
           <button
             type="button"
             onClick={stopOnboarding}
-            className="rounded border border-current/20 bg-white/60 px-2 py-1 text-xs hover:bg-white"
+            className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
           >
             停止
           </button>
@@ -151,12 +192,31 @@ function OnboardingBanner() {
 
   if (job.error) {
     const isRepair = job.kind === "repair";
+    const needsAuth =
+      !isRepair &&
+      (job.error.includes("授权") ||
+        job.error.toLowerCase().includes("cookie") ||
+        job.error.includes("登录"));
     return (
       <TopJobBanner
         tone="error"
         title={isRepair ? "修复失败" : "接入失败"}
         message={`${job.error}${job.jobId ? ` · 日志 #${job.jobId}` : ""}`}
         onClose={clearJob}
+        actions={
+          needsAuth && job.entryUrl ? (
+            <button
+              type="button"
+              onClick={() => {
+                clearJob();
+                requestAuthRetry([job.entryUrl]);
+              }}
+              className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+            >
+              去授权并重试
+            </button>
+          ) : undefined
+        }
       />
     );
   }
@@ -204,38 +264,40 @@ function AppShellContent() {
       <FeedRefreshBanner />
       <DigestJobBanner />
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-16 shrink-0 flex-col border-r border-slate-200 bg-white">
-          <div className="border-b border-slate-200 px-2 py-3 text-center">
-            <span className="text-xs font-semibold text-slate-700">Askme</span>
+      <div className="flex min-h-0 flex-1 bg-[var(--paper)]">
+        <aside className="flex w-[4.5rem] shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--paper-raised)]">
+          <div className="border-b border-[var(--rule)] px-2 py-4 text-center">
+            <span className="text-[13px] font-semibold tracking-[0.04em] text-[var(--ink)]">
+              Askme
+            </span>
           </div>
-          <nav className="flex flex-1 flex-col gap-1 p-2">
+          <nav className="flex flex-1 flex-col gap-0.5 p-2">
             {navItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.end}
                 className={({ isActive }) =>
-                  `relative rounded-lg px-2 py-2 text-center text-xs ${
+                  `relative rounded-md px-2 py-2.5 text-center text-[11px] leading-tight transition-colors ${
                     isActive
-                      ? "bg-slate-900 font-medium text-white"
-                      : "text-slate-600 hover:bg-slate-100"
+                      ? "bg-[var(--paper)] font-semibold text-[var(--ink)] shadow-[inset_3px_0_0_0_var(--accent)]"
+                      : "font-medium text-[var(--ink-muted)] hover:bg-[var(--paper)] hover:text-[var(--ink)]"
                   }`
                 }
               >
                 {item.label}
                 {item.to === "/" && sourcesInProgress && (
-                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-400" />
+                  <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
                 )}
                 {item.to === "/chat" && chatInProgress && (
-                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-400" />
+                  <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
                 )}
               </NavLink>
             ))}
           </nav>
         </aside>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--paper)]">
           <Outlet />
         </div>
       </div>

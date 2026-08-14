@@ -10,9 +10,11 @@ import litellm
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_API_BASE = os.getenv("LLM_API_BASE", "")
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 DEFAULT_API_BASE = "https://api.openai.com/v1"
+MIN_MAX_TOKENS = 256
+MAX_MAX_TOKENS = 128_000
 
 
 class LLMError(Exception):
@@ -26,12 +28,23 @@ class LlmConfig:
     model: str
     api_key: str
     api_base: str = ""
+    max_tokens: int = LLM_MAX_TOKENS
 
 
 @dataclass
 class LlmStreamPart:
     kind: Literal["content", "thinking"]
     text: str
+
+
+def clamp_max_tokens(value: Any, *, default: int = LLM_MAX_TOKENS) -> int:
+    try:
+        tokens = int(value)
+    except (TypeError, ValueError):
+        return default
+    if tokens <= 0:
+        return default
+    return min(MAX_MAX_TOKENS, max(MIN_MAX_TOKENS, tokens))
 
 
 def normalize_model_name(model: str) -> str:
@@ -48,11 +61,13 @@ def resolve_llm_config(override: dict[str, Any] | None = None) -> LlmConfig:
             model=normalize_model_name(raw_model),
             api_key=override["api_key"].strip(),
             api_base=(override.get("api_base") or "").strip(),
+            max_tokens=clamp_max_tokens(override.get("max_tokens")),
         )
     return LlmConfig(
         model=normalize_model_name(LLM_MODEL),
         api_key=LLM_API_KEY,
         api_base=LLM_API_BASE,
+        max_tokens=LLM_MAX_TOKENS,
     )
 
 
@@ -63,13 +78,14 @@ def get_llm_status(override: dict[str, Any] | None = None) -> dict[str, Any]:
         "configured": bool(config.api_key),
         "model": config.model,
         "source": source,
+        "max_tokens": config.max_tokens,
     }
 
 
 def _completion_kwargs(config: LlmConfig, *, enable_thinking: bool = False) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "model": config.model,
-        "max_tokens": LLM_MAX_TOKENS,
+        "max_tokens": config.max_tokens,
         "timeout": LLM_TIMEOUT,
         "api_key": config.api_key,
     }

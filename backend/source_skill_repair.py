@@ -58,7 +58,9 @@ def build_refresh_failure_feedback(error: str, *, slug: str = "") -> str:
 3. 修改后运行 `{validate_cmd}` 直至通过
 4. 确保个别解析失败不应拖垮整次 refresh（过滤不可解析项或记录 skip）
 
-只修改本 skill 目录内文件，不要改 slug / FEED_ID。"""
+只修改本 skill 目录内文件，不要改 slug / FEED_ID。
+若本 skill 为平台级（slug 以 `-platform` 结尾），还可修改对应 `.cursor/skills/_lib/{platform}_common.py`
+与 `_lib/{platform}_scaffold/`（多账号共用逻辑）；禁止新建 per-account skill 目录。"""
 
 
 def build_probe_failure_feedback(
@@ -71,35 +73,42 @@ def build_probe_failure_feedback(
     entry_url: str = "",
     list_api_path: str = "",
 ) -> str:
-    """平台 API 探测失败时的修复反馈（skill 已按脚手架写出）。"""
+    """平台 API 探测失败时的修复反馈（账号已登记 / 平台 skill 已就绪）。"""
     safe_slug = (slug or "SLUG").strip() or "SLUG"
     discover_cmd = (
         f"python .cursor/skills/{safe_slug}-discovery/scripts/discover.py --page 1 --per 20"
     )
     validate_cmd = f"python .cursor/skills/_lib/discovery_validate.py {safe_slug}"
-    return f"""已知平台脚手架已写入，但接入前 API 探测失败，请根据报错修复 discovery skill。
+    platform_hint = (platform or "").strip().lower()
+    lib_hint = (
+        f"`.cursor/skills/_lib/{platform_hint}_common.py` 与 `_lib/{platform_hint}_scaffold/`"
+        if platform_hint
+        else "对应 `_lib/*_common.py` / `_lib/*_scaffold/`"
+    )
+    return f"""已知平台接入探测失败，请根据报错修复**平台级** discovery skill（多账号共用）。
 
 平台: {platform or "(unknown)"}
 user_type: {user_type or "(unknown)"}
 user_id: {user_id or "(unknown)"}
 entry_url: {entry_url or "(unknown)"}
 脚手架 list_api_path: {list_api_path or "(unknown)"}
+platform skill slug: {safe_slug}
 
 错误原文：
 {error.strip()}
 
-常见根因（知乎机构号尤甚）：
-1. 列表 API 路径写错（例如误用 /api/v4/org/...，机构号文章列表应走 /api/v4/members/...）
-2. Cookie / 签名 / Referer 不正确
-3. user_id / usertype 与页面 URL 不一致
+常见根因：
+1. 列表 API 路径 / 鉴权 / Cookie / Referer 不正确
+2. 账号字段（user_id / fakeid / screen_name）与页面 URL 不一致
+3. 公共库解析逻辑过严
 
 请按以下步骤修复：
-1. 阅读 `.cursor/skills/_lib/zhihu_common.py` 与当前 `discover.py`
+1. 阅读 {lib_hint} 与 `.cursor/skills/{safe_slug}-discovery/scripts/discover.py`
 2. 复现：`{discover_cmd}`
-3. 用 curl/Python 核对正确列表 API，改 discover.py / source.yaml
+3. 优先改公共库（多账号受益）；仅当平台 skill 自身有误时改其目录
 4. `{validate_cmd}` 直至通过
 
-只修改本 skill 目录内文件；可调整对本 skill 生效的公共调用参数，但不要随意大改无关站点。"""
+不要为单个账号新建 `*-discovery` 目录；不要改 platform_accounts 的 feed_id。"""
 
 
 def build_validation_failure_feedback(error: str, *, slug: str = "") -> str:
@@ -108,6 +117,12 @@ def build_validation_failure_feedback(error: str, *, slug: str = "") -> str:
     discover_cmd = (
         f"python .cursor/skills/{safe_slug}-discovery/scripts/discover.py --page 1 --per 20"
     )
+    platform_note = ""
+    if safe_slug.endswith("-platform"):
+        platform_note = (
+            "\n本 skill 为平台级：可修改本目录及对应 `_lib/*_common.py` / `_lib/*_scaffold/`；"
+            "不要新建 per-account skill。"
+        )
     return f"""discovery_validate 验证失败，请修复已有 discovery skill。
 
 错误原文：
@@ -115,10 +130,10 @@ def build_validation_failure_feedback(error: str, *, slug: str = "") -> str:
 
 请：
 1. 复现：`{discover_cmd}` 与 `{validate_cmd}`
-2. 按报错修 scripts/discover.py / source.yaml
+2. 按报错修 scripts/discover.py / source.yaml（平台 skill 可改公共库）
 3. 重跑验证直至通过
 
-只修改本 skill 目录内文件，不要改 slug / FEED_ID。"""
+只修改本 skill 目录内文件，不要改 slug / FEED_ID。{platform_note}"""
 
 
 async def iter_auto_repair_agent(
@@ -270,6 +285,22 @@ def build_repair_prompt(
 
     references = load_reference_examples(max_chars_per_file=2500)
 
+    is_platform = str(slug).endswith("-platform")
+    platform_id = str(slug)[: -len("-platform")] if is_platform else ""
+    scope_rule = (
+        f"3. **可修改** `.cursor/skills/{slug}-discovery/` 以及 "
+        f"`.cursor/skills/_lib/{platform_id}_common.py`、"
+        f"`_lib/{platform_id}_scaffold/`（多账号共用）；"
+        f"禁止新建 per-account skill；禁止改 slug / 平台占位 FEED_ID"
+        if is_platform
+        else f"3. **只修改** `.cursor/skills/{slug}-discovery/` 内文件；禁止改 slug、FEED_ID、feed 目录名"
+    )
+    extra_constraint = (
+        f"- 平台 skill：优先修 `_lib/{platform_id}_common.py`；不要为单个账号建目录\n"
+        if is_platform
+        else ""
+    )
+
     return f"""你是 Askme 数据源 skill 修复 Agent。请根据用户反馈修复**已有** discovery skill，不要新建目录或修改 slug。
 
 ## 目标 skill（已存在，禁止改名/删目录）
@@ -278,6 +309,7 @@ def build_repair_prompt(
 - feed_id: website:{slug}
 - entry_url: {entry_url or "(见 FEED_META)"}
 - skill 目录: .cursor/skills/{slug}-discovery/
+{"- 类型: 平台级 skill（多账号共用）" if is_platform else ""}
 
 ## 用户反馈
 问题类型：
@@ -310,9 +342,9 @@ def build_repair_prompt(
 {references}
 
 ## 任务
-1. 阅读用户反馈，定位 discover.py / source.yaml 中的问题
+1. 阅读用户反馈，定位 discover.py / source.yaml / 公共库中的问题
 2. 必要时用 curl/Python 重新侦察目标站 API，确认列表与正文逻辑
-3. **只修改** `.cursor/skills/{slug}-discovery/` 内文件；禁止改 slug、FEED_ID、feed 目录名
+{scope_rule}
 4. 运行验证直至通过:
    `python .cursor/skills/_lib/discovery_validate.py {slug}`
 5. 若验证失败，根据报错继续修复并重跑
@@ -321,8 +353,8 @@ def build_repair_prompt(
 - discover.py 只能用 urllib/json/标准库 + `.cursor/skills/_lib`
 - 禁止 import backend
 - published_at 使用 ISO8601 Asia/Shanghai
-- 不要删除 skill 目录；不要创建 `{slug}-discovery` 以外的目录
-
+- 不要删除 skill 目录；不要创建 `{slug}-discovery` 以外的目录（平台公共库除外）
+{extra_constraint}
 完成后用一句话说明修复内容与验证结果。"""
 
 

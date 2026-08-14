@@ -51,9 +51,9 @@ export default function CodeViewer({ code, language, filename, className = "" }:
   if (!code) return null;
 
   return (
-    <div className={`code-viewer overflow-hidden rounded-lg border border-slate-200 bg-slate-50 ${className}`}>
+    <div className={`code-viewer overflow-hidden rounded-lg border border-[var(--rule)] bg-[var(--paper)] ${className}`}>
       {filename && (
-        <div className="border-b border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-500">{filename}</div>
+        <div className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-3 py-1.5 text-xs text-[var(--ink-muted)]">{filename}</div>
       )}
       <pre className="code-viewer-pre m-0 overflow-x-auto p-4 text-xs leading-5">
         <code className={`hljs language-${lang}`} dangerouslySetInnerHTML={{ __html: highlighted }} />

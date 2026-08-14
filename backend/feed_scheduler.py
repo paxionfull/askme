@@ -17,6 +17,12 @@ CONFIG_PATH = DATA_DIR / "feed_scheduler.json"
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 JOB_ID_PREFIX = "feed_refresh_"
 DEFAULT_REFRESH_CONCURRENCY = max(1, int(os.getenv("FEED_REFRESH_CONCURRENCY", "8")))
+# 微信公众号共用同一后台登录态：刷新并发单独压到 1，避免多号并行打 list_ex
+DEFAULT_WEIXIN_REFRESH_CONCURRENCY = max(
+    1, int(os.getenv("FEED_WEIXIN_REFRESH_CONCURRENCY", "1"))
+)
+# 单个数据源刷新硬超时：超时后记失败并释放并发槽，避免整批卡在某一个源上
+DEFAULT_FEED_REFRESH_TIMEOUT = max(15.0, float(os.getenv("FEED_REFRESH_TIMEOUT", "30")))
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "schedules": [],
@@ -391,19 +397,59 @@ class FeedSchedulerManager:
             }
 
             if total > 0:
-                sem = asyncio.Semaphore(min(DEFAULT_REFRESH_CONCURRENCY, total))
+                from feed_registry import feed_registry
+
+                def _is_weixin_feed(feed_id: str) -> bool:
+                    fid = (feed_id or "").strip()
+                    if fid.startswith("website:weixin:"):
+                        return True
+                    account = feed_registry.get_platform_account(fid)
+                    return bool(
+                        account
+                        and str(account.get("platform") or "").strip().lower() == "weixin"
+                    )
+
+                gen_sem = asyncio.Semaphore(min(DEFAULT_REFRESH_CONCURRENCY, total))
+                weixin_sem = asyncio.Semaphore(
+                    min(DEFAULT_WEIXIN_REFRESH_CONCURRENCY, total)
+                )
                 completed_count = 0
                 completed_success_ids: list[str] = []
+                per_feed_timeout = DEFAULT_FEED_REFRESH_TIMEOUT
 
                 async def refresh_one(feed: dict[str, Any]) -> tuple[str, str, bool, dict[str, Any] | None, str | None]:
                     feed_id = str(feed.get("id", ""))
                     feed_name = str(feed.get("mpName", ""))
-                    async with sem:
+                    slot = weixin_sem if _is_weixin_feed(feed_id) else gen_sem
+                    await slot.acquire()
+                    task = asyncio.create_task(
+                        feed_client.refresh_feed(feed_id, days=refresh_days)
+                    )
+                    try:
+                        done, _pending = await asyncio.wait({task}, timeout=per_feed_timeout)
+                        if task not in done:
+                            # 超时：释放并发槽，后台任务继续跑完但不阻塞整批
+                            def _swallow(done_task: asyncio.Task) -> None:
+                                try:
+                                    done_task.result()
+                                except Exception:
+                                    pass
+
+                            task.add_done_callback(_swallow)
+                            return (
+                                feed_id,
+                                feed_name,
+                                False,
+                                None,
+                                f"刷新超时（>{int(per_feed_timeout)}s），已跳过该源",
+                            )
                         try:
-                            feed_result = await feed_client.refresh_feed(feed_id, days=refresh_days)
+                            feed_result = task.result()
                             return feed_id, feed_name, True, feed_result, None
                         except Exception as exc:
                             return feed_id, feed_name, False, None, str(exc) or "刷新失败"
+                    finally:
+                        slot.release()
 
                 tasks = [asyncio.create_task(refresh_one(feed)) for feed in enabled_feeds]
                 for done in asyncio.as_completed(tasks):

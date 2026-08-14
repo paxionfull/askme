@@ -87,6 +87,11 @@ def _remove_skill_dir(skill_dir: Path) -> None:
 
 def delete_discovery_skill(skill_id: str) -> dict[str, str | None]:
     skill_id = _validate_skill_id(skill_id)
+    from skill_registry import PLATFORM_SKILL_SLUGS
+
+    if skill_id.endswith("-platform") or skill_id in PLATFORM_SKILL_SLUGS.values():
+        raise ValueError("平台级 skill 不可删除；请删除具体账号数据源")
+
     skill_dir = _skill_dir_for_discovery(skill_id)
     if not skill_dir.is_dir():
         raise ValueError("discovery skill 不存在")
@@ -110,6 +115,17 @@ def delete_discovery_skill_by_feed_id(feed_id: str) -> dict[str, str | None]:
     target = (feed_id or "").strip()
     if not target:
         raise ValueError("无效的 feed_id")
+
+    from feed_registry import feed_registry
+
+    # 平台账号：只清 registry，保留平台级 skill 供其他账号与 auto_repair 使用
+    if feed_registry.get_platform_account(target):
+        feed_registry.purge_feed(target)
+        from skill_registry import clear_loaded_skill_modules
+
+        clear_loaded_skill_modules()
+        return {"id": None, "feed_id": target}
+
     if not SKILLS_ROOT.is_dir():
         raise ValueError("未找到对应的 discovery skill")
 
@@ -295,6 +311,8 @@ def list_all_skills() -> dict:
             "skill_content": item.get("skill_content", ""),
             "skill_md": item.get("skill_md", ""),
             "path": item.get("path", ""),
+            "has_profile": bool(item.get("has_profile") or item.get("profile")),
+            "input_mode": item.get("input_mode", "full"),
         }
         for item in list_digest_skills()
     ]

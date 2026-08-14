@@ -122,6 +122,7 @@ interface DigestContextValue {
   summary: string;
   thinking: string;
   generating: boolean;
+  summaryPhase: string;
   statusMessage: string;
   summaryError: string;
   digestBusy: boolean;
@@ -171,6 +172,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
   const [thinking, setThinking] = useState("");
   const [generating, setGenerating] = useState(false);
   const [phase, setPhase] = useState<SummaryPhase>("idle");
+  const [summaryPhase, setSummaryPhase] = useState("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [summaryError, setSummaryError] = useState("");
 
@@ -446,13 +448,19 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     });
     if (generation !== indexBuildGenerationRef.current) return;
     if (finalStatus.status === "error") {
-      setIndexBuiltForDays(null);
-      setIndexChunkCount(0);
+      // 失败时保留已有索引（近 3 天历史不因本次失败被清掉）
       setLoadError(finalStatus.error || finalStatus.message || "建立索引失败");
     } else {
-      const result = finalStatus.result as { chunk_count?: number } | null;
-      setIndexChunkCount(result?.chunk_count ?? 0);
-      setIndexBuiltForDays(days);
+      try {
+        const rag = await fetchRagStatus(days);
+        if (generation !== indexBuildGenerationRef.current) return;
+        setIndexChunkCount(rag.chunk_count);
+        setIndexBuiltForDays(rag.chunk_count > 0 ? days : null);
+      } catch {
+        const result = finalStatus.result as { chunk_count?: number } | null;
+        setIndexChunkCount(result?.chunk_count ?? 0);
+        setIndexBuiltForDays((result?.chunk_count ?? 0) > 0 ? days : null);
+      }
     }
     setIndexStatusMessage("");
     setIndexProgress({ current: 0, total: 0, message: "" });
@@ -460,8 +468,10 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     setLoadingIndex(false);
   }, [days]);
 
+  /** 索引按可选最大时间范围（近 3 天）维护；无新正文时按 0 篇增量处理 */
+  const INDEX_RETENTION_DAYS = 3;
+
   const buildIndex = useCallback(async () => {
-    if (bodiesLoadedForDays !== days || bodyCount <= 0) return;
     if (indexBuildInFlightRef.current) return;
 
     ++indexBuildGenerationRef.current;
@@ -475,18 +485,16 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       if (!llmConfig.embedding_model?.trim()) {
         throw new Error("请先在设置页选择并保存 Embedding 模型");
       }
-      await startIndexJob(days, llmConfig);
+      await startIndexJob(INDEX_RETENTION_DAYS, llmConfig);
       await watchIndexJob();
     } catch (err) {
-      setIndexBuiltForDays(null);
-      setIndexChunkCount(0);
       setLoadError(err instanceof Error ? err.message : "建立索引失败");
       setIndexStatusMessage("");
       setIndexProgress({ current: 0, total: 0, message: "" });
       indexBuildInFlightRef.current = false;
       setLoadingIndex(false);
     }
-  }, [bodyCount, bodiesLoadedForDays, days, watchIndexJob]);
+  }, [watchIndexJob]);
 
   // 刷新后恢复正文 / 索引进度条
   useEffect(() => {
@@ -522,7 +530,6 @@ export function DigestProvider({ children }: { children: ReactNode }) {
   }, [watchBodiesJob, watchIndexJob]);
 
   const startSummarize = useCallback(async () => {
-    if (bodiesLoadedForDays !== days || bodyCount <= 0) return;
     if (selectedGroupIds.length === 0) {
       setSummaryError("请先选择一个分组");
       return;
@@ -531,7 +538,8 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     setGenerating(true);
     generatingRef.current = true;
     setPhase("generating");
-    setStatusMessage("正在生成概览...");
+    setSummaryPhase("start");
+    setStatusMessage("正在准备生成概览…");
     setSummaryError("");
     setSummary("");
     setThinking("");
@@ -557,6 +565,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         generatingRef.current = false;
         setGenerating(false);
         setPhase("idle");
+        setSummaryPhase("idle");
         setStatusMessage("");
         setThinking("");
         thinkingRef.current = "";
@@ -567,17 +576,22 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         setSummaryError(message);
         setGenerating(false);
         setPhase("idle");
+        setSummaryPhase("idle");
         setStatusMessage("");
         setThinking("");
         thinkingRef.current = "";
       },
       (status) => {
-        if (status.phase === "generating") {
+        if (status.message) {
+          setStatusMessage(status.message);
+        }
+        if (status.phase) {
+          setSummaryPhase(status.phase);
+        }
+        if (status.phase === "generating" || status.phase === "classify" || status.phase === "cluster" || status.phase === "render") {
           setPhase("generating");
-          setStatusMessage(status.message ?? "正在生成概览...");
         } else if (status.phase === "loading_articles") {
           setPhase("loading_articles");
-          setStatusMessage(status.message ?? "正在加载文章正文...");
         }
       },
       (chunk) => {
@@ -586,8 +600,6 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       },
     );
   }, [
-    bodyCount,
-    bodiesLoadedForDays,
     days,
     loadCachedSummary,
     selectedGroupIds,
@@ -626,8 +638,9 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         summary,
         thinking,
         generating,
+        summaryPhase,
         statusMessage: generating
-          ? statusMessage || (phase === "generating" ? "正在生成概览..." : "")
+          ? statusMessage || (phase === "generating" ? "正在生成概览…" : "")
           : "",
         summaryError,
         digestBusy,

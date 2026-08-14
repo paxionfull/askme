@@ -13,7 +13,7 @@ from time_scope import calendar_scope_cutoff, filter_articles_by_days, parse_pub
 ARTICLE_CHAR_LIMIT = 3000
 TOTAL_CHAR_LIMIT = 80_000
 CONTEXT_CACHE_TTL = 86400.0
-DEFAULT_BODY_FETCH_CONCURRENCY = 12
+DEFAULT_BODY_FETCH_CONCURRENCY = 4
 DEFAULT_FEED_LIST_LIMIT = 20
 
 DEFAULT_SUMMARY_SYSTEM_PROMPT = """你是 Askme 资讯编辑。用户消息中包含 XML 格式的 <文章集合>，每篇含来源、发布时间、标题和正文。
@@ -52,8 +52,14 @@ def _normalize_article_url(url: str) -> str:
         parsed = urlparse(raw)
         if not parsed.netloc:
             return raw
+        scheme = parsed.scheme.lower()
+        netloc = parsed.netloc.lower()
         path = parsed.path.rstrip("/") or "/"
-        return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", "", ""))
+        query = parsed.query or ""
+        # 微信公众号列表链身份在 query（__biz/mid/idx/sn），去掉 query 会把全部收成 /s
+        if "mp.weixin.qq.com" in netloc and path == "/s" and query:
+            return urlunparse((scheme, netloc, path, "", query, ""))
+        return urlunparse((scheme, netloc, path, "", "", ""))
     except ValueError:
         return raw
 
@@ -363,6 +369,8 @@ class ArticleService:
         self,
         days: int,
         feed_ids: list[str] | None = None,
+        *,
+        dedupe: bool = True,
     ) -> list[dict]:
         feeds = await self.client.list_feeds()
         if feed_ids:
@@ -395,7 +403,8 @@ class ArticleService:
         batches = await asyncio.gather(*[_articles_for_feed(feed) for feed in feeds])
         all_articles = [article for batch in batches for article in batch]
         all_articles.sort(key=lambda item: item.get("published_at", ""), reverse=True)
-        return _dedupe_articles(all_articles)
+        # 拉正文时不要跨源去重：否则同题转载/微信 query URL 会被丢掉，侧栏仍显示无正文
+        return _dedupe_articles(all_articles) if dedupe else all_articles
 
     async def _collect_list_meta(
         self,
@@ -403,6 +412,7 @@ class ArticleService:
         *,
         limit: int | None = DEFAULT_FEED_LIST_LIMIT,
         days: int | None = None,
+        dedupe: bool = True,
     ) -> list[dict]:
         """Collect articles shown in the feed sidebar list, optionally filtered by days."""
         feeds = await self.client.list_feeds()
@@ -436,7 +446,7 @@ class ArticleService:
         batches = await asyncio.gather(*[_articles_for_feed(feed) for feed in feeds])
         all_articles = [article for batch in batches for article in batch]
         all_articles.sort(key=lambda item: item.get("published_at", ""), reverse=True)
-        return _dedupe_articles(all_articles)
+        return _dedupe_articles(all_articles) if dedupe else all_articles
 
     async def _enrich_feed_articles(
         self,
@@ -470,11 +480,45 @@ class ArticleService:
             async with sem:
                 content_html = ""
                 plain_text = ""
-                try:
-                    content_html, plain_text = await self._fetch_and_persist_body(feed_id, article)
-                except Exception:
-                    content_html = ""
-                    plain_text = ""
+                last_error = ""
+                last_raised = False
+                # 偶发超时/空正文：最多再试 1 次；异常失败写入 fetch_error，避免看起来像「从未拉取」
+                for attempt in range(2):
+                    last_raised = False
+                    try:
+                        content_html, plain_text = await self._fetch_and_persist_body(
+                            feed_id, article
+                        )
+                        if str(plain_text).strip():
+                            break
+                        last_error = "正文为空"
+                    except Exception as exc:
+                        last_raised = True
+                        content_html = ""
+                        plain_text = ""
+                        last_error = str(exc) or type(exc).__name__
+                    if attempt == 0 and (last_raised or not str(plain_text).strip()):
+                        await asyncio.sleep(0.8)
+                if last_raised and not str(plain_text).strip():
+                    article_id = str(article.get("id") or "")
+                    if article_id:
+                        try:
+                            self.client.body_store.save(
+                                feed_id,
+                                article_id,
+                                content_html="",
+                                plain_text="",
+                                body_status="fetch_error",
+                                body_detail=(last_error or "获取正文失败")[:500],
+                                title=str(article.get("title") or ""),
+                                url=str(article.get("url") or ""),
+                                published_at=str(article.get("published_at") or ""),
+                                feed_name=str(article.get("feed_name") or ""),
+                            )
+                        except Exception:
+                            pass
+                # 正文逐篇限速，降低同站连刷触发 429
+                await asyncio.sleep(0.35)
                 return {
                     **article,
                     "content_html": content_html,
@@ -600,9 +644,11 @@ class ArticleService:
         on_progress: Callable[[int, int, int, int, str], Awaitable[None]] | None = None,
     ) -> dict:
         if list_limit and list_limit > 0:
-            meta = await self._collect_list_meta(feed_ids, limit=list_limit, days=days)
+            meta = await self._collect_list_meta(
+                feed_ids, limit=list_limit, days=days, dedupe=not enrich
+            )
         else:
-            meta = await self._collect_recent_meta(days, feed_ids)
+            meta = await self._collect_recent_meta(days, feed_ids, dedupe=not enrich)
         meta_count = len(meta)
 
         if enrich:

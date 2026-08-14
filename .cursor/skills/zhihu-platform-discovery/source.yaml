@@ -1,0 +1,13 @@
+id: zhihu-platform
+name: 知乎
+homepage: https://www.zhihu.com
+platform: zhihu
+platform_skill: true
+
+discovery:
+  type: zhihu_api
+  requires_cookie: true
+  auth_slot: zhihu
+
+validation:
+  expected_min_items: 1

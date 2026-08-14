@@ -7,9 +7,13 @@ import ConfirmModal from "../components/ConfirmModal";
 import FeedSidebar from "../components/FeedSidebar";
 import { consumeLastOnboardedFeedId, useOnboarding } from "../contexts/OnboardingContext";
 import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
+import { resolveDefaultFeedId, setStoredSelectedFeedId } from "../utils/selectedFeed";
+import { deleteFeedMessage, deleteFeedSuccessMessage, isPlatformFeed } from "../utils/platformFeed";
 import { useDigest } from "../contexts/DigestContext";
 import { useFeedRefresh } from "../contexts/FeedRefreshContext";
-import { isLlmConfigured, useSettings, type DefaultDays, formatDaysLabel } from "../hooks/useSettings";
+import { isLlmConfigured, useSettings, formatDaysLabel } from "../hooks/useSettings";
+import DaysRangeSelect from "../components/DaysRangeSelect";
+import OverflowMenu from "../components/OverflowMenu";
 
 export default function ReadPage() {
   const { settings } = useSettings();
@@ -19,11 +23,8 @@ export default function ReadPage() {
     loadingBodies,
     loadingIndex,
     loadError: digestError,
-    truncated,
     metaCount,
     bodyCount,
-    cachedCount,
-    fetchedCount,
     bodiesReady,
     indexReady,
     indexChunkCount,
@@ -57,12 +58,19 @@ export default function ReadPage() {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [addSourceOpen, setAddSourceOpen] = useState(false);
+  const [addSourceInitialUrls, setAddSourceInitialUrls] = useState("");
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Feed | null>(null);
   const [deleteRemoveSkill, setDeleteRemoveSkill] = useState(false);
   const [deletingFeed, setDeletingFeed] = useState(false);
-  const [maintenanceOpen, setMaintenanceOpen] = useState(false);
-  const { batch } = useOnboarding();
+  const { batch, authRetryUrls, clearAuthRetry } = useOnboarding();
+
+  useEffect(() => {
+    if (authRetryUrls.length === 0) return;
+    setAddSourceInitialUrls(authRetryUrls.join("\n"));
+    setAddSourceOpen(true);
+    clearAuthRetry();
+  }, [authRetryUrls, clearAuthRetry]);
 
   const articlesCache = useRef<Map<string, Article[]>>(new Map());
 
@@ -74,6 +82,12 @@ export default function ReadPage() {
 
   useEffect(() => {
     selectedFeedIdRef.current = selectedFeedId;
+  }, [selectedFeedId]);
+
+  useEffect(() => {
+    if (selectedFeedId) {
+      setStoredSelectedFeedId(selectedFeedId);
+    }
   }, [selectedFeedId]);
 
   const selectedFeed = feeds.find((feed) => feed.id === selectedFeedId) ?? null;
@@ -114,12 +128,14 @@ export default function ReadPage() {
       setFeedGroups(data.groups);
       setGroupOrder(data.group_order ?? []);
       setDefaultDigestSkill(data.default_digest_skill ?? "general-digest");
-      setSelectedFeedId((current) => {
-        if (current && data.feeds.some((feed) => feed.id === current)) {
-          return current;
-        }
-        return data.feeds[0]?.id ?? null;
-      });
+      setSelectedFeedId((current) =>
+        resolveDefaultFeedId(
+          data.feeds,
+          data.groups,
+          data.group_order ?? [],
+          current,
+        ),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载数据源失败");
     } finally {
@@ -255,7 +271,7 @@ export default function ReadPage() {
     setError("");
     setInfo("");
     try {
-      await startRefreshFeed(selectedFeedId, selectedFeed?.name, days);
+      await startRefreshFeed(selectedFeedId, selectedFeed?.name, days, selectedFeed?.entry_url);
     } catch (err) {
       setError(err instanceof Error ? err.message : "刷新失败");
     }
@@ -328,15 +344,17 @@ export default function ReadPage() {
       setFeeds(latest.feeds);
       setFeedGroups(latest.groups);
       setGroupOrder(latest.group_order ?? []);
-      setSelectedFeedId((current) => {
-        if (current === feedId) {
-          return latest.feeds[0]?.id ?? null;
-        }
-        return current;
-      });
+      setSelectedFeedId((current) =>
+        resolveDefaultFeedId(
+          latest.feeds,
+          latest.groups,
+          latest.group_order ?? [],
+          current === feedId ? null : current,
+        ),
+      );
       setDeleteTarget(null);
       setDeleteRemoveSkill(false);
-      setInfo(result.skill_removed ? "已移除数据源并删除本地 skill" : "已从列表移除数据源（skill 已保留）");
+      setInfo(deleteFeedSuccessMessage(result));
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除失败");
     } finally {
@@ -407,88 +425,68 @@ export default function ReadPage() {
       : "未建索引";
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="border-b border-slate-200 bg-white px-4 py-3">
+    <div className="flex h-full flex-col bg-[var(--paper)]">
+      <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-4 py-3">
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-base font-semibold">数据源</h1>
-            <p className="mt-0.5 text-xs text-slate-500">
+          <div className="min-w-0">
+            <h1 className="text-base font-semibold tracking-tight text-[var(--ink)]">库</h1>
+            <p className="mt-0.5 truncate text-xs text-[var(--ink-muted)]">
               {formatDaysLabel(days)} · {bodyStatusLabel} · {indexStatusLabel}
+              {bodiesReady && bodyCount > 0 ? ` · ${bodyCount} 篇正文` : ""}
+              {indexReady ? ` · ${indexChunkCount} 片段` : ""}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <select
-              value={days}
-              disabled={digestBusy}
-              onChange={(e) => setDays(Number(e.target.value) as DefaultDays)}
-              className="rounded-md border border-slate-300 px-2 py-1.5 text-sm disabled:opacity-50"
-            >
-              <option value={1}>今天</option>
-              <option value={3}>近 3 天</option>
-            </select>
-            <button
-              type="button"
-              onClick={() => setMaintenanceOpen((open) => !open)}
-              className={`rounded-md border px-3 py-1.5 text-sm ${
-                maintenanceOpen
-                  ? "border-slate-400 bg-slate-100 text-slate-800"
-                  : "border-slate-300 text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              维护{maintenanceOpen ? " ▴" : " ▾"}
-            </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <DaysRangeSelect value={days} onChange={setDays} disabled={digestBusy} />
+            <OverflowMenu
+              disabled={digestBusy && !loadingBodies && !loadingIndex}
+              items={[
+                {
+                  label: loadingBodies
+                    ? "拉取正文中…"
+                    : bodiesReady
+                      ? "重新拉取正文"
+                      : "拉取正文",
+                  hint: bodiesReady
+                    ? `${bodyCount} 篇含正文${metaCount > bodyCount ? `（共 ${metaCount}）` : ""}`
+                    : metaCount > 0
+                      ? `${metaCount} 篇待拉取`
+                      : "当前范围暂无文章",
+                  disabled: digestBusy,
+                  onClick: () => {
+                    clearErrors();
+                    void loadBodies();
+                  },
+                },
+                {
+                  label: loadingIndex
+                    ? "建立索引中…"
+                    : indexReady
+                      ? "重新建立索引"
+                      : "建立索引",
+                  hint: indexReady
+                    ? `已有 ${indexChunkCount} 个向量片段（近 3 天范围保留）`
+                    : "无新正文时按 0 篇处理，保留近 3 天已有索引",
+                  disabled: digestBusy || !isLlmConfigured(settings),
+                  onClick: () => {
+                    clearErrors();
+                    void buildIndex();
+                  },
+                },
+              ]}
+            />
           </div>
         </div>
-        {maintenanceOpen && (
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-            <p>
-              {bodiesReady
-                ? `${bodyCount} 篇含正文${metaCount > bodyCount ? `（共 ${metaCount} 篇）` : ""}`
-                : metaCount > 0
-                  ? `${metaCount} 篇文章待拉取正文`
-                  : "当前时间范围内暂无文章"}
-              {bodiesReady && cachedCount + fetchedCount > 0
-                ? ` · 缓存 ${cachedCount} · 新拉 ${fetchedCount}`
-                : ""}
-              {bodiesReady && truncated ? " · 部分内容将在生成时截断" : ""}
-              {indexReady ? ` · 索引 ${indexChunkCount} 片段` : ""}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={digestBusy}
-                onClick={() => {
-                  clearErrors();
-                  void loadBodies();
-                }}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-              >
-                {loadingBodies ? "拉取正文中..." : bodiesReady ? "重新拉取正文" : "拉取正文"}
-              </button>
-              <button
-                type="button"
-                disabled={digestBusy || !bodiesReady || !isLlmConfigured(settings)}
-                onClick={() => {
-                  clearErrors();
-                  void buildIndex();
-                }}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-              >
-                {loadingIndex ? "建立索引中..." : indexReady ? "重新建立索引" : "建立索引"}
-              </button>
-            </div>
-          </div>
-        )}
       </header>
 
       {combinedError && (
-        <div className="whitespace-pre-wrap border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+        <div className="whitespace-pre-wrap border-b border-[var(--rule)] bg-[var(--error-soft)] px-4 py-2 text-sm text-red-800">
           {combinedError}
         </div>
       )}
 
       {info && (
-        <div className="border-b border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700">
+        <div className="border-b border-[var(--rule)] bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--accent)]">
           {info}
         </div>
       )}
@@ -524,6 +522,7 @@ export default function ReadPage() {
           }}
           onRenameFeed={(feedId, name) => handleRenameFeed(feedId, name)}
           onLayoutChange={handleLayoutChange}
+          days={days}
         />
         <ArticleList
           key={selectedFeedId ?? "none"}
@@ -540,9 +539,13 @@ export default function ReadPage() {
 
       <AddSourceModal
         open={addSourceOpen}
-        onClose={() => setAddSourceOpen(false)}
+        onClose={() => {
+          setAddSourceOpen(false);
+          setAddSourceInitialUrls("");
+        }}
         groups={feedGroups}
         defaultGroupId={selectedFeed?.group_id ?? UNGROUPED_GROUP_ID}
+        initialUrls={addSourceInitialUrls}
       />
       <FeedGroupModal
         open={groupModalOpen}
@@ -555,21 +558,17 @@ export default function ReadPage() {
       <ConfirmModal
         open={Boolean(deleteTarget)}
         title="移除数据源"
-        message={
-          deleteTarget
-            ? `确定从列表移除「${deleteTarget.name}」？\n\nskill 文件会保留，之后可通过相同链接重新接入。`
-            : ""
-        }
+        message={deleteTarget ? deleteFeedMessage(deleteTarget) : ""}
         extraContent={
-          deleteTarget ? (
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+          deleteTarget && !isPlatformFeed(deleteTarget) ? (
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--ink-muted)]">
               <input
                 type="checkbox"
                 checked={deleteRemoveSkill}
                 onChange={(e) => setDeleteRemoveSkill(e.target.checked)}
                 disabled={deletingFeed}
               />
-              同时移除本地 skill（默认保留）
+              同时删除本地 skill 目录（不可恢复）
             </label>
           ) : null
         }

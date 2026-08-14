@@ -2,6 +2,7 @@ import json
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA_DIR / "digest_summaries.db"
@@ -49,6 +50,10 @@ class DigestSummaryStore:
                 conn.execute(
                     "ALTER TABLE digest_summaries ADD COLUMN article_refs TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "digest_tree" not in columns:
+                conn.execute(
+                    "ALTER TABLE digest_summaries ADD COLUMN digest_tree TEXT NOT NULL DEFAULT ''"
+                )
 
     def save(
         self,
@@ -60,6 +65,7 @@ class DigestSummaryStore:
         article_count: int = 0,
         truncated: bool = False,
         article_refs: list[dict[str, str]] | None = None,
+        digest_tree: dict[str, Any] | None = None,
     ) -> None:
         text = summary.strip()
         if not text:
@@ -67,20 +73,23 @@ class DigestSummaryStore:
         key = _cache_key(days, feed_ids, group_ids)
         now = time.time()
         refs_json = json.dumps(article_refs or [], ensure_ascii=False)
+        tree_json = json.dumps(digest_tree, ensure_ascii=False) if digest_tree else ""
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO digest_summaries (
-                    cache_key, days, summary, article_count, truncated, updated_at, article_refs
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    cache_key, days, summary, article_count, truncated, updated_at,
+                    article_refs, digest_tree
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(cache_key) DO UPDATE SET
                     summary = excluded.summary,
                     article_count = excluded.article_count,
                     truncated = excluded.truncated,
                     updated_at = excluded.updated_at,
-                    article_refs = excluded.article_refs
+                    article_refs = excluded.article_refs,
+                    digest_tree = excluded.digest_tree
                 """,
-                (key, days, text, article_count, 1 if truncated else 0, now, refs_json),
+                (key, days, text, article_count, 1 if truncated else 0, now, refs_json, tree_json),
             )
 
     def get(self, days: int, feed_ids: list[str] | None = None, group_ids: list[str] | None = None) -> dict | None:
@@ -88,7 +97,7 @@ class DigestSummaryStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT summary, article_count, truncated, updated_at, article_refs
+                SELECT summary, article_count, truncated, updated_at, article_refs, digest_tree
                 FROM digest_summaries
                 WHERE cache_key = ?
                 """,
@@ -96,17 +105,30 @@ class DigestSummaryStore:
             ).fetchone()
         if row is None:
             return None
-        refs_raw = row["article_refs"] if "article_refs" in row.keys() else "[]"
+        keys = set(row.keys())
+        refs_raw = row["article_refs"] if "article_refs" in keys else "[]"
         try:
             article_refs = json.loads(refs_raw or "[]")
         except json.JSONDecodeError:
             article_refs = []
+
+        digest_tree = None
+        tree_raw = row["digest_tree"] if "digest_tree" in keys else ""
+        if tree_raw:
+            try:
+                parsed = json.loads(tree_raw)
+                if isinstance(parsed, dict):
+                    digest_tree = parsed
+            except json.JSONDecodeError:
+                digest_tree = None
+
         return {
             "summary": row["summary"],
             "article_count": int(row["article_count"]),
             "truncated": bool(row["truncated"]),
             "updated_at": float(row["updated_at"]),
             "article_refs": article_refs if isinstance(article_refs, list) else [],
+            "digest_tree": digest_tree,
         }
 
     def delete(self, days: int, feed_ids: list[str] | None = None, group_ids: list[str] | None = None) -> None:
@@ -127,6 +149,7 @@ def set_summary(
     article_count: int = 0,
     truncated: bool = False,
     article_refs: list[dict[str, str]] | None = None,
+    digest_tree: dict[str, Any] | None = None,
 ) -> None:
     _store.save(
         days,
@@ -136,6 +159,7 @@ def set_summary(
         article_count=article_count,
         truncated=truncated,
         article_refs=article_refs,
+        digest_tree=digest_tree,
     )
 
 

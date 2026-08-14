@@ -6,6 +6,7 @@ class LlmConfigInput(BaseModel):
     api_key: str = ""
     api_base: str = ""
     embedding_model: str = ""
+    max_tokens: int | None = Field(default=None, ge=256, le=128000)
 
 
 class BuildIndexRequest(BaseModel):
@@ -131,8 +132,8 @@ class FeedGroupsRequest(BaseModel):
 
 class DigestSkillInput(BaseModel):
     id: str = Field(..., min_length=1)
-    skill_md: str = Field(..., min_length=1)
-
+    skill_md: str | None = None
+    profile: dict | None = None
 
 class ChatSkillInput(BaseModel):
     skill_md: str = Field(..., min_length=1)

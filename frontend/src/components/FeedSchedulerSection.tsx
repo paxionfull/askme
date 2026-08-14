@@ -180,11 +180,11 @@ export default function FeedSchedulerSection() {
   }
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold">订阅定时更新</h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-[var(--ink-muted)]">
             每天在指定时刻刷新各网站数据源文章列表。未添加定时则需手动在「数据源」刷新。
             配置保存在服务端 data/feed_scheduler.json，时区为 Asia/Shanghai。
           </p>
@@ -192,7 +192,7 @@ export default function FeedSchedulerSection() {
         <button
           type="button"
           onClick={handleAddSchedule}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
+          className="rounded-md border border-[var(--rule)] px-3 py-1.5 text-sm hover:bg-[var(--paper)]"
         >
           添加定时
         </button>
@@ -200,7 +200,7 @@ export default function FeedSchedulerSection() {
           type="button"
           disabled={refreshBusy}
           onClick={() => void handleRefreshAllNow()}
-          className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
+          className="rounded-md bg-[var(--ink)] px-3 py-1.5 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)] disabled:opacity-50"
         >
           {refreshBusy ? "更新中..." : "立即更新"}
         </button>
@@ -208,7 +208,7 @@ export default function FeedSchedulerSection() {
 
       {showProgressBar && refreshProgress && (
         <div className="mt-3">
-          <div className="mb-1 flex items-center justify-between text-xs text-slate-600">
+          <div className="mb-1 flex items-center justify-between text-xs text-[var(--ink-muted)]">
             <span>
               {statusMessage ||
                 (refreshProgress.feed_name
@@ -219,9 +219,9 @@ export default function FeedSchedulerSection() {
               {refreshProgress.current}/{refreshProgress.total}
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--rule)]">
             <div
-              className="h-full rounded-full bg-slate-900 transition-all duration-300"
+              className="h-full rounded-full bg-[var(--ink)] transition-all duration-300"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
@@ -229,20 +229,20 @@ export default function FeedSchedulerSection() {
       )}
 
       {loading ? (
-        <p className="mt-4 text-sm text-slate-500">加载中...</p>
+        <p className="mt-4 text-sm text-[var(--ink-muted)]">加载中...</p>
       ) : (
         <>
           {drafts.length === 0 ? (
-            <p className="mt-4 text-sm text-slate-500">暂无定时，点击「添加定时」创建。</p>
+            <p className="mt-4 text-sm text-[var(--ink-muted)]">暂无定时，点击「添加定时」创建。</p>
           ) : (
             <ul className="mt-4 space-y-3">
               {drafts.map((item) => (
                 <li
                   key={item.id}
-                  className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--rule)] px-3 py-2 text-sm"
                 >
-                  <span className="text-slate-600">每天</span>
-                  <label className="flex items-center gap-1 text-xs text-slate-500">
+                  <span className="text-[var(--ink-muted)]">每天</span>
+                  <label className="flex items-center gap-1 text-xs text-[var(--ink-muted)]">
                     时
                     <input
                       type="number"
@@ -252,11 +252,11 @@ export default function FeedSchedulerSection() {
                       onChange={(e) =>
                         updateDraft(item.id, { hour: Number(e.target.value) })
                       }
-                      className="w-14 rounded border border-slate-300 px-2 py-1 text-sm text-slate-900"
+                      className="w-14 rounded border border-[var(--rule)] px-2 py-1 text-sm text-[var(--ink)]"
                     />
                   </label>
-                  <span className="text-slate-400">:</span>
-                  <label className="flex items-center gap-1 text-xs text-slate-500">
+                  <span className="text-[var(--ink-muted)]">:</span>
+                  <label className="flex items-center gap-1 text-xs text-[var(--ink-muted)]">
                     分
                     <input
                       type="number"
@@ -266,11 +266,11 @@ export default function FeedSchedulerSection() {
                       onChange={(e) =>
                         updateDraft(item.id, { minute: Number(e.target.value) })
                       }
-                      className="w-14 rounded border border-slate-300 px-2 py-1 text-sm text-slate-900"
+                      className="w-14 rounded border border-[var(--rule)] px-2 py-1 text-sm text-[var(--ink)]"
                     />
                   </label>
-                  <span className="text-slate-400">:</span>
-                  <label className="flex items-center gap-1 text-xs text-slate-500">
+                  <span className="text-[var(--ink-muted)]">:</span>
+                  <label className="flex items-center gap-1 text-xs text-[var(--ink-muted)]">
                     秒
                     <input
                       type="number"
@@ -280,10 +280,10 @@ export default function FeedSchedulerSection() {
                       onChange={(e) =>
                         updateDraft(item.id, { second: Number(e.target.value) })
                       }
-                      className="w-14 rounded border border-slate-300 px-2 py-1 text-sm text-slate-900"
+                      className="w-14 rounded border border-[var(--rule)] px-2 py-1 text-sm text-[var(--ink)]"
                     />
                   </label>
-                  <span className="ml-1 font-mono text-xs text-slate-500">
+                  <span className="ml-1 font-mono text-xs text-[var(--ink-muted)]">
                     {formatScheduleLabel(item)}
                   </span>
                   <button
@@ -299,8 +299,8 @@ export default function FeedSchedulerSection() {
           )}
 
           {status && status.next_runs && status.next_runs.length > 0 && (
-            <div className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-              <div className="font-medium text-slate-700">下次执行</div>
+            <div className="mt-4 rounded-lg bg-[var(--paper)] px-3 py-2 text-xs text-[var(--ink-muted)]">
+              <div className="font-medium text-[var(--ink)]">下次执行</div>
               <ul className="mt-1 space-y-1">
                 {status.next_runs.map((item) => (
                   <li key={`${item.hour}-${item.minute}-${item.second}`}>
@@ -312,7 +312,7 @@ export default function FeedSchedulerSection() {
           )}
 
           {status && (
-            <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <div className="mt-3 rounded-lg bg-[var(--paper)] px-3 py-2 text-xs text-[var(--ink-muted)]">
               <div>上次执行：{formatLastRun(status.last_run_at)}</div>
               {(status.last_feed_count ?? 0) > 0 && (
                 <div>上次刷新订阅数：{status.last_feed_count}</div>
@@ -321,7 +321,7 @@ export default function FeedSchedulerSection() {
                 <div className="mt-1 text-red-600">上次错误：{status.last_error}</div>
               )}
               {(status.last_refresh_failed?.length ?? 0) > 0 && (
-                <div className="mt-1 whitespace-pre-wrap text-amber-700">
+                <div className="mt-1 whitespace-pre-wrap text-[var(--accent)]">
                   {[
                     `上次失败 ${status.last_refresh_failed!.length} 个：`,
                     ...status.last_refresh_failed!.map(
@@ -348,7 +348,7 @@ export default function FeedSchedulerSection() {
               type="button"
               disabled={saving || !isDirty}
               onClick={() => void handleSave()}
-              className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
+              className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)] disabled:opacity-50"
             >
               {saving ? "保存中..." : "保存"}
             </button>

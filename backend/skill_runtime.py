@@ -21,11 +21,25 @@ def get_digest_input_mode(skill_id: str) -> str:
 
     item = get_digest_skill(skill_id)
     if item:
+        profile = item.get("profile")
+        if isinstance(profile, dict):
+            mode = str(profile.get("input_mode") or "").strip()
+            if mode:
+                return mode
         mode = str(item.get("input_mode") or "full").strip()
         if mode:
             return mode
     return "full"
 
+
+def get_digest_profile(skill_id: str) -> dict | None:
+    from digest_skill_registry import get_digest_skill
+
+    item = get_digest_skill(skill_id)
+    if not item:
+        return None
+    profile = item.get("profile")
+    return profile if isinstance(profile, dict) else None
 
 def get_chat_role_prompt() -> str:
     """Chat：返回 SKILL.md 角色层；RAG 规则与上下文由 chat_service 追加。"""

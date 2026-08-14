@@ -8,6 +8,9 @@ from pathlib import Path
 
 SKILLS_ROOT = Path(__file__).resolve().parent.parent / ".cursor" / "skills"
 VALIDATE_SCRIPT = SKILLS_ROOT / "_lib" / "discovery_validate.py"
+_LIB = SKILLS_ROOT / "_lib"
+if str(_LIB) not in sys.path:
+    sys.path.insert(0, str(_LIB))
 
 
 def run_validation(slug: str, *, min_items: int = 1) -> dict:
@@ -18,3 +21,62 @@ def run_validation(slug: str, *, min_items: int = 1) -> dict:
     sys.modules["askme_discovery_validate"] = module
     spec.loader.exec_module(module)
     return module.validate_skill(slug, min_items=min_items)
+
+
+def run_validation_for_account(account: dict, *, min_items: int = 1) -> dict:
+    """验证平台账号：ContextVar 平台走 platform skill；编译型平台走内存脚手架。"""
+    platform = str(account.get("platform") or "").strip().lower()
+    if platform in {"xiaohongshu", "x"}:
+        from platform_scaffold_bind import compile_scaffold_adapter
+
+        adapter = compile_scaffold_adapter(platform, account)
+        return _validate_adapter_module(adapter, min_items=min_items, label=account.get("feed_id"))
+
+    from platform_account_ctx import platform_account_scope
+    from skill_registry import platform_skill_slug
+
+    slug = platform_skill_slug(platform) if platform else str(account.get("slug") or "")
+    if platform == "jin10":
+        slug = "jin10"
+    with platform_account_scope(account):
+        return run_validation(slug, min_items=min_items)
+
+
+def _validate_adapter_module(module, *, min_items: int, label: str | None = None) -> dict:
+    """对已绑定账号的 adapter 模块做与 discovery_validate 类似的最小检查。"""
+    required = (
+        "fetch_list_page",
+        "list_items",
+        "has_next_page",
+        "normalize_list_item",
+        "fetch_article_detail",
+    )
+    missing = [name for name in required if not hasattr(module, name)]
+    if missing:
+        raise ValueError(f"adapter 缺少接口: {', '.join(missing)}")
+    payload = module.fetch_list_page(1, 5)
+    items = module.list_items(payload)
+    if len(items) < min_items:
+        raise ValueError(f"列表文章数不足: {len(items)} < {min_items} ({label or ''})")
+    normalized = [module.normalize_list_item(item) for item in items[: min(len(items), 3)]]
+    for article in normalized:
+        for key in ("id", "title", "url", "published_at"):
+            if not str(article.get(key, "")).strip():
+                raise ValueError(f"列表项缺少字段 {key}: {article}")
+    first = normalized[0]
+    detail = module.fetch_article_detail(
+        first["id"],
+        url=first.get("url", ""),
+        title=first.get("title", ""),
+        published_at=first.get("published_at", ""),
+    )
+    html = str(detail.get("content_html") or "")
+    if len(html.strip()) < 40:
+        raise ValueError("正文过短或为空")
+    return {
+        "ok": True,
+        "list_count": len(items),
+        "sample_title": first.get("title"),
+        "feed_id": label,
+    }
+

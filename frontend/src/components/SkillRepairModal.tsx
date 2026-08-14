@@ -57,78 +57,79 @@ export default function SkillRepairModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-      <div className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-xl">
-        <div className="border-b border-slate-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-slate-900">反馈并修复 Skill</h2>
-          <p className="mt-1 text-xs text-slate-500">
-            {skillName}（{skillId}）· 由 Cursor Agent 根据反馈修改 discover.py 并自动验证
+    <div
+      className="ui-modal-backdrop ui-modal-backdrop-nested"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="skill-repair-title"
+    >
+      <div className="ui-modal ui-modal-md">
+        <div className="ui-modal-header">
+          <h2 id="skill-repair-title" className="ui-modal-title">
+            反馈并修复
+          </h2>
+          <p className="ui-modal-desc">
+            {skillName}（{skillId}）· Cursor Agent 将按反馈修改抓取逻辑并验证
           </p>
         </div>
 
-        <div className="space-y-4 px-5 py-4">
+        <div className="ui-modal-body space-y-4">
           <div>
-            <p className="mb-2 text-sm font-medium text-slate-700">问题类型（可选）</p>
-            <div className="flex flex-wrap gap-2">
-              {REPAIR_ISSUE_OPTIONS.map((option) => (
-                <label
-                  key={option.id}
-                  className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs ${
-                    issueTypes.includes(option.id)
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-300 text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    className="sr-only"
-                    checked={issueTypes.includes(option.id)}
-                    onChange={() => toggleIssue(option.id)}
-                  />
-                  {option.label}
-                </label>
-              ))}
+            <p className="ui-field-label mb-2">问题类型（可选）</p>
+            <div className="flex flex-wrap gap-1.5">
+              {REPAIR_ISSUE_OPTIONS.map((option) => {
+                const selected = issueTypes.includes(option.id);
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => toggleIssue(option.id)}
+                    className={`rounded-[var(--radius-control)] border px-2.5 py-1 text-xs transition-colors ${
+                      selected
+                        ? "border-[var(--ink)] bg-[var(--ink)] text-[var(--paper-raised)]"
+                        : "border-[var(--rule)] text-[var(--ink-muted)] hover:bg-[var(--paper)]"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          <label className="block text-sm">
-            <span className="font-medium text-slate-700">问题描述</span>
+          <label className="ui-field">
+            <span className="ui-field-label">问题描述</span>
             <textarea
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
               rows={4}
               placeholder="例如：刷新后只有 3 条文章，且正文只有标题没有内容…"
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="ui-textarea w-full"
             />
           </label>
 
-          <label className="block text-sm">
-            <span className="font-medium text-slate-700">样例文章链接（可选）</span>
+          <label className="ui-field">
+            <span className="ui-field-label">样例文章链接（可选）</span>
             <input
               value={sampleUrl}
               onChange={(e) => setSampleUrl(e.target.value)}
-              placeholder="https://..."
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder="https://…"
+              className="ui-input w-full"
             />
           </label>
 
-          {localError && <p className="text-sm text-red-600">{localError}</p>}
+          {localError ? <p className="text-sm text-red-700">{localError}</p> : null}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onClose}
-            className="rounded-md border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-          >
+        <div className="ui-modal-footer">
+          <button type="button" disabled={busy} onClick={onClose} className="ui-btn text-xs disabled:opacity-50">
             取消
           </button>
           <button
             type="button"
             disabled={busy}
             onClick={handleSubmit}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
+            className="ui-btn ui-btn-primary text-xs disabled:opacity-50"
           >
             提交修复
           </button>

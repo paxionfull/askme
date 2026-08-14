@@ -1,0 +1,14 @@
+id: weixin-platform
+name: 微信公众号
+homepage: https://mp.weixin.qq.com
+platform: weixin
+platform_skill: true
+
+discovery:
+  type: weixin_mp_admin
+  requires_cookie: true
+  cookie_slot: weixin
+
+validation:
+  min_body_chars: 40
+  expected_min_items: 1

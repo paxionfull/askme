@@ -6,9 +6,9 @@ import os
 import random
 
 REQUEST_TIMEOUT_SECONDS = 5
-DEFAULT_RETRIES = 1
-PAGE_DELAY_BASE_SECONDS = float(os.getenv("FEED_PAGE_DELAY", "0.8"))
-PAGE_DELAY_JITTER_SECONDS = 0.3
+DEFAULT_RETRIES = 3
+PAGE_DELAY_BASE_SECONDS = float(os.getenv("FEED_PAGE_DELAY", "1.2"))
+PAGE_DELAY_JITTER_SECONDS = 0.4
 
 
 def page_delay_seconds() -> float:

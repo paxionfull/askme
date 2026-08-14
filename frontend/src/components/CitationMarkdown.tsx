@@ -80,7 +80,7 @@ export default function CitationMarkdown({
   }
 
   return (
-    <div className={`markdown-body text-sm leading-7 text-slate-800 ${className}`}>
+    <div className={`markdown-body text-sm leading-7 text-[var(--ink)] ${className}`}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>

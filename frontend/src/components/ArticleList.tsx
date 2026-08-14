@@ -5,7 +5,9 @@ import {
   type Article,
   type StoredArticleBody,
 } from "../api";
-import { formatFeedSyncTime } from "../utils/formatSyncTime";
+import OverflowMenu from "./OverflowMenu";
+import { formatFeedSyncTime, formatRelativePublished } from "../utils/formatSyncTime";
+import { getFeedLastReadArticleId, markFeedArticleRead } from "../utils/lastRead";
 
 interface ArticleListProps {
   feedId: string | null;
@@ -18,20 +20,7 @@ interface ArticleListProps {
   refreshing: boolean;
 }
 
-const PREVIEW_COLLAPSED_KEY = "askme.articlePreview.collapsed";
-const PREVIEW_HEIGHT_KEY = "askme.articlePreview.height";
 const BODY_RETRY_AFTER_SETTINGS_KEY = "askme.article.retryAfterSettings";
-const PREVIEW_MIN_HEIGHT = 160;
-const PREVIEW_DEFAULT_HEIGHT = 300;
-/** 选中文章后，列表区仅保留首行高度（约一条标题） */
-const FOCUS_LIST_MAX_HEIGHT_PX = 88;
-
-function formatDate(value: string) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN");
-}
 
 function ExternalLinkIcon() {
   return (
@@ -84,9 +73,15 @@ function resolveTakeoverHint(
 ): { title: string; actionLabel?: string } | null {
   if (status === "auth_required") {
     if ((feedId || "").includes("zhihu")) {
-      return { title: "该站点需要登录态 Cookie，建议先去设置页配置后重试。", actionLabel: "去设置页配置" };
+      return {
+        title: "该站点需要登录 Cookie，请到设置页「数据源授权」配置或更新后重试。",
+        actionLabel: "去设置页配置",
+      };
     }
-    return { title: "该站点需要登录或订阅权限，可先打开原文完成登录后再重试。", actionLabel: "去设置页" };
+    return {
+      title: "该站点需要登录或订阅权限，可到设置页添加 Cookie 授权，或先打开原文登录后再重试。",
+      actionLabel: "去设置页",
+    };
   }
   if (status === "anti_bot") {
     return { title: "检测到反爬挑战，建议先人工打开原文完成验证，再返回重试。", actionLabel: "打开原文" };
@@ -114,72 +109,40 @@ export default function ArticleList({
   const [bodyError, setBodyError] = useState("");
   const [bodyStatus, setBodyStatus] = useState<string>("");
   const [bodyDetail, setBodyDetail] = useState<string>("");
-  const [previewCollapsed, setPreviewCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem(PREVIEW_COLLAPSED_KEY) !== "0";
-    } catch {
-      return true;
-    }
-  });
-  const [previewHeight, setPreviewHeight] = useState(() => {
-    try {
-      const raw = Number(localStorage.getItem(PREVIEW_HEIGHT_KEY));
-      if (Number.isFinite(raw)) return Math.max(PREVIEW_MIN_HEIGHT, Math.round(raw));
-    } catch {
-      // ignore
-    }
-    return PREVIEW_DEFAULT_HEIGHT;
-  });
-  const containerRef = useRef<HTMLDivElement>(null);
-  const listScrollRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<Map<string, HTMLLIElement>>(new Map());
-  const dragStateRef = useRef<{ moving: boolean; startY: number; startHeight: number }>({
-    moving: false,
-    startY: 0,
-    startHeight: PREVIEW_DEFAULT_HEIGHT,
-  });
   const bodyCache = useRef<Map<string, StoredArticleBody>>(new Map());
   const [loadedBodyIds, setLoadedBodyIds] = useState<Set<string>>(() => new Set());
   const retriedAfterSettingsRef = useRef(false);
+  const [lastReadId, setLastReadId] = useState<string | null>(() =>
+    getFeedLastReadArticleId(feedId),
+  );
 
-  const focusPreview = !previewCollapsed && selectedId !== null;
+  const reading = selectedId !== null;
+  const selectedArticle = articles.find((item) => item.id === selectedId) ?? null;
+  const takeoverHint = resolveTakeoverHint(bodyStatus, feedId);
 
-  const scrollSelectedToVisibleTop = useCallback(() => {
-    if (!selectedId) return;
-    const container = listScrollRef.current;
-    const item = itemRefs.current.get(selectedId);
-    if (!container || !item) return;
-    const delta = item.getBoundingClientRect().top - container.getBoundingClientRect().top;
-    container.scrollTop += delta;
-  }, [selectedId]);
+  const markAsJustRead = useCallback(
+    (articleId: string) => {
+      if (!feedId || !articleId) return;
+      markFeedArticleRead(feedId, articleId);
+      setLastReadId(articleId);
+    },
+    [feedId],
+  );
 
-  useEffect(() => {
+  const backToQueue = useCallback(() => {
     setSelectedId(null);
     setBody(null);
     setBodyError("");
     setBodyStatus("");
     setBodyDetail("");
     setLoadingBody(false);
+  }, []);
+
+  useEffect(() => {
+    backToQueue();
     setLoadedBodyIds(new Set());
-    setPreviewCollapsed(true);
-    itemRefs.current.clear();
-  }, [feedId]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(PREVIEW_COLLAPSED_KEY, previewCollapsed ? "1" : "0");
-    } catch {
-      // ignore
-    }
-  }, [previewCollapsed]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(PREVIEW_HEIGHT_KEY, String(previewHeight));
-    } catch {
-      // ignore
-    }
-  }, [previewHeight]);
+    setLastReadId(getFeedLastReadArticleId(feedId));
+  }, [feedId, backToQueue]);
 
   const markBodyLoaded = useCallback((articleId: string) => {
     setLoadedBodyIds((current) => {
@@ -199,15 +162,8 @@ export default function ArticleList({
     async (article: Article) => {
       if (!feedId) return;
 
-      // 再次点击同一标题：收起预览
-      if (selectedId === article.id && !previewCollapsed) {
-        setSelectedId(null);
-        setBody(null);
-        setBodyError("");
-        setBodyStatus("");
-        setBodyDetail("");
-        setLoadingBody(false);
-        setPreviewCollapsed(true);
+      if (selectedId === article.id) {
+        backToQueue();
         return;
       }
 
@@ -215,7 +171,7 @@ export default function ArticleList({
       setBodyError("");
       setBodyStatus("");
       setBodyDetail("");
-      setPreviewCollapsed(false);
+      markAsJustRead(article.id);
 
       const key = `${feedId}:${article.id}`;
       const cached = bodyCache.current.get(key);
@@ -267,7 +223,11 @@ export default function ArticleList({
         setBodyStatus("");
         setBodyDetail("");
         const message = err instanceof Error ? err.message : "拉取正文失败";
-        if (message.includes("正文未拉取") || message.includes("暂无可用正文") || message.includes("暂无正文")) {
+        if (
+          message.includes("正文未拉取") ||
+          message.includes("暂无可用正文") ||
+          message.includes("暂无正文")
+        ) {
           setBodyError("该文章暂无正文内容");
         } else {
           setBodyError(message);
@@ -276,48 +236,8 @@ export default function ArticleList({
         setLoadingBody(false);
       }
     },
-    [feedId, markBodyLoaded, previewCollapsed, selectedId],
+    [feedId, markBodyLoaded, selectedId, backToQueue, markAsJustRead],
   );
-
-  const stopResize = useCallback(() => {
-    dragStateRef.current.moving = false;
-    document.body.style.userSelect = "";
-    document.body.style.cursor = "";
-  }, []);
-
-  useEffect(() => {
-    const onMove = (event: MouseEvent) => {
-      if (!dragStateRef.current.moving || !containerRef.current) return;
-      const delta = dragStateRef.current.startY - event.clientY;
-      const rect = containerRef.current.getBoundingClientRect();
-      const maxHeight = Math.max(PREVIEW_MIN_HEIGHT, rect.height - 180);
-      const next = Math.max(
-        PREVIEW_MIN_HEIGHT,
-        Math.min(maxHeight, dragStateRef.current.startHeight + delta),
-      );
-      setPreviewHeight(Math.round(next));
-    };
-    const onUp = () => stopResize();
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [stopResize]);
-
-  const selectedArticle = articles.find((item) => item.id === selectedId) ?? null;
-  const takeoverHint = resolveTakeoverHint(bodyStatus, feedId);
-
-  useEffect(() => {
-    if (!selectedId || previewCollapsed) return;
-    const frame = requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        scrollSelectedToVisibleTop();
-      });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [previewCollapsed, scrollSelectedToVisibleTop, selectedId]);
 
   useEffect(() => {
     if (retriedAfterSettingsRef.current) return;
@@ -342,17 +262,17 @@ export default function ArticleList({
   }, [articles, feedId, loadBody]);
 
   return (
-    <section className="flex h-full min-w-0 flex-1 flex-col bg-white">
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-        <div>
-          <h2 className="text-sm font-semibold">
+    <section className="flex h-full min-w-0 flex-1 flex-col bg-[var(--paper)]">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--rule)] bg-[var(--paper-raised)] px-5 py-3">
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-semibold tracking-tight text-[var(--ink)]">
             {feedName && feedUrl ? (
               <a
                 href={feedUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 title={`打开数据源：${feedUrl}`}
-                className="text-slate-900 underline-offset-2 hover:text-blue-700 hover:underline"
+                className="text-[var(--ink)] underline-offset-2 hover:text-[var(--accent)] hover:underline"
               >
                 {feedName}
               </a>
@@ -360,155 +280,69 @@ export default function ArticleList({
               feedName || "请选择数据源"
             )}
           </h2>
-          <p className="text-xs text-slate-500">
+          <p className="mt-0.5 text-xs text-[var(--ink-muted)]">
             {feedName
-              ? `${articles.length} 篇文章 · ${formatFeedSyncTime(syncTime)}`
+              ? `${articles.length} 篇 · ${formatFeedSyncTime(syncTime)}`
               : `${articles.length} 篇文章`}
           </p>
         </div>
-        <button
-          type="button"
-          disabled={!feedName || refreshing}
-          onClick={onRefresh}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {refreshing ? "刷新中..." : "刷新"}
-        </button>
+        {feedName ? (
+          <OverflowMenu
+            label="源操作"
+            disabled={refreshing}
+            items={[
+              {
+                label: refreshing ? "刷新中…" : "刷新列表",
+                hint: "重新抓取该源文章列表",
+                disabled: refreshing,
+                onClick: onRefresh,
+              },
+            ]}
+          />
+        ) : null}
       </div>
 
-      <div ref={containerRef} className="flex min-h-0 flex-1 flex-col">
-        <div
-          ref={listScrollRef}
-          className={`min-h-0 overflow-y-auto border-b border-slate-200 ${
-            focusPreview ? "shrink-0" : "flex-1"
-          }`}
-          style={focusPreview ? { maxHeight: `${FOCUS_LIST_MAX_HEIGHT_PX}px` } : undefined}
-        >
-          {!feedName ? (
-            <p className="px-4 py-8 text-sm text-slate-500">从左侧选择一个数据源</p>
-          ) : loading ? (
-            <p className="px-4 py-8 text-sm text-slate-500">加载文章中...</p>
-          ) : articles.length === 0 ? (
-            <p className="px-4 py-8 text-sm text-slate-500">暂无文章，可点击刷新尝试抓取</p>
-          ) : (
-            <ul>
-              {articles.map((article) => {
-                const active = selectedId === article.id;
-                const hasBody = articleHasBody(article);
-                return (
-                  <li
-                    key={article.id}
-                    ref={(element) => {
-                      if (element) {
-                        itemRefs.current.set(article.id, element);
-                      } else {
-                        itemRefs.current.delete(article.id);
-                      }
-                    }}
-                    className={`border-b border-slate-100 px-4 py-3 ${
-                      active ? "bg-slate-50" : ""
-                    }`}
-                  >
-                    <div className="flex items-start gap-2">
-                      {article.url ? (
-                        <a
-                          href={article.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          title="打开原文链接"
-                          aria-label="打开原文链接"
-                          className="mt-0.5 shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                        >
-                          <ExternalLinkIcon />
-                        </a>
-                      ) : (
-                        <span className="mt-0.5 inline-block w-6 shrink-0" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <button
-                          type="button"
-                          onClick={() => void loadBody(article)}
-                          title={hasBody ? undefined : "正文尚未拉取，点击尝试加载"}
-                          className={`text-left text-sm font-medium leading-6 hover:text-slate-700 ${
-                            hasBody
-                              ? active
-                                ? "text-slate-900"
-                                : "text-slate-800"
-                              : "text-slate-400"
-                          }`}
-                        >
-                          {article.title}
-                        </button>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {formatDate(article.published_at)}
-                          {article.author ? ` · ${article.author}` : ""}
-                        </p>
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-
-        {!previewCollapsed && !focusPreview && (
-          <div
-            className="h-1 shrink-0 cursor-row-resize bg-slate-200 transition-colors hover:bg-slate-400"
-            onMouseDown={(event) => {
-              event.preventDefault();
-              dragStateRef.current = {
-                moving: true,
-                startY: event.clientY,
-                startHeight: previewHeight,
-              };
-              document.body.style.userSelect = "none";
-              document.body.style.cursor = "row-resize";
-            }}
-          />
-        )}
-
-        <div
-          className={`flex flex-col bg-slate-50 ${
-            previewCollapsed
-              ? "h-10 shrink-0"
-              : focusPreview
-                ? "min-h-0 flex-1"
-                : "shrink-0"
-          }`}
-          style={!previewCollapsed && !focusPreview ? { height: `${previewHeight}px` } : undefined}
-        >
-          <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2">
+      {reading ? (
+        <div className="flex min-h-0 flex-1 flex-col bg-[var(--paper-raised)]">
+          <div className="flex shrink-0 items-center gap-3 border-b border-[var(--rule)] px-5 py-2.5">
             <button
               type="button"
-              onClick={() => setPreviewCollapsed((current) => !current)}
-              className="text-xs font-semibold text-slate-600 hover:text-slate-800"
+              onClick={backToQueue}
+              className="shrink-0 text-xs text-[var(--ink-muted)] hover:text-[var(--accent)]"
             >
-              正文预览 {previewCollapsed ? "▸" : "▾"}
+              ← {articles.length} 篇
             </button>
-            {!previewCollapsed && !focusPreview && (
-              <span className="text-[11px] text-slate-400">拖动上方分隔线可调整高度</span>
-            )}
-            {focusPreview && articles.length > 1 ? (
-              <span className="text-[11px] text-slate-400">
-                选中项已滚至可见首位 · 列表区可滚动查看其余 {articles.length - 1} 篇
-              </span>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--ink)]">
+              {selectedArticle?.title ?? "阅读中"}
+            </span>
+            {selectedArticle?.url ? (
+              <a
+                href={selectedArticle.url}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => markAsJustRead(selectedArticle.id)}
+                className="shrink-0 text-xs text-[var(--ink-muted)] hover:text-[var(--ink)]"
+              >
+                原文
+              </a>
             ) : null}
           </div>
-          {!previewCollapsed && <div className="flex-1 overflow-y-auto p-4">
+
+          <div className="flex-1 overflow-y-auto px-6 pb-10 pt-6">
             {!selectedArticle ? (
-              <p className="text-sm text-slate-500">点击文章标题查看已加载的正文</p>
+              <p className="text-sm text-[var(--ink-muted)]">文章不存在</p>
             ) : loadingBody ? (
-              <p className="text-sm text-slate-500">正在拉取正文...</p>
+              <p className="text-sm text-[var(--ink-muted)]">正在拉取正文…</p>
             ) : bodyError ? (
-              <div className="space-y-3">
-                <p className="text-sm text-red-600">{bodyError}</p>
-                {bodyDetail ? <p className="text-xs text-slate-500">{bodyDetail}</p> : null}
+              <div className="mx-auto max-w-[40rem] space-y-3">
+                <p className="text-sm text-red-700">{bodyError}</p>
+                {bodyDetail ? <p className="text-xs text-[var(--ink-muted)]">{bodyDetail}</p> : null}
                 {takeoverHint ? (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                    <p className="text-xs text-amber-800">{takeoverHint.title}</p>
+                  <div className="border-l-2 border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2.5">
+                    <p className="text-xs text-[var(--accent)]">{takeoverHint.title}</p>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {takeoverHint.actionLabel === "去设置页配置" || takeoverHint.actionLabel === "去设置页" ? (
+                      {takeoverHint.actionLabel === "去设置页配置" ||
+                      takeoverHint.actionLabel === "去设置页" ? (
                         <button
                           type="button"
                           onClick={() => {
@@ -523,7 +357,7 @@ export default function ArticleList({
                             }
                             navigate("/settings");
                           }}
-                          className="rounded border border-amber-300 bg-white px-2.5 py-1 text-xs text-amber-800 hover:bg-amber-100"
+                          className="ui-btn ui-btn-accent text-xs"
                         >
                           {takeoverHint.actionLabel}
                         </button>
@@ -534,7 +368,8 @@ export default function ArticleList({
                           href={selectedArticle.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="rounded border border-amber-300 bg-white px-2.5 py-1 text-xs text-amber-800 hover:bg-amber-100"
+                          onClick={() => markAsJustRead(selectedArticle.id)}
+                          className="ui-btn text-xs"
                         >
                           打开原文
                         </a>
@@ -544,10 +379,12 @@ export default function ArticleList({
                 ) : null}
               </div>
             ) : body ? (
-              <div className="rounded-xl bg-white p-4 shadow-sm">
-                <h4 className="text-base font-semibold leading-7 text-slate-900">{body.title}</h4>
-                <p className="mt-1 text-xs text-slate-500">
-                  {body.feed_name} · {formatDate(body.published_at)}
+              <article className="mx-auto max-w-[40rem]">
+                <h4 className="text-[1.35rem] font-semibold leading-snug tracking-tight text-[var(--ink)]">
+                  {body.title}
+                </h4>
+                <p className="mt-2 text-xs text-[var(--ink-muted)]">
+                  {body.feed_name} · {formatRelativePublished(body.published_at)}
                   {body.url ? (
                     <>
                       {" · "}
@@ -555,7 +392,10 @@ export default function ArticleList({
                         href={body.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-slate-600 underline-offset-2 hover:underline"
+                        className="ui-link"
+                        onClick={() => {
+                          if (selectedArticle) markAsJustRead(selectedArticle.id);
+                        }}
                       >
                         原文
                       </a>
@@ -564,23 +404,87 @@ export default function ArticleList({
                 </p>
                 {body.content_html ? (
                   <div
-                    className="article-content mt-4 text-sm text-slate-800"
+                    className="article-content mt-7"
                     dangerouslySetInnerHTML={{ __html: body.content_html }}
                   />
                 ) : (body.plain_text ?? "").trim() ? (
-                  <p className="article-content mt-4 whitespace-pre-wrap text-sm text-slate-800">
-                    {body.plain_text}
-                  </p>
+                  <p className="article-content mt-7 whitespace-pre-wrap">{body.plain_text}</p>
                 ) : (
-                  <p className="mt-4 text-sm text-slate-500">暂无正文内容</p>
+                  <p className="mt-4 text-sm text-[var(--ink-muted)]">暂无正文内容</p>
                 )}
-              </div>
+              </article>
             ) : (
-              <p className="text-sm text-slate-500">暂无正文内容</p>
+              <p className="text-sm text-[var(--ink-muted)]">暂无正文内容</p>
             )}
-          </div>}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {!feedName ? (
+            <p className="px-5 py-10 text-sm text-[var(--ink-muted)]">从左侧选择一个数据源</p>
+          ) : loading ? (
+            <p className="px-5 py-10 text-sm text-[var(--ink-muted)]">加载文章中…</p>
+          ) : articles.length === 0 ? (
+            <p className="px-5 py-10 text-sm text-[var(--ink-muted)]">暂无文章，可从菜单刷新抓取</p>
+          ) : (
+            <ul className="py-1">
+              {articles.map((article) => {
+                const hasBody = articleHasBody(article);
+                const justRead = lastReadId === article.id;
+                return (
+                  <li key={article.id} className="group relative">
+                    <div className="flex items-start gap-3 px-5 py-3 transition-colors hover:bg-[color-mix(in_srgb,var(--paper-raised)_75%,transparent)]">
+                      <span
+                        className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${
+                          hasBody
+                            ? "bg-[var(--accent)]"
+                            : "bg-[color-mix(in_srgb,var(--ink-muted)_40%,transparent)]"
+                        }`}
+                        title={hasBody ? "已有正文" : "正文未拉取"}
+                        aria-hidden
+                      />
+                      <div className="min-w-0 flex-1">
+                        <button
+                          type="button"
+                          onClick={() => void loadBody(article)}
+                          title={hasBody ? undefined : "正文尚未拉取，点击尝试加载"}
+                          className={`w-full text-left text-[15px] font-medium leading-[1.45] tracking-tight ${
+                            hasBody ? "text-[var(--ink)]" : "text-[var(--ink-muted)]"
+                          } hover:text-[var(--ink)]`}
+                        >
+                          {article.title}
+                        </button>
+                        <p className="mt-1 text-[11px] leading-none text-[var(--ink-muted)]">
+                          {formatRelativePublished(article.published_at)}
+                          {article.author ? ` · ${article.author}` : ""}
+                        </p>
+                      </div>
+                      {justRead ? (
+                        <span className="mt-1 shrink-0 text-[10px] font-medium tracking-wide text-[var(--accent)]">
+                          刚看过
+                        </span>
+                      ) : null}
+                      {article.url ? (
+                        <a
+                          href={article.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="打开原文"
+                          aria-label="打开原文"
+                          onClick={() => markAsJustRead(article.id)}
+                          className="mt-0.5 shrink-0 rounded p-1 text-[var(--ink-muted)] opacity-0 transition-opacity hover:bg-[var(--paper-raised)] hover:text-[var(--ink)] group-hover:opacity-100 focus:opacity-100"
+                        >
+                          <ExternalLinkIcon />
+                        </a>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
     </section>
   );
 }

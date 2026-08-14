@@ -45,6 +45,61 @@ def remove_discovery_skill_dir(slug: str) -> bool:
     return True
 
 
+def update_discovery_display_name(
+    slug: str,
+    display_name: str,
+    *,
+    feed_id: str | None = None,
+) -> bool:
+    """把已有 discovery skill 的展示名改成博主昵称（复用接入时补齐）。"""
+    name = (display_name or "").strip()
+    if not name:
+        return False
+    skill_dir = skill_dir_for(slug)
+    discover = skill_dir / "scripts" / "discover.py"
+    source_yaml = skill_dir / "source.yaml"
+    if not discover.is_file():
+        return False
+
+    safe = name.replace("\\", "\\\\").replace('"', '\\"')
+    text = discover.read_text(encoding="utf-8")
+    new_text, n1 = re.subn(r'"mpName":\s*"[^"]*"', f'"mpName": "{safe}"', text, count=1)
+    new_text, n2 = re.subn(
+        r'"mpIntro":\s*"[^"]*"',
+        f'"mpIntro": "{safe}"',
+        new_text,
+        count=1,
+    )
+    changed = False
+    if n1 or n2:
+        discover.write_text(new_text, encoding="utf-8")
+        changed = True
+
+    if source_yaml.is_file():
+        lines = source_yaml.read_text(encoding="utf-8").splitlines()
+        out: list[str] = []
+        name_done = False
+        for line in lines:
+            if not name_done and line.startswith("name:"):
+                out.append(f"name: {name}")
+                name_done = True
+            else:
+                out.append(line)
+        if name_done:
+            source_yaml.write_text("\n".join(out) + "\n", encoding="utf-8")
+            changed = True
+
+    if feed_id:
+        try:
+            from feed_registry import feed_registry
+
+            feed_registry.set_feed_display_name(feed_id, name)
+            changed = True
+        except Exception:
+            pass
+    return changed
+
+
 def normalize_entry_url(url: str) -> str:
     value = url.strip()
     if not value:
@@ -59,6 +114,34 @@ def normalize_entry_url(url: str) -> str:
     return value
 
 
+def source_identity_key(url: str) -> str:
+    """用于判断「是否同一数据源」：host + path，忽略 query（小红书 token 会变）。"""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(normalize_entry_url(url))
+    host = parsed.netloc.lower().split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    path = re.sub(r"/+", "/", (parsed.path or "/")).rstrip("/") or "/"
+    return f"{host}{path.lower()}"
+
+
+def read_skill_entry_url(slug: str) -> str:
+    source_yaml = skill_dir_for(slug) / "source.yaml"
+    if not source_yaml.is_file():
+        return ""
+    try:
+        text = source_yaml.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    for key in ("entry_url:", "homepage:"):
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(key):
+                return stripped.split(":", 1)[1].strip().strip("\"'")
+    return ""
+
+
 def derive_source_identity(entry_url: str) -> tuple[str, str]:
     from urllib.parse import urlparse
 
@@ -66,6 +149,44 @@ def derive_source_identity(entry_url: str) -> tuple[str, str]:
     host = parsed.netloc.lower().split(":")[0]
     if host.startswith("www."):
         host = host[4:]
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+
+    # 小红书用户主页：同域名不同用户必须拆成独立 slug
+    if host.endswith("xiaohongshu.com") and len(path_parts) >= 3:
+        if path_parts[0].lower() == "user" and path_parts[1].lower() == "profile":
+            user_id = re.sub(r"[^a-z0-9]", "", path_parts[2].lower())
+            if user_id:
+                slug = validate_slug(f"xiaohongshu-{user_id}"[:62].rstrip("-"))
+                return slug, user_id
+
+    # Reddit subreddit
+    if host.endswith("reddit.com") and len(path_parts) >= 2 and path_parts[0].lower() == "r":
+        sub = re.sub(r"[^a-z0-9_]", "", path_parts[1].lower())
+        if sub:
+            slug = validate_slug(f"reddit-{sub.replace('_', '-')}"[:62].rstrip("-"))
+            return slug, sub
+
+    # X / Twitter 用户主页
+    if host in {"x.com", "twitter.com"} and path_parts:
+        screen = path_parts[0]
+        reserved = {
+            "home",
+            "explore",
+            "search",
+            "settings",
+            "i",
+            "intent",
+            "compose",
+            "messages",
+            "notifications",
+            "login",
+            "logout",
+            "signup",
+        }
+        if screen.lower() not in reserved and re.fullmatch(r"[A-Za-z0-9_]{1,15}", screen):
+            slug = validate_slug(f"x-{screen.lower().replace('_', '-')}"[:62].rstrip("-"))
+            return slug, screen
 
     labels = [part for part in host.split(".") if part]
     if len(labels) >= 2 and labels[-1] in {"com", "cn", "net", "org", "io", "co", "dev", "ai"}:
@@ -77,16 +198,22 @@ def derive_source_identity(entry_url: str) -> tuple[str, str]:
 
     slug_base = re.sub(r"[^a-z0-9]", "", slug_base.lower()) or "site"
     name = slug_base.replace("-", " ").title()
+    target_key = source_identity_key(entry_url)
 
-    # 完整 skill 已存在时优先复用 base slug（再次添加 = 加入分组），勿自动改成 site-2
+    # 仅当已有 skill 指向同一入口页时才复用 base slug（再次添加 = 加入分组）
     if skill_dir_for(slug_base).exists() and is_complete_discovery_skill(slug_base):
-        return validate_slug(slug_base), name
+        existing = read_skill_entry_url(slug_base)
+        if existing and source_identity_key(existing) == target_key:
+            return validate_slug(slug_base), name
 
     slug = slug_base
     suffix = 2
     while skill_dir_for(slug).exists() and is_complete_discovery_skill(slug) and not _is_hidden_feed(
         f"website:{slug}"
     ):
+        existing = read_skill_entry_url(slug)
+        if existing and source_identity_key(existing) == target_key:
+            return validate_slug(slug), name
         slug = f"{slug_base}-{suffix}"
         suffix += 1
         if suffix > 99:
@@ -111,11 +238,43 @@ def resolve_onboard_target(
             final_name = name.strip() if name and name.strip() else platform.user_id
         elif platform.platform == "jin10":
             final_name = name.strip() if name and name.strip() else "金十数据"
+        elif platform.platform == "xiaohongshu":
+            final_name = name.strip() if name and name.strip() else platform.user_id
+        elif platform.platform == "reddit":
+            from source_platform_scaffold import format_reddit_source_name
+
+            final_name = (
+                name.strip()
+                if name and name.strip()
+                else format_reddit_source_name(platform.user_id)
+            )
+        elif platform.platform == "x":
+            from source_platform_scaffold import format_x_source_name
+
+            final_name = (
+                name.strip() if name and name.strip() else format_x_source_name(platform.user_id)
+            )
+        elif platform.platform == "weixin":
+            from source_platform_scaffold import format_weixin_source_name, weixin_name_hint_from_url
+
+            hint = weixin_name_hint_from_url(platform.entry_url)
+            final_name = (
+                name.strip()
+                if name and name.strip()
+                else format_weixin_source_name(hint)
+                or format_weixin_source_name(platform.user_id)
+                or platform.user_id
+            )
         else:
             final_name = name.strip() if name and name.strip() else platform.user_id
         if skill_dir_for(final_slug).exists() and not is_complete_discovery_skill(final_slug):
             remove_discovery_skill_dir(final_slug)
-        entry = platform.posts_url if platform.platform in {"zhihu", "jin10"} else normalized_url
+        if platform.platform in {"zhihu", "jin10"}:
+            entry = platform.posts_url
+        elif platform.platform in {"xiaohongshu", "reddit", "x", "weixin"}:
+            entry = platform.entry_url
+        else:
+            entry = normalized_url
         return final_slug, final_name, entry
 
     auto_slug, auto_name = derive_source_identity(normalized_url)

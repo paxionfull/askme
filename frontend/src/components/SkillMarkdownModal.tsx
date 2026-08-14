@@ -54,93 +54,100 @@ export default function SkillMarkdownModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-xl">
-        <div className="border-b border-slate-200 px-5 py-4">
-          <h3 className="text-sm font-semibold">{title}</h3>
-          {path && <p className="mt-1 text-xs text-slate-500">{path}</p>}
+    <div className="ui-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="skill-md-title">
+      <div className="ui-modal ui-modal-lg">
+        <div className="ui-modal-header">
+          <h2 id="skill-md-title" className="ui-modal-title">
+            {title}
+          </h2>
+          {path ? <p className="ui-modal-desc">{path}</p> : null}
         </div>
 
-        {onSkillIdChange && (
-          <div className="border-b border-slate-200 px-5 py-3">
-            <label className="text-xs text-slate-500">Skill ID</label>
-            <input
-              value={skillId ?? ""}
-              disabled={idReadonly}
-              onChange={(e) => onSkillIdChange(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm disabled:bg-slate-100"
-            />
+        {onSkillIdChange ? (
+          <div className="border-b border-[var(--rule)] px-5 py-3">
+            <label className="ui-field">
+              <span className="ui-field-label">Skill ID</span>
+              <input
+                value={skillId ?? ""}
+                disabled={idReadonly}
+                onChange={(e) => onSkillIdChange(e.target.value)}
+                className="ui-input w-full disabled:opacity-60"
+              />
+            </label>
           </div>
-        )}
+        ) : null}
 
-        {loading && <p className="px-5 py-4 text-sm text-slate-500">加载中...</p>}
-        {error && <p className="px-5 py-4 text-sm text-red-600">{error}</p>}
+        <div className="ui-modal-body !p-0">
+          {loading ? <p className="px-5 py-6 text-sm text-[var(--ink-muted)]">加载中…</p> : null}
+          {error ? <p className="px-5 py-6 text-sm text-red-800">{error}</p> : null}
 
-        {!loading && !error && (
-          <>
-            <div className="flex gap-1 border-b border-slate-200 px-5 py-2">
+          {!loading && !error ? (
+            <>
+              <div className="flex gap-0 border-b border-[var(--rule)] px-5">
+                {(
+                  [
+                    ["preview", "预览"],
+                    ["edit", "编辑"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setTab(id)}
+                    className={`border-b-2 px-3 py-2.5 text-xs transition-colors ${
+                      tab === id
+                        ? "border-[var(--ink)] font-medium text-[var(--ink)]"
+                        : "border-transparent text-[var(--ink-muted)] hover:text-[var(--ink)]"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="max-h-[min(52vh,28rem)] overflow-auto px-5 py-4">
+                {tab === "preview" ? (
+                  <MarkdownContent content={rendered} />
+                ) : (
+                  <textarea
+                    value={document}
+                    onChange={(e) => onDocumentChange(e.target.value)}
+                    rows={20}
+                    className="ui-textarea min-h-[360px] w-full font-mono text-xs leading-5"
+                  />
+                )}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="ui-modal-footer !justify-between">
+          <div>
+            {onDelete ? (
               <button
                 type="button"
-                onClick={() => setTab("preview")}
-                className={`rounded-md px-2 py-1 text-xs ${
-                  tab === "preview" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-                }`}
+                disabled={deleting}
+                onClick={onDelete}
+                className="ui-btn ui-btn-danger text-xs disabled:opacity-50"
               >
-                预览
+                {deleting ? "删除中…" : "删除"}
               </button>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="ui-btn text-xs">
+              关闭
+            </button>
+            {onSave ? (
               <button
                 type="button"
-                onClick={() => setTab("edit")}
-                className={`rounded-md px-2 py-1 text-xs ${
-                  tab === "edit" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-                }`}
+                disabled={saving || loading}
+                onClick={onSave}
+                className="ui-btn ui-btn-primary text-xs disabled:opacity-50"
               >
-                编辑
+                {saving ? "保存中…" : "保存"}
               </button>
-            </div>
-            <div className="flex-1 overflow-auto px-5 py-4">
-              {tab === "preview" ? (
-                <MarkdownContent content={rendered} />
-              ) : (
-                <textarea
-                  value={document}
-                  onChange={(e) => onDocumentChange(e.target.value)}
-                  rows={20}
-                  className="h-full min-h-[360px] w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-slate-500"
-                />
-              )}
-            </div>
-          </>
-        )}
-
-        <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
-          {onDelete && (
-            <button
-              type="button"
-              disabled={deleting}
-              onClick={onDelete}
-              className="mr-auto rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
-            >
-              {deleting ? "删除中..." : "删除"}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
-          >
-            关闭
-          </button>
-          {onSave && (
-            <button
-              type="button"
-              disabled={saving || loading}
-              onClick={onSave}
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
-            >
-              {saving ? "保存中..." : "保存"}
-            </button>
-          )}
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

@@ -59,11 +59,14 @@ export interface OnboardingJob {
 interface OnboardingContextValue {
   job: OnboardingJob | null;
   batch: OnboardBatchStatus | null;
+  authRetryUrls: string[];
   startBatchOnboarding: (entryUrls: string[], groupId?: string) => Promise<void>;
   startSkillRepair: (
     slug: string,
     payload: { feedback: string; issueTypes: string[]; sampleUrl: string },
   ) => Promise<void>;
+  requestAuthRetry: (urls: string[]) => void;
+  clearAuthRetry: () => void;
   stopOnboarding: () => void;
   stopBatch: () => void;
   clearJob: () => void;
@@ -75,6 +78,7 @@ const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 export function OnboardingProvider({ children }: { children: ReactNode }) {
   const [job, setJob] = useState<OnboardingJob | null>(null);
   const [batch, setBatch] = useState<OnboardBatchStatus | null>(null);
+  const [authRetryUrls, setAuthRetryUrls] = useState<string[]>([]);
 
   const repairInFlightRef = useRef(false);
   const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -395,13 +399,25 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     setJob(null);
   }, []);
 
+  const requestAuthRetry = useCallback((urls: string[]) => {
+    const unique = [...new Set(urls.map((url) => url.trim()).filter(Boolean))];
+    setAuthRetryUrls(unique);
+  }, []);
+
+  const clearAuthRetry = useCallback(() => {
+    setAuthRetryUrls([]);
+  }, []);
+
   return (
     <OnboardingContext.Provider
       value={{
         job,
         batch,
+        authRetryUrls,
         startBatchOnboarding,
         startSkillRepair,
+        requestAuthRetry,
+        clearAuthRetry,
         stopOnboarding,
         stopBatch,
         clearJob,

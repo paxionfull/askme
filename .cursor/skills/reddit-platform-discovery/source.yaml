@@ -1,0 +1,11 @@
+id: reddit-platform
+name: Reddit
+homepage: https://www.reddit.com
+platform: reddit
+platform_skill: true
+
+discovery:
+  type: reddit_html
+
+validation:
+  expected_min_items: 1

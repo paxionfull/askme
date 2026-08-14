@@ -16,8 +16,17 @@ export default function CitationSidebar({
   onOpenChange,
   onSelect,
 }: CitationSidebarProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onOpenChange(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onOpenChange]);
 
   useEffect(() => {
     if (!open || activeIndex == null) return;
@@ -29,44 +38,51 @@ export default function CitationSidebar({
     });
   }, [activeIndex, open, items]);
 
+  if (!open) return null;
+
   return (
-    <div className="hidden h-full shrink-0 md:flex">
+    <div className="absolute inset-0 z-30 flex justify-end">
       <button
         type="button"
-        onClick={() => onOpenChange(!open)}
-        title={open ? "向右收起引用来源" : "向左展开引用来源"}
-        aria-expanded={open}
-        className="flex w-9 shrink-0 flex-col items-center justify-center gap-2 border-l border-slate-200 bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+        aria-label="关闭引用来源"
+        className="absolute inset-0 bg-[color-mix(in_srgb,var(--ink)_18%,transparent)] transition-opacity"
+        onClick={() => onOpenChange(false)}
+      />
+      <aside
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="引用来源"
+        className="relative flex h-full w-[min(22rem,92%)] flex-col border-l border-[var(--rule)] bg-[var(--paper-raised)] shadow-[-8px_0_24px_rgba(28,25,23,0.08)]"
       >
-        <span className="text-xs" aria-hidden>
-          {open ? "›" : "‹"}
-        </span>
-        <span
-          className="text-[11px] font-medium leading-4 tracking-wide text-slate-600"
-          style={{ writingMode: "vertical-rl" }}
-        >
-          引用来源
-        </span>
-        {items.length > 0 && (
-          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-            {items.length}
-          </span>
-        )}
-      </button>
-
-      {open && (
-        <div
-          ref={scrollRef}
-          className="flex h-full w-[min(360px,38vw)] min-w-[260px] max-w-[360px] border-l border-slate-200 bg-white"
-        >
+        <div className="flex items-center justify-between gap-2 border-b border-[var(--rule)] px-4 py-3">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold tracking-tight text-[var(--ink)]">引用来源</h2>
+            <p className="mt-0.5 text-[11px] text-[var(--ink-muted)]">
+              {items.length > 0
+                ? `${items.length} 个片段 · 点回答中的 [n] 定位`
+                : "发送问题后显示检索片段"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            className="ui-btn shrink-0 px-2 py-1 text-xs"
+            aria-label="关闭"
+          >
+            关闭
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
           <CitationPanel
             items={items}
             activeIndex={activeIndex}
             onSelect={onSelect}
             itemRefs={itemRefs}
+            hideHeader
           />
         </div>
-      )}
+      </aside>
     </div>
   );
 }

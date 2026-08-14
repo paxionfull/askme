@@ -10,6 +10,22 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from article_service import ArticleService
+from credential_store import (
+    delete_credential,
+    get_cookie_for_slot,
+    list_credentials,
+    list_slots,
+    mask_cookie,
+    precheck_entry_urls,
+    sync_runtime_cookies,
+    upsert_credential,
+)
+from auth_login_session import (
+    cancel_login_session,
+    get_login_session,
+    start_login_session,
+    start_login_session_for_url,
+)
 from time_scope import filter_articles_by_days
 from chat_service import (
     ChatService,
@@ -27,9 +43,12 @@ from llm import LLMError, complete, fetch_available_models, get_llm_status, sse_
 from digest_service import (
     build_article_refs,
     build_summary_messages_for_partition,
+    generate_partition_summary,
+    get_profile_for_skill,
     get_system_prompt_for_skill,
     partition_articles_by_groups,
     resolve_feed_ids_for_groups,
+    stitch_digest_trees,
     stitch_summaries,
 )
 from digest_skill_registry import (
@@ -89,8 +108,15 @@ from skill_validate import run_validation
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _set_runtime_zhihu_cookie(_get_saved_zhihu_cookie())
+    sync_runtime_cookies()
     _set_runtime_cursor_api_key(load_cursor_api_key())
+    try:
+        from platform_skill_migrate import migrate_per_user_platform_skills
+
+        migrate_per_user_platform_skills(delete_dirs=True)
+        feed_client.reload_skills()
+    except Exception:
+        pass
     feed_scheduler.start(feed_client)
     for feed in await feed_client.list_feeds():
         feed_id = feed.get("id", "")
@@ -119,7 +145,6 @@ chat_service = ChatService()
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SECRETS_PATH = DATA_DIR / "integrations.json"
 CURSOR_API_KEY = "cursor_api_key"
-ZHIHU_COOKIE_KEY = "zhihu_cookie"
 ZHIHU_FEED_IDS = ["website:zhihu:aitechtalk", "website:zhihu:xinziyuan"]
 
 
@@ -135,6 +160,24 @@ class FeedSchedulerConfigRequest(BaseModel):
 
 class ZhihuCookieRequest(BaseModel):
     cookie: str = Field(..., min_length=1)
+
+
+class CredentialUpsertRequest(BaseModel):
+    slot: str = Field(..., min_length=1)
+    cookie: str = Field(..., min_length=1)
+    label: str = ""
+    id: str | None = None
+
+
+class AuthPrecheckRequest(BaseModel):
+    entry_urls: list[str] = Field(default_factory=list)
+
+
+class LoginSessionRequest(BaseModel):
+    slot: str = ""
+    login_url: str = ""
+    label: str = ""
+    entry_url: str = ""
 
 
 class CancelOnboardRequest(BaseModel):
@@ -157,7 +200,8 @@ def _resolve_onboard_group_id(group_id: str | None) -> str | None:
 
 async def _refresh_onboarded_feed(feed_id: str) -> dict:
     feed_client.ensure_feed_visible(feed_id)
-    return await feed_client.refresh_feed(feed_id)
+    # 与批量接入一致：首拉只更新近 3 天列表元数据，不拉正文
+    return await feed_client.refresh_feed(feed_id, days=3)
 
 
 async def _watch_onboard_disconnect(request: Request, session) -> None:
@@ -584,23 +628,23 @@ def _save_integrations(data: dict) -> None:
 
 
 def _mask_cookie(cookie: str) -> str:
-    cookie = cookie.strip()
-    if len(cookie) <= 16:
-        return "*" * len(cookie)
-    return f"{cookie[:8]}...{cookie[-8:]}"
+    return mask_cookie(cookie)
 
 
 def _get_saved_zhihu_cookie() -> str:
-    value = str(_load_integrations().get(ZHIHU_COOKIE_KEY, "")).strip()
-    return value
+    return get_cookie_for_slot("zhihu")
 
 
 def _set_runtime_zhihu_cookie(cookie: str) -> None:
     cookie = cookie.strip()
     if cookie:
-        os.environ["ZHIHU_COOKIE"] = cookie
+        upsert_credential(slot="zhihu", cookie=cookie, label="知乎")
     else:
-        os.environ.pop("ZHIHU_COOKIE", None)
+        # 清空：删除 zhihu slot 凭证
+        for item in list_credentials():
+            if item["slot"] == "zhihu":
+                delete_credential(item["id"])
+        sync_runtime_cookies()
 
 
 def _set_runtime_cursor_api_key(api_key: str) -> None:
@@ -893,42 +937,102 @@ async def _sse_summarize_stream(body: SummarizeRequest):
                 },
             )
 
-            prompt = body.prompt.strip() or get_system_prompt_for_skill(skill_id)
-            messages, truncated = build_summary_messages_for_partition(
-                article_service,
-                system_prompt=prompt,
-                articles=partition["articles"],
-                days=body.days,
-                digest_skill_id=skill_id,
-            )
-            total_truncated = total_truncated or truncated
-
             if len(partitions) > 1:
                 header = f"## {group_name}\n\n"
                 summary_parts.append(header)
                 yield sse_event("token", {"content": header})
 
-            part_chunks: list[str] = []
-            async for part in stream_llm(
-                messages,
-                llm_config,
-                temperature=0,
-                enable_thinking=body.enable_thinking,
-            ):
-                if part.kind == "thinking":
-                    yield sse_event("thinking", {"content": part.text})
-                else:
-                    part_chunks.append(part.text)
-                    yield sse_event("token", {"content": part.text})
-                await asyncio.sleep(0)
+            profile = None if body.prompt.strip() else get_profile_for_skill(skill_id)
+            part_tree = None
+            if profile:
+                status_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
 
-            part_text = "".join(part_chunks)
+                async def _on_status(phase: str, message: str, _q=status_queue) -> None:
+                    await _q.put((phase, message))
+
+                gen_task = asyncio.create_task(
+                    generate_partition_summary(
+                        article_service,
+                        articles=partition["articles"],
+                        days=body.days,
+                        digest_skill_id=skill_id,
+                        prompt_override="",
+                        llm_config=llm_config,
+                        enable_thinking=body.enable_thinking,
+                        on_status=_on_status,
+                    )
+                )
+                while not gen_task.done():
+                    try:
+                        phase, message = await asyncio.wait_for(status_queue.get(), timeout=0.2)
+                        yield sse_event(
+                            "status",
+                            {
+                                "phase": phase,
+                                "message": message,
+                                "group_id": partition.get("group_id"),
+                                "digest_skill_id": skill_id,
+                            },
+                        )
+                    except asyncio.TimeoutError:
+                        await asyncio.sleep(0)
+                while not status_queue.empty():
+                    phase, message = status_queue.get_nowait()
+                    yield sse_event(
+                        "status",
+                        {
+                            "phase": phase,
+                            "message": message,
+                            "group_id": partition.get("group_id"),
+                            "digest_skill_id": skill_id,
+                        },
+                    )
+
+                part_text, truncated, part_tree = await gen_task
+                total_truncated = total_truncated or truncated
+                if part_text:
+                    for line in part_text.splitlines(keepends=True) or [part_text]:
+                        yield sse_event("token", {"content": line})
+                        await asyncio.sleep(0)
+            else:
+                prompt = body.prompt.strip() or get_system_prompt_for_skill(skill_id)
+                messages, truncated = build_summary_messages_for_partition(
+                    article_service,
+                    system_prompt=prompt,
+                    articles=partition["articles"],
+                    days=body.days,
+                    digest_skill_id=skill_id,
+                )
+                total_truncated = total_truncated or truncated
+                part_chunks: list[str] = []
+                async for part in stream_llm(
+                    messages,
+                    llm_config,
+                    temperature=0,
+                    enable_thinking=body.enable_thinking,
+                ):
+                    if part.kind == "thinking":
+                        yield sse_event("thinking", {"content": part.text})
+                    else:
+                        part_chunks.append(part.text)
+                        yield sse_event("token", {"content": part.text})
+                    await asyncio.sleep(0)
+                part_text = "".join(part_chunks)
+
             summary_parts.append(part_text)
-            section_results.append({"group_name": group_name, "summary": part_text})
+            section_results.append(
+                {
+                    "group_id": partition.get("group_id"),
+                    "group_name": group_name,
+                    "summary": part_text,
+                    "digest_tree": part_tree,
+                }
+            )
 
         article_count = sum(len(partition["articles"]) for partition in partitions)
         article_refs = build_article_refs(partitions)
         final_summary = stitch_summaries(section_results) if len(partitions) > 1 else "".join(summary_parts)
+        digest_tree = stitch_digest_trees(section_results)
         cache_summary(
             body.days,
             final_summary,
@@ -937,6 +1041,7 @@ async def _sse_summarize_stream(body: SummarizeRequest):
             article_count=article_count,
             truncated=total_truncated,
             article_refs=article_refs,
+            digest_tree=digest_tree,
         )
         yield sse_event(
             "done",
@@ -944,6 +1049,7 @@ async def _sse_summarize_stream(body: SummarizeRequest):
                 "article_count": article_count,
                 "truncated": total_truncated,
                 "article_refs": article_refs,
+                "digest_tree": digest_tree,
             },
         )
     except LLMError as exc:
@@ -968,6 +1074,7 @@ async def get_digest_summary(
             "truncated": False,
             "updated_at": None,
             "article_refs": [],
+            "digest_tree": None,
         }
     article_refs = entry.get("article_refs") or []
     if not article_refs and entry.get("summary"):
@@ -994,6 +1101,7 @@ async def get_digest_summary(
         "truncated": entry["truncated"],
         "updated_at": entry["updated_at"],
         "article_refs": article_refs,
+        "digest_tree": entry.get("digest_tree"),
     }
 
 
@@ -1042,28 +1150,29 @@ async def summarize(body: SummarizeRequest):
         section_results: list[dict] = []
         total_truncated = bool(data.get("truncated"))
         for partition in partitions:
-            prompt = body.prompt.strip() or get_system_prompt_for_skill(str(partition["digest_skill_id"]))
-            messages, truncated = build_summary_messages_for_partition(
+            part_summary, truncated, part_tree = await generate_partition_summary(
                 article_service,
-                system_prompt=prompt,
                 articles=partition["articles"],
                 days=body.days,
                 digest_skill_id=str(partition["digest_skill_id"]),
-            )
-            total_truncated = total_truncated or truncated
-            part_summary = await complete(
-                messages,
-                llm_config,
-                temperature=0,
+                prompt_override=body.prompt,
+                llm_config=llm_config,
                 enable_thinking=body.enable_thinking,
             )
+            total_truncated = total_truncated or truncated
             section_results.append(
-                {"group_name": partition["group_name"], "summary": part_summary}
+                {
+                    "group_id": partition.get("group_id"),
+                    "group_name": partition["group_name"],
+                    "summary": part_summary,
+                    "digest_tree": part_tree,
+                }
             )
 
         summary = stitch_summaries(section_results) if len(section_results) > 1 else section_results[0]["summary"]
         article_count = sum(len(partition["articles"]) for partition in partitions)
         article_refs = build_article_refs(partitions)
+        digest_tree = stitch_digest_trees(section_results)
         cache_summary(
             body.days,
             summary,
@@ -1072,12 +1181,14 @@ async def summarize(body: SummarizeRequest):
             article_count=article_count,
             truncated=total_truncated,
             article_refs=article_refs,
+            digest_tree=digest_tree,
         )
         return {
             "summary": summary,
             "article_count": article_count,
             "truncated": total_truncated,
             "article_refs": article_refs,
+            "digest_tree": digest_tree,
         }
     except LLMError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -1227,8 +1338,6 @@ async def build_rag_index(body: BuildIndexRequest):
             feed_ids=body.feed_ids or None,
             llm_config=llm_config,
         )
-        if result["article_count"] == 0:
-            raise HTTPException(status_code=404, detail=NO_RAG_INDEX_DETAIL)
         return result
     except HTTPException:
         raise
@@ -1259,15 +1368,13 @@ async def start_index_job(body: BuildIndexRequest):
     }
 
     async def runner(on_progress):
-        result = await article_service.build_rag_index(
+        # 无新正文时 article_count=0，仍返回已有 chunk_count，不视为失败
+        return await article_service.build_rag_index(
             days=body.days,
             feed_ids=body.feed_ids or None,
             llm_config=llm_config,
             on_progress=on_progress,
         )
-        if result.get("article_count", 0) == 0:
-            raise RuntimeError(NO_RAG_INDEX_DETAIL)
-        return result
 
     return await content_job_manager.start_index(runner=runner, params=params)
 
@@ -1284,7 +1391,14 @@ async def _sse_rag_index_stream(body: BuildIndexRequest):
         articles = data.get("articles") or []
         indexable = article_service._indexable_articles(articles)
         if not indexable:
-            yield sse_event("error", {"detail": NO_RAG_INDEX_DETAIL})
+            # 无新正文：按 0 篇增量成功返回，保留库内已有索引
+            result = await article_service.build_rag_index(
+                days=body.days,
+                feed_ids=body.feed_ids or None,
+                llm_config=llm_config,
+            )
+            yield sse_event("result", result)
+            yield sse_event("done", {})
             return
 
         total = len(indexable)
@@ -1328,10 +1442,6 @@ async def _sse_rag_index_stream(body: BuildIndexRequest):
             yield sse_event("status", item)
 
         result = await task
-        if result["article_count"] == 0:
-            yield sse_event("error", {"detail": NO_RAG_INDEX_DETAIL})
-            return
-
         yield sse_event("result", result)
         yield sse_event("done", {})
     except LLMError as exc:
@@ -1439,6 +1549,180 @@ async def chat(body: ChatRequest):
         raise HTTPException(status_code=502, detail=f"对话失败: {exc}") from exc
 
 
+@app.get("/api/settings/credentials")
+async def get_credentials():
+    return {"credentials": list_credentials(), "slots": list_slots()}
+
+
+@app.put("/api/settings/credentials")
+async def save_credential(body: CredentialUpsertRequest):
+    try:
+        item = upsert_credential(
+            slot=body.slot,
+            cookie=body.cookie,
+            label=body.label,
+            cred_id=body.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "credential": item}
+
+
+@app.delete("/api/settings/credentials/{cred_id}")
+async def remove_credential(cred_id: str):
+    try:
+        delete_credential(cred_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/api/settings/credentials/{cred_id}/verify")
+async def verify_credential(cred_id: str):
+    cred = next((item for item in list_credentials(include_cookie=True) if item["id"] == cred_id), None)
+    if not cred:
+        raise HTTPException(status_code=404, detail="凭证不存在")
+    sync_runtime_cookies()
+    if cred["slot"] == "zhihu":
+        return await verify_zhihu_cookie()
+    if cred["slot"] == "xiaohongshu":
+        from xiaohongshu_auth import verify_xiaohongshu_cookie
+
+        try:
+            result = verify_xiaohongshu_cookie(str(cred.get("cookie") or ""))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "ok": True,
+            "message": f"小红书登录有效（{result.get('nickname') or result.get('user_id') or '已登录'}）",
+            **result,
+        }
+    return {"ok": True, "message": f"已保存「{cred['label']}」，暂无自动校验"}
+
+
+@app.post("/api/sources/auth-precheck")
+async def auth_precheck(body: AuthPrecheckRequest):
+    urls = [str(url).strip() for url in body.entry_urls if str(url).strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="请提供至少一个链接")
+    return precheck_entry_urls(urls)
+
+
+@app.get("/api/sources/weixin/search")
+async def search_weixin_accounts(q: str = Query(..., min_length=1, max_length=80)):
+    """按名称搜索公众号（需公众号后台凭证）。"""
+    query = (q or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="请输入公众号名称")
+
+    sync_runtime_cookies()
+    from credential_store import slot_configured
+
+    if not slot_configured("weixin"):
+        raise HTTPException(
+            status_code=400,
+            detail="ASKME_AUTH_REQUIRED:slot=weixin 请先在设置页或添加源弹窗登录【公众号】后台（勿选小程序）",
+        )
+
+    skills_lib = Path(__file__).resolve().parent.parent / ".cursor" / "skills" / "_lib"
+    import sys
+
+    lib_path = str(skills_lib)
+    if lib_path not in sys.path:
+        sys.path.insert(0, lib_path)
+    import weixin_common as w
+
+    try:
+        hits = w.search_biz(query, begin=0, count=10)
+    except w.WeixinSearchRateLimited as exc:
+        retry_after = int(getattr(exc, "retry_after", 60) or 60)
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(max(1, retry_after))},
+        ) from exc
+    except RuntimeError as exc:
+        detail = str(exc)
+        status = 400 if "ASKME_AUTH_REQUIRED" in detail else 502
+        raise HTTPException(status_code=status, detail=detail) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"搜索公众号失败: {exc}") from exc
+
+    accounts = [w.normalize_search_hit(item) for item in hits]
+    accounts = [a for a in accounts if a.get("fakeid")]
+    return {"ok": True, "query": query, "accounts": accounts}
+
+
+@app.get("/api/sources/weixin/resolve")
+async def resolve_weixin_account_url(url: str = Query(..., min_length=8, max_length=500)):
+    """从文章/带 __biz 的链接解析公众号（不走 searchbiz）。"""
+    entry = (url or "").strip()
+    if not entry:
+        raise HTTPException(status_code=400, detail="请提供公众号文章或带 __biz 的链接")
+
+    skills_lib = Path(__file__).resolve().parent.parent / ".cursor" / "skills" / "_lib"
+    import sys
+
+    lib_path = str(skills_lib)
+    if lib_path not in sys.path:
+        sys.path.insert(0, lib_path)
+    import weixin_common as w
+
+    try:
+        account = w.resolve_account_from_entry(entry)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"解析公众号链接失败: {exc}") from exc
+
+    fakeid = str(account.get("fakeid") or "").strip()
+    if not fakeid:
+        raise HTTPException(status_code=400, detail="未能从链接解析出公众号")
+    nickname = str(account.get("nickname") or account.get("askme_name") or "").strip()
+    return {
+        "ok": True,
+        "url": entry,
+        "fakeid": fakeid,
+        "nickname": nickname,
+        "entry_url": w.build_weixin_entry_url(fakeid, nickname=nickname),
+    }
+
+
+@app.post("/api/settings/credentials/login-session")
+async def create_login_session(body: LoginSessionRequest):
+    try:
+        if body.entry_url.strip():
+            session = start_login_session_for_url(
+                body.entry_url.strip(),
+                label=body.label,
+            )
+        else:
+            session = start_login_session(
+                slot=body.slot,
+                login_url=body.login_url,
+                label=body.label,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return session.to_dict()
+
+
+@app.get("/api/settings/credentials/login-session/{session_id}")
+async def read_login_session(session_id: str):
+    session = get_login_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="登录会话不存在")
+    return session.to_dict()
+
+
+@app.post("/api/settings/credentials/login-session/{session_id}/cancel")
+async def stop_login_session(session_id: str):
+    session = cancel_login_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="登录会话不存在")
+    return session.to_dict()
+
+
 @app.get("/api/settings/zhihu-cookie")
 async def get_zhihu_cookie_status():
     cookie = _get_saved_zhihu_cookie()
@@ -1451,13 +1735,11 @@ async def get_zhihu_cookie_status():
 @app.put("/api/settings/zhihu-cookie")
 async def save_zhihu_cookie(body: ZhihuCookieRequest):
     cookie = body.cookie.strip()
-    if "d_c0=" not in cookie:
-        raise HTTPException(status_code=400, detail="Cookie 缺少 d_c0，无法用于知乎接口")
-    data = _load_integrations()
-    data[ZHIHU_COOKIE_KEY] = cookie
-    _save_integrations(data)
-    _set_runtime_zhihu_cookie(cookie)
-    return {"ok": True, "configured": True, "masked": _mask_cookie(cookie)}
+    try:
+        item = upsert_credential(slot="zhihu", cookie=cookie, label="知乎")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "configured": True, "masked": item.get("masked") or _mask_cookie(cookie)}
 
 
 @app.post("/api/settings/zhihu-cookie/verify")
@@ -1465,7 +1747,7 @@ async def verify_zhihu_cookie():
     cookie = _get_saved_zhihu_cookie()
     if not cookie:
         raise HTTPException(status_code=400, detail="请先保存知乎 Cookie")
-    _set_runtime_zhihu_cookie(cookie)
+    sync_runtime_cookies()
 
     checked: list[str] = []
     for feed_id in ZHIHU_FEED_IDS:
@@ -1605,6 +1887,12 @@ async def list_feeds():
                     "sync_time": feed.get("syncTime"),
                     "status": feed.get("status"),
                     "group_id": feed.get("groupId"),
+                    "platform_account": feed_registry.is_platform_feed(feed["id"]),
+                    "platform": (
+                        str(feed_registry.get_platform_account(feed["id"]).get("platform") or "")
+                        if feed_registry.get_platform_account(feed["id"])
+                        else ""
+                    ),
                 }
                 for feed in feeds
             ],
@@ -1624,17 +1912,29 @@ async def delete_feed(
     remove_skill: bool = Query(False),
 ):
     try:
+        is_platform = feed_registry.is_platform_feed(feed_id)
         skill_removed = False
-        if remove_skill:
+        if is_platform:
+            if remove_skill:
+                feed_registry.purge_feed(feed_id)
+            else:
+                feed_client.hide_feed(feed_id)
+            feed_client.reload_skills()
+        elif remove_skill:
             try:
                 delete_discovery_skill_by_feed_id(feed_id)
                 feed_client.reload_skills()
                 skill_removed = True
             except ValueError:
                 skill_removed = False
-        if not skill_removed:
+        if not is_platform and not skill_removed:
             feed_client.hide_feed(feed_id)
-        return {"ok": True, "feed_id": feed_id, "skill_removed": skill_removed}
+        return {
+            "ok": True,
+            "feed_id": feed_id,
+            "skill_removed": skill_removed,
+            "platform_account": is_platform,
+        }
     except FeedError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except Exception as exc:
@@ -1681,6 +1981,7 @@ async def create_digest_skill(body: DigestSkillInput):
         return save_user_digest_skill(
             body.id,
             skill_md=body.skill_md,
+            profile=body.profile,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1692,6 +1993,7 @@ async def update_digest_skill(skill_id: str, body: DigestSkillInput):
         return save_user_digest_skill(
             skill_id,
             skill_md=body.skill_md,
+            profile=body.profile,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1817,9 +2119,26 @@ async def refresh_feed(
     feed_id: str,
     days: int = Query(default=1, ge=1, le=30),
 ):
+    from feed_scheduler import DEFAULT_FEED_REFRESH_TIMEOUT, humanize_refresh_error
+
+    task = asyncio.create_task(feed_client.refresh_feed(feed_id, days=days))
     try:
-        result = await feed_client.refresh_feed(feed_id, days=days)
-        return result
+        done, _pending = await asyncio.wait({task}, timeout=DEFAULT_FEED_REFRESH_TIMEOUT)
+        if task not in done:
+            def _swallow(done_task: asyncio.Task) -> None:
+                try:
+                    done_task.result()
+                except Exception:
+                    pass
+
+            task.add_done_callback(_swallow)
+            detail = humanize_refresh_error(
+                f"刷新超时（>{int(DEFAULT_FEED_REFRESH_TIMEOUT)}s）"
+            )
+            raise HTTPException(status_code=504, detail=detail)
+        return task.result()
+    except HTTPException:
+        raise
     except FeedError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except Exception as exc:

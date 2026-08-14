@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import ConfirmModal from "../components/ConfirmModal";
+import DigestProfileModal from "../components/DigestProfileModal";
+import OverflowMenu, { type OverflowMenuItem } from "../components/OverflowMenu";
 import SkillDetailModal from "../components/SkillDetailModal";
 import SkillMarkdownModal from "../components/SkillMarkdownModal";
 import SkillRepairModal from "../components/SkillRepairModal";
@@ -17,114 +20,183 @@ import {
   saveChatSkill,
   saveDigestSkill,
   saveSkillConfig,
+  type DigestProfile,
   type SkillDetail,
   type SkillItem,
   type SkillsCatalog,
 } from "../api";
-import { newDigestSkillMd } from "../utils/skillDocument";
+import { defaultDigestProfile } from "../utils/digestProfile";
+
+const DISCOVERY_ROW_HEIGHT = 44;
+const DISCOVERY_LIST_MAX_HEIGHT = 360;
 
 function newDigestSkillId() {
   return `custom-${Math.random().toString(36).slice(2, 8)}-digest`;
 }
 
-function SkillListItem({
+function SkillMetaBadges({
   skill,
-  onEdit,
-  onView,
-  onDelete,
-  editLabel = "编辑",
+  isDefault,
 }: {
   skill: SkillItem;
-  onEdit?: () => void;
-  onView?: () => void;
-  onDelete?: () => void;
-  editLabel?: string;
+  isDefault?: boolean;
 }) {
-  const displayName = skill.name?.trim() || skill.id;
   return (
-    <li className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+    <span className="mt-1 flex flex-wrap gap-1.5">
+      {skill.builtin ? (
+        <span className="text-[11px] text-[var(--ink-muted)]">内置</span>
+      ) : null}
+      {skill.has_profile ? (
+        <span className="text-[11px] text-[var(--success)]">结构化</span>
+      ) : null}
+      {isDefault ? (
+        <span className="text-[11px] text-[var(--accent)]">默认</span>
+      ) : null}
+    </span>
+  );
+}
+
+function SkillRow({
+  title,
+  subtitle,
+  description,
+  badges,
+  menuItems,
+}: {
+  title: string;
+  subtitle?: string;
+  description?: string;
+  badges?: ReactNode;
+  menuItems: OverflowMenuItem[];
+}) {
+  return (
+    <li className="group flex items-start justify-between gap-3 border-b border-[var(--rule)] py-3 last:border-b-0">
       <div className="min-w-0">
-        <p className="font-medium text-slate-900">
-          {displayName}
-          {displayName !== skill.id && (
-            <span className="ml-2 text-xs font-normal text-slate-400">({skill.id})</span>
-          )}
+        <p className="truncate text-sm font-medium tracking-tight text-[var(--ink)]">
+          {title}
+          {subtitle ? (
+            <span className="ml-2 text-[11px] font-normal text-[var(--ink-muted)]">{subtitle}</span>
+          ) : null}
         </p>
-        {skill.builtin && <span className="mt-1 inline-block text-xs text-slate-400">内置</span>}
-        <p className="mt-1 text-xs text-slate-500">{skill.description || "无描述"}</p>
-        {skill.path && <p className="mt-1 text-xs text-slate-400">{skill.path}</p>}
+        {badges}
+        {description ? (
+          <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--ink-muted)]">{description}</p>
+        ) : null}
       </div>
-      <div className="flex shrink-0 gap-2">
-        {onView && (
-          <button type="button" onClick={onView} className="text-xs text-slate-600 underline">
-            查看
-          </button>
-        )}
-        {onEdit && (
-          <button type="button" onClick={onEdit} className="text-xs text-slate-600 underline">
-            {editLabel}
-          </button>
-        )}
-        {onDelete && (
-          <button type="button" onClick={onDelete} className="text-xs text-red-600 underline">
-            删除
-          </button>
-        )}
+      <div className="shrink-0 opacity-70 transition-opacity group-hover:opacity-100">
+        <OverflowMenu items={menuItems} label="Skill 操作" />
       </div>
     </li>
   );
 }
 
-function DigestSkillListItem({
+function DiscoverySkillRow({
   skill,
-  isDefault,
-  onSetDefault,
-  onEdit,
+  onView,
   onDelete,
-  settingDefault,
 }: {
   skill: SkillItem;
-  isDefault: boolean;
-  onSetDefault: () => void;
-  onEdit: () => void;
+  onView: () => void;
   onDelete: () => void;
-  settingDefault: boolean;
 }) {
   const displayName = skill.name?.trim() || skill.id;
   return (
-    <li className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
-      <div className="min-w-0">
-        <p className="font-medium text-slate-900">
-          {displayName}
-          {displayName !== skill.id && (
-            <span className="ml-2 text-xs font-normal text-slate-400">({skill.id})</span>
-          )}
-        </p>
-        {skill.builtin && <span className="mt-1 inline-block text-xs text-slate-400">内置</span>}
-        <p className="mt-1 text-xs text-slate-500">{skill.description || "无描述"}</p>
-        {skill.path && <p className="mt-1 text-xs text-slate-400">{skill.path}</p>}
+    <div className="flex h-full items-center justify-between gap-3 border-b border-[var(--rule)] px-1 text-sm last:border-b-0">
+      <button
+        type="button"
+        onClick={onView}
+        className="min-w-0 flex-1 truncate text-left hover:text-[var(--accent)]"
+        title={skill.description || displayName}
+      >
+        <span className="font-medium text-[var(--ink)]">{displayName}</span>
+        {displayName !== skill.id ? (
+          <span className="ml-2 text-[11px] font-normal text-[var(--ink-muted)]">{skill.id}</span>
+        ) : null}
+        {skill.builtin ? (
+          <span className="ml-2 text-[11px] text-[var(--ink-muted)]">内置</span>
+        ) : null}
+      </button>
+      <OverflowMenu
+        items={[
+          { label: "查看", onClick: onView },
+          { label: "删除", danger: true, onClick: onDelete },
+        ]}
+        label="Discovery 操作"
+      />
+    </div>
+  );
+}
+
+function VirtualDiscoveryList({
+  skills,
+  onView,
+  onDelete,
+}: {
+  skills: SkillItem[];
+  onView: (skill: SkillItem) => void;
+  onDelete: (skill: SkillItem) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: skills.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => DISCOVERY_ROW_HEIGHT,
+    overscan: 8,
+  });
+
+  const listHeight = Math.min(skills.length * DISCOVERY_ROW_HEIGHT, DISCOVERY_LIST_MAX_HEIGHT);
+
+  return (
+    <div ref={parentRef} className="mt-2 overflow-y-auto" style={{ height: listHeight }}>
+      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((item) => {
+          const skill = skills[item.index];
+          return (
+            <div
+              key={skill.id}
+              className="absolute top-0 left-0 w-full"
+              style={{
+                height: item.size,
+                transform: `translateY(${item.start}px)`,
+              }}
+            >
+              <DiscoverySkillRow
+                skill={skill}
+                onView={() => onView(skill)}
+                onDelete={() => onDelete(skill)}
+              />
+            </div>
+          );
+        })}
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {isDefault ? (
-          <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700">默认</span>
-        ) : (
-          <button
-            type="button"
-            disabled={settingDefault}
-            onClick={onSetDefault}
-            className="text-xs text-slate-600 underline disabled:opacity-50"
-          >
-            设为默认
-          </button>
-        )}
-        <button type="button" onClick={onEdit} className="text-xs text-slate-600 underline">
-          编辑
-        </button>
-        <button type="button" onClick={onDelete} className="text-xs text-red-600 underline">
-          删除
-        </button>
+    </div>
+  );
+}
+
+function Section({
+  title,
+  description,
+  action,
+  children,
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold tracking-tight text-[var(--ink)]">{title}</h2>
+          {description ? (
+            <p className="mt-1 text-xs leading-5 text-[var(--ink-muted)]">{description}</p>
+          ) : null}
+        </div>
+        {action}
       </div>
-    </li>
+      <div className="mt-3">{children}</div>
+    </section>
   );
 }
 
@@ -156,6 +228,17 @@ export default function SkillsPage() {
   const [markdownLoading, setMarkdownLoading] = useState(false);
   const [markdownError, setMarkdownError] = useState("");
 
+  const [profileEditor, setProfileEditor] = useState<{
+    title: string;
+    skillId: string;
+    isNew: boolean;
+    path?: string;
+  } | null>(null);
+  const [profileDraft, setProfileDraft] = useState<DigestProfile>(defaultDigestProfile());
+  const [profileName, setProfileName] = useState("");
+  const [profileDescription, setProfileDescription] = useState("");
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{
     category: "digest" | "discovery" | "other";
     id: string;
@@ -199,11 +282,7 @@ export default function SkillsPage() {
   }, [loadCatalog]);
 
   useEffect(() => {
-    if (
-      onboardJob?.kind === "repair" &&
-      onboardJob.phase === "done" &&
-      !onboardJob.running
-    ) {
+    if (onboardJob?.kind === "repair" && onboardJob.phase === "done" && !onboardJob.running) {
       void fetchSkillsCatalog()
         .then(setCatalog)
         .catch(() => {});
@@ -239,20 +318,48 @@ export default function SkillsPage() {
   async function openDigestEditor(skill?: SkillItem) {
     if (!skill) {
       const id = newDigestSkillId();
-      setMarkdownEditor({
-        category: "digest",
-        title: "新建 Digest Skill",
+      setProfileEditor({
+        title: "新建概览 Skill",
         skillId: id,
         isNew: true,
       });
-      setMarkdownDocument(newDigestSkillMd(id));
-      setMarkdownError("");
+      setProfileDraft(defaultDigestProfile());
+      setProfileName(id);
+      setProfileDescription("结构化概览 skill");
+      setProfileError("");
+      return;
+    }
+
+    if (skill.has_profile) {
+      setProfileEditor({
+        title: skill.name || skill.id,
+        skillId: skill.id,
+        isNew: false,
+        path: skill.path,
+      });
+      setProfileDraft(defaultDigestProfile());
+      setProfileName(skill.name || skill.id);
+      setProfileDescription(skill.description || "");
+      setProfileError("");
+      setProfileLoading(true);
+      try {
+        const detail = await fetchDigestSkillDetail(skill.id);
+        if (detail.profile) {
+          setProfileDraft(detail.profile);
+        }
+        setProfileName(detail.name || skill.id);
+        setProfileDescription(detail.description || "");
+      } catch (err) {
+        setProfileError(err instanceof Error ? err.message : "加载失败");
+      } finally {
+        setProfileLoading(false);
+      }
       return;
     }
 
     setMarkdownEditor({
       category: "digest",
-      title: `Digest · ${skill.name || skill.id}`,
+      title: skill.name || skill.id,
       skillId: skill.id,
       isNew: false,
       path: skill.path,
@@ -262,6 +369,19 @@ export default function SkillsPage() {
     setMarkdownLoading(true);
     try {
       const detail = await fetchDigestSkillDetail(skill.id);
+      if (detail.has_profile && detail.profile) {
+        closeMarkdownEditor();
+        setProfileEditor({
+          title: skill.name || skill.id,
+          skillId: skill.id,
+          isNew: false,
+          path: skill.path,
+        });
+        setProfileDraft(detail.profile);
+        setProfileName(detail.name || skill.id);
+        setProfileDescription(detail.description || "");
+        return;
+      }
       setMarkdownDocument(detail.skill_md || "");
     } catch (err) {
       setMarkdownError(err instanceof Error ? err.message : "加载失败");
@@ -270,13 +390,18 @@ export default function SkillsPage() {
     }
   }
 
+  function closeProfileEditor() {
+    setProfileEditor(null);
+    setProfileError("");
+  }
+
   async function openChatEditor() {
     if (!catalog) return;
     const chat = catalog.chat;
     const displayName = chat.name?.trim() || chat.id;
     setMarkdownEditor({
       category: "chat",
-      title: `对话 · ${displayName}`,
+      title: displayName,
       skillId: chat.id,
       isNew: false,
       path: chat.path,
@@ -322,6 +447,9 @@ export default function SkillsPage() {
       if (markdownEditor?.skillId === deleteTarget.id) {
         closeMarkdownEditor();
       }
+      if (profileEditor?.skillId === deleteTarget.id) {
+        closeProfileEditor();
+      }
       setMessage(`已删除「${deleteTarget.name}」`);
       setDeleteTarget(null);
       await loadCatalog();
@@ -337,7 +465,7 @@ export default function SkillsPage() {
     setError("");
     try {
       await saveSkillConfig({ default_digest_skill: skillId });
-      setMessage("已设为默认 digest skill");
+      setMessage("已设为默认概览 Skill");
       await loadCatalog();
     } catch (err) {
       setError(err instanceof Error ? err.message : "设置失败");
@@ -358,12 +486,12 @@ export default function SkillsPage() {
           throw new Error("SKILL.md 内容不能为空");
         }
         await saveChatSkill({ skill_md });
-        setMessage("对话 skill 已保存");
+        setMessage("对话 Skill 已保存");
       } else {
         const skillId = markdownEditor.skillId.trim();
         const skill_md = markdownDocument.trim();
         if (!skillId.endsWith("-digest")) {
-          throw new Error("Digest skill id 需以 -digest 结尾");
+          throw new Error("概览 Skill id 需以 -digest 结尾");
         }
         if (!skill_md) {
           throw new Error("SKILL.md 内容不能为空");
@@ -374,7 +502,7 @@ export default function SkillsPage() {
         } else {
           await saveDigestSkill(payload);
         }
-        setMessage("Digest skill 已保存");
+        setMessage("概览 Skill 已保存");
       }
       closeMarkdownEditor();
       await loadCatalog();
@@ -385,133 +513,197 @@ export default function SkillsPage() {
     }
   }
 
+  async function handleSaveProfile() {
+    if (!profileEditor) return;
+    setSaving(true);
+    setError("");
+    setMessage("");
+    setProfileError("");
+    try {
+      const skillId = profileEditor.skillId.trim();
+      if (!skillId.endsWith("-digest")) {
+        throw new Error("概览 Skill id 需以 -digest 结尾");
+      }
+      const displayName = profileName.trim() || skillId;
+      const desc = profileDescription.trim() || "结构化概览 skill";
+      const skill_md = `---
+name: ${displayName}
+description: ${desc}
+---
+
+结构化概览 skill（分类 → 重点关注 → 类内聚类 → 渲染）。
+
+规则与类别定义见同目录 \`digest_profile.json\`。系统按配置执行两步 LLM，再渲染为固定 Markdown，不直接使用本文件作为生成 prompt。
+`;
+      const payload = { id: skillId, skill_md, profile: profileDraft };
+      if (profileEditor.isNew) {
+        await createDigestSkill(payload);
+      } else {
+        await saveDigestSkill(payload);
+      }
+      setMessage("概览 Skill 已保存");
+      closeProfileEditor();
+      await loadCatalog();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "保存失败";
+      setProfileError(msg);
+      setError(msg);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function deleteConfirmMessage() {
     if (!deleteTarget) return "";
     if (deleteTarget.category === "digest") {
-      return `确定删除 digest skill「${deleteTarget.name}」？\n\n删除后无法恢复。内置 skill 需从仓库重新检出才能恢复。`;
+      return `确定删除概览 Skill「${deleteTarget.name}」？\n\n删除后无法恢复。内置 Skill 需从仓库重新检出才能恢复。`;
     }
     if (deleteTarget.category === "discovery") {
-      return `确定删除 discovery skill「${deleteTarget.name}」？\n\n将删除 skill 目录并隐藏对应数据源。内置 skill 需从仓库重新检出才能恢复。`;
+      return `确定删除 Discovery Skill「${deleteTarget.name}」？\n\n将删除 skill 目录并隐藏对应数据源。内置 Skill 需从仓库重新检出才能恢复。`;
     }
-    return `确定删除 skill「${deleteTarget.name}」？\n\n将删除 skill 目录，删除后无法恢复。`;
+    return `确定删除 Skill「${deleteTarget.name}」？\n\n将删除 skill 目录，删除后无法恢复。`;
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-slate-50">
-      <header className="border-b border-slate-200 bg-white px-6 py-4">
-        <h1 className="text-base font-semibold">Skill 管理</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          管理 Discovery、Digest、对话等 skill。分组可在「数据源 → 管理分组」绑定 digest skill。
+    <div className="h-full overflow-y-auto bg-[var(--paper)]">
+      <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-6 py-4">
+        <h1 className="text-base font-semibold tracking-tight text-[var(--ink)]">Skill</h1>
+        <p className="mt-1 text-sm text-[var(--ink-muted)]">
+          管理抓取、概览与对话 Skill。分组可在「库 → 管理分组」绑定概览 Skill。
         </p>
       </header>
 
-      <div className="mx-auto max-w-4xl space-y-6 p-6">
-        {loading && <p className="text-sm text-slate-500">加载中...</p>}
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        {message && <p className="text-sm text-green-700">{message}</p>}
+      <div className="mx-auto max-w-3xl space-y-10 px-6 py-8">
+        {loading ? <p className="text-sm text-[var(--ink-muted)]">加载中…</p> : null}
+        {error ? <p className="text-sm text-red-800">{error}</p> : null}
+        {message ? <p className="text-sm text-[var(--success)]">{message}</p> : null}
 
-        {catalog && (
+        {catalog ? (
           <>
-            <section className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold">Digest 概览 Skill</h2>
-                <button
-                  type="button"
-                  onClick={() => void openDigestEditor()}
-                  className="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700"
-                >
+            <Section
+              title="概览"
+              description="定义分类与重点关注规则，用于对话页目录生成。"
+              action={
+                <button type="button" onClick={() => void openDigestEditor()} className="ui-btn ui-btn-primary text-xs">
                   新建
                 </button>
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                按 SKILL.md 格式编写概览 skill；生成概览时使用完整 skill 内容作为指令。
-              </p>
-              <ul className="mt-4 space-y-2">
-                {catalog.digest.map((skill) => (
-                  <DigestSkillListItem
-                    key={skill.id}
-                    skill={skill}
-                    isDefault={skill.id === defaultDigestSkillId || Boolean(skill.is_default)}
-                    settingDefault={settingDefaultId === skill.id}
-                    onSetDefault={() => void handleSetDefaultDigest(skill.id)}
-                    onEdit={() => void openDigestEditor(skill)}
-                    onDelete={() => requestDeleteSkill("digest", skill)}
-                  />
-                ))}
-              </ul>
-            </section>
-
-            <section className="rounded-xl border border-slate-200 bg-white p-5">
-              <h2 className="text-sm font-semibold">对话 Skill</h2>
-              <p className="mt-1 text-xs text-slate-500">
-                按 SKILL.md 格式编写对话 skill；引用规则由系统在每次请求时追加。
-              </p>
-              <ul className="mt-3 space-y-2">
-                <SkillListItem skill={catalog.chat} onEdit={openChatEditor} />
-              </ul>
-            </section>
-
-            <section className="rounded-xl border border-slate-200 bg-white p-5">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div className="min-w-0">
-                  <h2 className="text-sm font-semibold">Discovery Skill</h2>
-                  <p className="mt-1 text-xs text-slate-500">
-                    数据源抓取 skill，可查看详情、反馈问题让 Cursor 修复，或删除（删除后隐藏对应数据源）。
-                  </p>
-                </div>
-                <label className="block w-full max-w-xs text-xs text-slate-500 sm:w-56">
-                  <span className="sr-only">搜索 Discovery Skill</span>
-                  <input
-                    type="search"
-                    value={discoveryQuery}
-                    onChange={(e) => setDiscoveryQuery(e.target.value)}
-                    placeholder="搜索 id / 名称 / 描述…"
-                    className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-800"
-                  />
-                </label>
-              </div>
-              <ul className="mt-3 space-y-2">
-                {filteredDiscovery.length === 0 ? (
-                  <li className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-500">
-                    {discoveryQuery.trim()
-                      ? `没有匹配「${discoveryQuery.trim()}」的 discovery skill`
-                      : "暂无 discovery skill"}
-                  </li>
-                ) : (
-                  filteredDiscovery.map((skill) => (
-                    <SkillListItem
+              }
+            >
+              <ul>
+                {catalog.digest.map((skill) => {
+                  const displayName = skill.name?.trim() || skill.id;
+                  const isDefault = skill.id === defaultDigestSkillId || Boolean(skill.is_default);
+                  const menuItems: OverflowMenuItem[] = [
+                    {
+                      label: "编辑",
+                      onClick: () => void openDigestEditor(skill),
+                    },
+                  ];
+                  if (!isDefault) {
+                    menuItems.push({
+                      label: settingDefaultId === skill.id ? "设置中…" : "设为默认",
+                      disabled: settingDefaultId === skill.id,
+                      onClick: () => void handleSetDefaultDigest(skill.id),
+                    });
+                  }
+                  menuItems.push({
+                    label: "删除",
+                    danger: true,
+                    onClick: () => requestDeleteSkill("digest", skill),
+                  });
+                  return (
+                    <SkillRow
                       key={skill.id}
-                      skill={skill}
-                      onView={() => void openSkillViewer("discovery", skill)}
-                      onDelete={() => requestDeleteSkill("discovery", skill)}
+                      title={displayName}
+                      subtitle={displayName !== skill.id ? skill.id : undefined}
+                      description={skill.description || undefined}
+                      badges={<SkillMetaBadges skill={skill} isDefault={isDefault} />}
+                      menuItems={menuItems}
                     />
-                  ))
-                )}
+                  );
+                })}
               </ul>
-              {discoveryQuery.trim() && filteredDiscovery.length > 0 && (
-                <p className="mt-2 text-xs text-slate-400">
-                  显示 {filteredDiscovery.length} / {catalog.discovery.length} 个
+            </Section>
+
+            <Section
+              title="对话"
+              description="系统角色与回答风格；引用规则由系统自动追加。"
+            >
+              <ul>
+                <SkillRow
+                  title={catalog.chat.name?.trim() || catalog.chat.id}
+                  subtitle={
+                    catalog.chat.name?.trim() && catalog.chat.name !== catalog.chat.id
+                      ? catalog.chat.id
+                      : undefined
+                  }
+                  description={catalog.chat.description || undefined}
+                  badges={<SkillMetaBadges skill={catalog.chat} />}
+                  menuItems={[{ label: "编辑", onClick: () => void openChatEditor() }]}
+                />
+              </ul>
+            </Section>
+
+            <Section
+              title={`抓取${filteredDiscovery.length ? ` · ${filteredDiscovery.length}` : ""}`}
+              description="数据源 Discovery Skill。可查看源码、反馈修复或删除。"
+              action={
+                <input
+                  type="search"
+                  value={discoveryQuery}
+                  onChange={(e) => setDiscoveryQuery(e.target.value)}
+                  placeholder="搜索…"
+                  aria-label="搜索抓取 Skill"
+                  className="ui-input w-40 text-xs sm:w-48"
+                />
+              }
+            >
+              {filteredDiscovery.length === 0 ? (
+                <p className="border-t border-[var(--rule)] py-8 text-center text-xs text-[var(--ink-muted)]">
+                  {discoveryQuery.trim()
+                    ? `没有匹配「${discoveryQuery.trim()}」的 Skill`
+                    : "暂无抓取 Skill"}
                 </p>
+              ) : (
+                <VirtualDiscoveryList
+                  skills={filteredDiscovery}
+                  onView={(skill) => void openSkillViewer("discovery", skill)}
+                  onDelete={(skill) => requestDeleteSkill("discovery", skill)}
+                />
               )}
-            </section>
+            </Section>
 
-            {catalog.other.length > 0 && (
-              <section className="rounded-xl border border-slate-200 bg-white p-5">
-                <h2 className="text-sm font-semibold">其他 Skill</h2>
-                <ul className="mt-3 space-y-2">
-                  {catalog.other.map((skill) => (
-                    <SkillListItem
-                      key={skill.id}
-                      skill={skill}
-                      onView={() => void openSkillViewer("other", skill)}
-                      onDelete={() => requestDeleteSkill("other", skill)}
-                    />
-                  ))}
+            {catalog.other.length > 0 ? (
+              <Section title="其他" description="未归类的 Skill。">
+                <ul>
+                  {catalog.other.map((skill) => {
+                    const displayName = skill.name?.trim() || skill.id;
+                    return (
+                      <SkillRow
+                        key={skill.id}
+                        title={displayName}
+                        subtitle={displayName !== skill.id ? skill.id : undefined}
+                        description={skill.description || undefined}
+                        badges={<SkillMetaBadges skill={skill} />}
+                        menuItems={[
+                          {
+                            label: "查看",
+                            onClick: () => void openSkillViewer("other", skill),
+                          },
+                          {
+                            label: "删除",
+                            danger: true,
+                            onClick: () => requestDeleteSkill("other", skill),
+                          },
+                        ]}
+                      />
+                    );
+                  })}
                 </ul>
-              </section>
-            )}
+              </Section>
+            ) : null}
           </>
-        )}
+        ) : null}
       </div>
 
       <SkillDetailModal
@@ -554,11 +746,22 @@ export default function SkillsPage() {
         path={markdownEditor?.path}
         document={markdownDocument}
         onDocumentChange={setMarkdownDocument}
-        previewMode={markdownEditor?.category === "digest" || markdownEditor?.category === "chat" ? "body" : "full"}
-        skillId={markdownEditor?.category === "digest" && markdownEditor.isNew ? markdownEditor.skillId : undefined}
+        previewMode={
+          markdownEditor?.category === "digest" || markdownEditor?.category === "chat"
+            ? "body"
+            : "full"
+        }
+        skillId={
+          markdownEditor?.category === "digest" && markdownEditor.isNew
+            ? markdownEditor.skillId
+            : undefined
+        }
         onSkillIdChange={
           markdownEditor?.category === "digest" && markdownEditor.isNew
-            ? (value) => setMarkdownEditor((current) => (current ? { ...current, skillId: value } : current))
+            ? (value) =>
+                setMarkdownEditor((current) =>
+                  current ? { ...current, skillId: value } : current,
+                )
             : undefined
         }
         idReadonly={!markdownEditor?.isNew}
@@ -571,7 +774,46 @@ export default function SkillsPage() {
                 if (!markdownEditor) return;
                 requestDeleteSkill("digest", {
                   id: markdownEditor.skillId,
-                  name: markdownEditor.title.replace(/^Digest · /, ""),
+                  name: markdownEditor.title,
+                  category: "digest",
+                });
+              }
+            : undefined
+        }
+        deleting={deleting}
+      />
+
+      <DigestProfileModal
+        open={Boolean(profileEditor)}
+        title={profileEditor?.title ?? "概览 Skill"}
+        loading={profileLoading}
+        error={profileError}
+        path={profileEditor?.path}
+        skillId={profileEditor?.skillId ?? ""}
+        idReadonly={!profileEditor?.isNew}
+        onSkillIdChange={
+          profileEditor?.isNew
+            ? (value) =>
+                setProfileEditor((current) =>
+                  current ? { ...current, skillId: value } : current,
+                )
+            : undefined
+        }
+        name={profileName}
+        description={profileDescription}
+        onNameChange={setProfileName}
+        onDescriptionChange={setProfileDescription}
+        profile={profileDraft}
+        onProfileChange={setProfileDraft}
+        onClose={closeProfileEditor}
+        onSave={() => void handleSaveProfile()}
+        saving={saving}
+        onDelete={
+          profileEditor && !profileEditor.isNew
+            ? () => {
+                requestDeleteSkill("digest", {
+                  id: profileEditor.skillId,
+                  name: profileName || profileEditor.skillId,
                   category: "digest",
                 });
               }

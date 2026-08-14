@@ -105,92 +105,91 @@ export default function SkillDetailModal({
   if (!open) return null;
 
   const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+  const heading = detail?.name?.trim() || title;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-xl">
-        <div className="border-b border-slate-200 px-5 py-4">
-          <h3 className="text-sm font-semibold">
-            {detail?.name?.trim() || title}
-            {detail && detail.name?.trim() && detail.name !== detail.id && (
-              <span className="ml-2 text-xs font-normal text-slate-400">({detail.id})</span>
-            )}
-          </h3>
-          {detail && (
-            <p className="mt-1 text-xs text-slate-500">
+    <div className="ui-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title">
+      <div className="ui-modal ui-modal-lg">
+        <div className="ui-modal-header">
+          <h2 id="skill-detail-title" className="ui-modal-title">
+            {heading}
+            {detail?.name?.trim() && detail.name !== detail.id ? (
+              <span className="ml-2 text-xs font-normal text-[var(--ink-muted)]">{detail.id}</span>
+            ) : null}
+          </h2>
+          {detail ? (
+            <p className="ui-modal-desc">
               {detail.description || "无描述"}
               {detail.path ? ` · ${detail.path}` : ""}
             </p>
-          )}
+          ) : null}
         </div>
 
-        {loading && <p className="px-5 py-4 text-sm text-slate-500">加载中...</p>}
-        {error && <p className="px-5 py-4 text-sm text-red-600">{error}</p>}
+        <div className="ui-modal-body !p-0">
+          {loading ? <p className="px-5 py-6 text-sm text-[var(--ink-muted)]">加载中…</p> : null}
+          {error ? <p className="px-5 py-6 text-sm text-red-800">{error}</p> : null}
 
-        {!loading && !error && detail && tabs.length > 0 && (
-          <>
-            <div className="flex flex-wrap gap-1 border-b border-slate-200 px-5 py-2">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`rounded-md px-2 py-1 text-xs ${
-                    active?.id === tab.id
-                      ? "bg-slate-900 text-white"
-                      : "text-slate-600 hover:bg-slate-100"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-            <div className="flex-1 overflow-auto px-5 py-4">
-              {active?.format === "markdown" ? (
-                <MarkdownContent content={active.content} />
-              ) : (
-                <CodeViewer
-                  code={active?.content ?? ""}
-                  language={active?.language}
-                  filename={active?.label}
-                />
-              )}
-            </div>
-          </>
-        )}
+          {!loading && !error && detail && tabs.length > 0 ? (
+            <>
+              <div className="flex gap-0 overflow-x-auto border-b border-[var(--rule)] px-5">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`shrink-0 border-b-2 px-3 py-2.5 text-xs transition-colors ${
+                      active?.id === tab.id
+                        ? "border-[var(--ink)] font-medium text-[var(--ink)]"
+                        : "border-transparent text-[var(--ink-muted)] hover:text-[var(--ink)]"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <div className="max-h-[min(52vh,28rem)] overflow-auto px-5 py-4">
+                {active?.format === "markdown" ? (
+                  <MarkdownContent content={active.content} />
+                ) : (
+                  <CodeViewer
+                    code={active?.content ?? ""}
+                    language={active?.language}
+                    filename={active?.label}
+                  />
+                )}
+              </div>
+            </>
+          ) : null}
 
-        {!loading && !error && detail && tabs.length === 0 && (
-          <p className="px-5 py-4 text-sm text-slate-500">该 skill 暂无可读文件。</p>
-        )}
+          {!loading && !error && detail && tabs.length === 0 ? (
+            <p className="px-5 py-6 text-sm text-[var(--ink-muted)]">该 Skill 暂无可读文件。</p>
+          ) : null}
+        </div>
 
-        <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
-          {repairable && onRepair && (
-            <button
-              type="button"
-              disabled={repairing}
-              onClick={onRepair}
-              className="mr-auto rounded-md border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
-            >
-              {repairing ? "修复中…" : "反馈并修复"}
-            </button>
-          )}
-          {deletable && onDelete && (
-            <button
-              type="button"
-              disabled={deleting}
-              onClick={onDelete}
-              className={`rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50 ${
-                repairable ? "" : "mr-auto"
-              }`}
-            >
-              {deleting ? "删除中..." : "删除"}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
-          >
+        <div className="ui-modal-footer !justify-between">
+          <div className="flex gap-2">
+            {repairable && onRepair ? (
+              <button
+                type="button"
+                disabled={repairing}
+                onClick={onRepair}
+                className="ui-btn ui-btn-accent text-xs disabled:opacity-50"
+              >
+                {repairing ? "修复中…" : "反馈修复"}
+              </button>
+            ) : null}
+            {deletable && onDelete ? (
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={onDelete}
+                className="ui-btn ui-btn-danger text-xs disabled:opacity-50"
+              >
+                {deleting ? "删除中…" : "删除"}
+              </button>
+            ) : null}
+          </div>
+          <button type="button" onClick={onClose} className="ui-btn text-xs">
             关闭
           </button>
         </div>

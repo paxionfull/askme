@@ -13,6 +13,9 @@ export interface Feed {
   sync_time?: number;
   status?: number;
   group_id?: string;
+  /** 平台多账号数据源（微信/知乎等），删除时不会移除平台 skill */
+  platform_account?: boolean;
+  platform?: string;
 }
 
 export interface FeedGroup {
@@ -86,6 +89,7 @@ export interface LlmConfigPayload {
   embedding_model: string;
   api_key: string;
   api_base: string;
+  max_tokens?: number;
 }
 
 export interface ChatMessagePayload {
@@ -117,7 +121,12 @@ export function fetchFeeds() {
 
 export function deleteFeed(feedId: string, removeSkill = false) {
   const params = new URLSearchParams({ remove_skill: String(removeSkill) });
-  return request<{ ok: boolean; feed_id: string; skill_removed?: boolean }>(`/api/feeds/${encodeURIComponent(feedId)}?${params}`, {
+  return request<{
+    ok: boolean;
+    feed_id: string;
+    skill_removed?: boolean;
+    platform_account?: boolean;
+  }>(`/api/feeds/${encodeURIComponent(feedId)}?${params}`, {
     method: "DELETE",
   });
 }
@@ -472,7 +481,39 @@ export interface CachedSummaryResponse {
   truncated: boolean;
   updated_at: number | null;
   article_refs?: ArticleScopeItem[];
+  digest_tree?: DigestTree | null;
 }
+
+export type DigestTreeArticle = {
+  feed_id: string;
+  article_id: string;
+  title: string;
+  url: string;
+};
+
+export type DigestTreeEvent = {
+  title: string;
+  articles: DigestTreeArticle[];
+};
+
+export type DigestTreeSection = {
+  id: string;
+  name: string;
+  kind: string;
+  events: DigestTreeEvent[];
+};
+
+export type DigestTreePartition = {
+  group_id: string;
+  group_name: string;
+  sections: DigestTreeSection[];
+};
+
+export type DigestTree = {
+  version: number;
+  partitions?: DigestTreePartition[];
+  sections?: DigestTreeSection[];
+};
 
 export function fetchCachedSummary(days: number, feedIds?: string[], groupIds?: string[]) {
   const params = new URLSearchParams({ days: String(days) });
@@ -539,6 +580,116 @@ export interface ZhihuCookieStatus {
   masked: string;
 }
 
+export interface AuthSlot {
+  id: string;
+  label: string;
+  login_url: string;
+  cookie_hint: string;
+}
+
+export interface CredentialItem {
+  id: string;
+  label: string;
+  slot: string;
+  slot_label?: string;
+  masked: string;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export interface AuthPrecheckItem {
+  entry_url: string;
+  requires_auth: boolean;
+  platform?: string | null;
+  slot?: string | null;
+  slot_label?: string;
+  login_url?: string;
+  cookie_hint?: string;
+  configured: boolean;
+  credential_id?: string | null;
+  credential_label?: string | null;
+  masked?: string;
+  can_proceed: boolean;
+}
+
+export interface AuthPrecheckResult {
+  items: AuthPrecheckItem[];
+  missing_slots: string[];
+  can_proceed: boolean;
+  slots: AuthSlot[];
+}
+
+export interface WeixinSearchAccount {
+  fakeid: string;
+  nickname: string;
+  alias?: string;
+  round_head_img?: string;
+  signature?: string;
+  service_type?: number | string;
+  verify_status?: number | string;
+}
+
+export interface WeixinSearchResult {
+  ok: boolean;
+  query: string;
+  accounts: WeixinSearchAccount[];
+}
+
+export function searchWeixinAccounts(query: string) {
+  const q = query.trim();
+  return request<WeixinSearchResult>(
+    `/api/sources/weixin/search?q=${encodeURIComponent(q)}`,
+  );
+}
+
+export interface WeixinResolveResult {
+  ok: boolean;
+  url: string;
+  fakeid: string;
+  nickname: string;
+  entry_url: string;
+}
+
+/** 从文章/带 __biz 链接解析公众号（不走 searchbiz） */
+export function resolveWeixinAccountUrl(url: string) {
+  const u = url.trim();
+  return request<WeixinResolveResult>(
+    `/api/sources/weixin/resolve?url=${encodeURIComponent(u)}`,
+  );
+}
+
+/** 微信按名称接入用的合成入口 URL（detect 认 __biz，askme_name 作显示名） */
+export function buildWeixinOnboardUrl(fakeid: string, nickname?: string) {
+  const params = new URLSearchParams({
+    action: "home",
+    __biz: fakeid,
+  });
+  const name = (nickname || "").trim();
+  if (name) params.set("askme_name", name);
+  return `https://mp.weixin.qq.com/mp/profile_ext?${params.toString()}`;
+}
+
+/** 是否看起来像微信公众号链接（文章 / profile / __biz） */
+export function looksLikeWeixinUrl(text: string): boolean {
+  const raw = text.trim();
+  if (!raw) return false;
+  if (/__biz=/i.test(raw) || /fakeid=/i.test(raw)) return true;
+  return /mp\.weixin\.qq\.com/i.test(raw);
+}
+
+export interface LoginSessionStatus {
+  session_id: string;
+  slot: string;
+  login_url: string;
+  label: string;
+  status: "starting" | "waiting_login" | "capturing" | "done" | "error" | "cancelled";
+  message: string;
+  error?: string;
+  masked?: string;
+  credential_id?: string | null;
+  done: boolean;
+}
+
 export function fetchFeedSchedulerConfig() {
   return request<FeedSchedulerConfig>("/api/settings/feed-scheduler");
 }
@@ -550,6 +701,67 @@ export function updateFeedSchedulerConfig(body: {
     method: "PUT",
     body: JSON.stringify(body),
   });
+}
+
+export function fetchCredentials() {
+  return request<{ credentials: CredentialItem[]; slots: AuthSlot[] }>("/api/settings/credentials");
+}
+
+export function saveCredential(body: {
+  slot: string;
+  cookie: string;
+  label?: string;
+  id?: string;
+}) {
+  return request<{ ok: boolean; credential: CredentialItem }>("/api/settings/credentials", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteCredential(credId: string) {
+  return request<{ ok: boolean }>(`/api/settings/credentials/${encodeURIComponent(credId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function verifyCredential(credId: string) {
+  return request<{ ok: boolean; message: string }>(
+    `/api/settings/credentials/${encodeURIComponent(credId)}/verify`,
+    { method: "POST" },
+  );
+}
+
+export function precheckSourceAuth(entryUrls: string[]) {
+  return request<AuthPrecheckResult>("/api/sources/auth-precheck", {
+    method: "POST",
+    body: JSON.stringify({ entry_urls: entryUrls }),
+  });
+}
+
+export function startCredentialLoginSession(body: {
+  slot?: string;
+  login_url?: string;
+  label?: string;
+  entry_url?: string;
+}) {
+  return request<LoginSessionStatus>("/api/settings/credentials/login-session", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchCredentialLoginSession(sessionId: string) {
+  return request<LoginSessionStatus>(
+    `/api/settings/credentials/login-session/${encodeURIComponent(sessionId)}`,
+  );
+}
+
+export function cancelCredentialLoginSession(sessionId: string) {
+  return request<LoginSessionStatus>(
+    `/api/settings/credentials/login-session/${encodeURIComponent(sessionId)}/cancel`,
+    { method: "POST" },
+  );
 }
 
 export function fetchZhihuCookieStatus() {
@@ -676,7 +888,8 @@ export type OnboardBatchItemStatus =
   | "done"
   | "failed"
   | "cancelled"
-  | "skipped";
+  | "skipped"
+  | "needs_auth";
 
 export interface OnboardBatchItem {
   entry_url: string;
@@ -689,15 +902,17 @@ export interface OnboardBatchItem {
   feed_id?: string | null;
   job_id?: string | null;
   skip_reason?: string | null;
+  auth_slot?: string | null;
 }
 
 export interface OnboardBatchStatus {
   batch_id: string;
-  status: "running" | "done" | "cancelled";
+  status: "running" | "done" | "cancelled" | "needs_auth";
   total: number;
   completed: number;
   failed: number;
   skipped: number;
+  needs_auth?: number;
   running: number;
   queued: number;
   message: string;
@@ -737,6 +952,26 @@ export function parseOnboardUrls(text: string): string[] {
     urls.push(url);
   }
   return urls;
+}
+
+/** 解析公众号名称：每行一个，或逗号分隔；去重保序。 */
+export function parseWeixinNames(text: string): string[] {
+  return parseOnboardUrls(text);
+}
+
+/** 从搜索结果中挑最匹配项：仅精确昵称/微信号；否则视为未命中（避免误接后反复重搜）。 */
+export function pickWeixinAccount(
+  query: string,
+  accounts: WeixinSearchAccount[],
+): WeixinSearchAccount | null {
+  const q = query.trim().toLowerCase();
+  if (!accounts.length) return null;
+  const exact = accounts.find((item) => {
+    const nick = (item.nickname || "").trim().toLowerCase();
+    const alias = (item.alias || "").trim().toLowerCase();
+    return nick === q || alias === q;
+  });
+  return exact || null;
 }
 
 export const ONBOARD_BATCH_MAX_SIZE = 20;
@@ -857,6 +1092,7 @@ export interface SkillItem {
   skill_md?: string;
   default_prompt?: string;
   has_source_yaml?: boolean;
+  has_profile?: boolean;
 }
 
 export interface SkillsCatalog {
@@ -873,10 +1109,27 @@ export interface DigestSkillDetail {
   description: string;
   skill_content: string;
   skill_md?: string;
+  input_mode?: string;
+  profile?: DigestProfile | null;
+  has_profile?: boolean;
   builtin: boolean;
   readonly?: boolean;
   path?: string;
 }
+
+export type DigestProfile = {
+  version: number;
+  input_mode: "titles" | "full";
+  focus: {
+    enabled: boolean;
+    criteria: string;
+    max_events: number;
+    exclusive: boolean;
+  };
+  categories: Array<{ id: string; name: string; criteria: string }>;
+  ignore: { criteria: string };
+  cluster: { enabled: boolean };
+};
 
 export interface SkillFileContent {
   path: string;
@@ -922,14 +1175,22 @@ export function fetchDigestSkills() {
   return request<{ skills: DigestSkillDetail[]; default_digest_skill: string }>("/api/skills/digest");
 }
 
-export function saveDigestSkill(skill: { id: string; skill_md: string }) {
+export function saveDigestSkill(skill: {
+  id: string;
+  skill_md?: string;
+  profile?: DigestProfile;
+}) {
   return request<DigestSkillDetail>(`/api/skills/digest/${encodeURIComponent(skill.id)}`, {
     method: "PUT",
     body: JSON.stringify(skill),
   });
 }
 
-export function createDigestSkill(skill: { id: string; skill_md: string }) {
+export function createDigestSkill(skill: {
+  id: string;
+  skill_md?: string;
+  profile?: DigestProfile;
+}) {
   return request<DigestSkillDetail>("/api/skills/digest", {
     method: "POST",
     body: JSON.stringify(skill),

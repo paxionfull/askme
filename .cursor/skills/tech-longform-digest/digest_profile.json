@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "input_mode": "titles",
+  "focus": {
+    "enabled": true,
+    "criteria": "AI 模型发布、重要技术突破；AI 开源项目发布；AI 公司 IPO、上市、财报；AI 应用业绩、暴雷",
+    "max_events": 20,
+    "exclusive": true
+  },
+  "categories": [
+    {
+      "id": "model",
+      "name": "模型",
+      "criteria": "大模型发布、评测、技术突破、能力更新、训练/推理相关"
+    },
+    {
+      "id": "app",
+      "name": "应用",
+      "criteria": "AI 产品、落地应用、业务场景、用户增长、应用业绩"
+    },
+    {
+      "id": "opensource",
+      "name": "开源",
+      "criteria": "开源模型、开源项目、协议、社区与生态发布"
+    },
+    {
+      "id": "funding",
+      "name": "融资",
+      "criteria": "融资、并购、上市、IPO、估值与资本动态"
+    }
+  ],
+  "ignore": {
+    "criteria": "广告、软广、招聘、纯营销无实质信息、与 AI 科技无关的内容"
+  },
+  "cluster": {
+    "enabled": true
+  }
+}

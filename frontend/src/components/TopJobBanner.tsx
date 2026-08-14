@@ -15,27 +15,27 @@ interface TopJobBannerProps {
 }
 
 const TONE_CLASS: Record<TopJobTone, string> = {
-  progress: "border-blue-200 bg-blue-50 text-blue-800",
-  success: "border-green-200 bg-green-50 text-green-800",
-  warning: "border-amber-200 bg-amber-50 text-amber-900",
-  error: "border-red-200 bg-red-50 text-red-700",
-  neutral: "border-slate-200 bg-slate-100 text-slate-700",
+  progress: "border-[var(--rule)] bg-[var(--paper)] text-[var(--ink)]",
+  success: "border-[var(--rule)] bg-[var(--success-soft)] text-[var(--success)]",
+  warning: "border-[var(--rule)] bg-[var(--warning-soft)] text-[var(--accent)]",
+  error: "border-[var(--rule)] bg-[var(--error-soft)] text-red-800",
+  neutral: "border-[var(--rule)] bg-[var(--paper)] text-[var(--ink-muted)]",
 };
 
 const BAR_TRACK: Record<TopJobTone, string> = {
-  progress: "bg-blue-200/80",
-  success: "bg-green-200/80",
-  warning: "bg-amber-200/80",
-  error: "bg-red-200/80",
-  neutral: "bg-slate-300/60",
+  progress: "bg-[color-mix(in_srgb,var(--rule)_80%,white)]",
+  success: "bg-[color-mix(in_srgb,var(--success)_20%,white)]",
+  warning: "bg-[color-mix(in_srgb,var(--accent)_18%,white)]",
+  error: "bg-red-200/70",
+  neutral: "bg-[var(--rule)]",
 };
 
 const BAR_FILL: Record<TopJobTone, string> = {
-  progress: "bg-blue-600",
-  success: "bg-green-600",
-  warning: "bg-amber-600",
+  progress: "bg-[var(--accent)]",
+  success: "bg-[var(--success)]",
+  warning: "bg-[var(--accent)]",
   error: "bg-red-600",
-  neutral: "bg-slate-700",
+  neutral: "bg-[var(--ink-muted)]",
 };
 
 export default function TopJobBanner({
@@ -74,7 +74,7 @@ export default function TopJobBanner({
           )}
           {actions}
           {onClose && (
-            <button type="button" onClick={onClose} className="text-xs underline">
+            <button type="button" onClick={onClose} className="text-xs underline decoration-[color-mix(in_srgb,currentColor_35%,transparent)] underline-offset-2">
               关闭
             </button>
           )}

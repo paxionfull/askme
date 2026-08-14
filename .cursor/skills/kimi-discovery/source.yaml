@@ -1,0 +1,37 @@
+id: kimi
+name: Kimi
+homepage: https://www.kimi.com
+entry_url: https://www.kimi.com/blog/
+
+discovery:
+  type: sitemap
+  url: https://www.kimi.com/sitemap/sitemap-ug-blog.xml
+  fields:
+    id: slug_from_/blog/{slug}
+    url: loc
+    published_at: lastmod
+  pagination:
+    note: sitemap 全量缓存后按 page/per 切片
+  enrich:
+    list_page: https://www.kimi.com/blog/
+    note: 从入口页链接 span 补全标题与副标题摘要
+
+content:
+  type: html
+  url_template: https://www.kimi.com/blog/{slug}
+  fields:
+    title: h1 / JSON-LD Article.headline
+    author: JSON-LD Article.author.name
+    image: BlogV2Hero media img
+    html: div.max-w-none.markdown
+
+quirks:
+  - 禁止 RSS；发现层使用 sitemap-ug-blog.xml（由 robots.txt 的 sitemap-ug 索引引用）。
+  - 主 sitemap.xml 不含 /blog/{slug} 文章，勿用。
+  - 列表 API 探测 /api/blog 等路径均 404；文章为 Next.js SSR HTML。
+  - lastmod 为 YYYY-MM-DD，转换为 Asia/Shanghai 当天 00:00 ISO8601。
+  - 详情正文取 class="max-w-none markdown" 至 BlogV2MiniNav 之前的 HTML 片段。
+
+validation:
+  last_verified_at: "2026-07-17"
+  expected_min_items: 5

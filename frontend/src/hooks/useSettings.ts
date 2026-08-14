@@ -18,6 +18,7 @@ export interface AppSettings {
   embeddingModel: string;
   llmApiKey: string;
   llmApiBase: string;
+  llmMaxTokens: number;
 }
 
 export interface LlmConfigPayload {
@@ -25,12 +26,24 @@ export interface LlmConfigPayload {
   embedding_model: string;
   api_key: string;
   api_base: string;
+  max_tokens: number;
 }
 
 const STORAGE_KEY = "askme.settings";
 
 export const DEFAULT_LLM_MODEL = "openai/gpt-4o-mini";
 export const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
+export const DEFAULT_LLM_MAX_TOKENS = 8192;
+export const MIN_LLM_MAX_TOKENS = 256;
+export const MAX_LLM_MAX_TOKENS = 128000;
+
+export function normalizeLlmMaxTokens(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    return DEFAULT_LLM_MAX_TOKENS;
+  }
+  return Math.min(MAX_LLM_MAX_TOKENS, Math.max(MIN_LLM_MAX_TOKENS, Math.round(n)));
+}
 
 export const DEFAULT_SUMMARY_PROMPT = `你是 Askme 资讯编辑。用户消息中包含 XML 格式的 <文章集合>，每篇含来源、发布时间、标题和正文。
 
@@ -57,6 +70,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   embeddingModel: "",
   llmApiKey: "",
   llmApiBase: "",
+  llmMaxTokens: DEFAULT_LLM_MAX_TOKENS,
 };
 
 function migrateSummaryPrompt(prompt: string | undefined): string {
@@ -92,6 +106,9 @@ function loadSettings(): AppSettings {
       embeddingModel: parsed.embeddingModel ?? DEFAULT_SETTINGS.embeddingModel,
       llmApiKey: parsed.llmApiKey ?? DEFAULT_SETTINGS.llmApiKey,
       llmApiBase: parsed.llmApiBase ?? DEFAULT_SETTINGS.llmApiBase,
+      llmMaxTokens: normalizeLlmMaxTokens(
+        parsed.llmMaxTokens ?? DEFAULT_SETTINGS.llmMaxTokens,
+      ),
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -110,6 +127,7 @@ export function getLlmConfigPayload(settings?: AppSettings): LlmConfigPayload {
     embedding_model: embeddingModel,
     api_key: current.llmApiKey.trim(),
     api_base: current.llmApiBase.trim(),
+    max_tokens: normalizeLlmMaxTokens(current.llmMaxTokens),
   };
 }
 
@@ -127,10 +145,19 @@ export function useSettings() {
 
   const setSettings = useCallback((patch: Partial<AppSettings>) => {
     setSettingsState((current) => {
-      const normalizedPatch =
-        patch.defaultDays !== undefined
-          ? { ...patch, defaultDays: normalizeDefaultDays(patch.defaultDays) }
-          : patch;
+      let normalizedPatch = patch;
+      if (patch.defaultDays !== undefined) {
+        normalizedPatch = {
+          ...normalizedPatch,
+          defaultDays: normalizeDefaultDays(patch.defaultDays),
+        };
+      }
+      if (patch.llmMaxTokens !== undefined) {
+        normalizedPatch = {
+          ...normalizedPatch,
+          llmMaxTokens: normalizeLlmMaxTokens(patch.llmMaxTokens),
+        };
+      }
       const next = { ...current, ...normalizedPatch };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       window.dispatchEvent(new Event("askme:settings-updated"));

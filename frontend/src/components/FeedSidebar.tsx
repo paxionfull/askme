@@ -6,6 +6,7 @@ import {
   type DragEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import type { Feed, FeedGroup } from "../api";
 import {
   UNGROUPED_GROUP_ID,
@@ -16,6 +17,8 @@ import {
   type FeedSection,
 } from "../utils/feedLayout";
 import { formatFeedSyncTime } from "../utils/formatSyncTime";
+import OverflowMenu from "./OverflowMenu";
+import { formatDaysLabel, type DefaultDays } from "../hooks/useSettings";
 
 interface FeedSidebarProps {
   feeds: Feed[];
@@ -37,6 +40,8 @@ interface FeedSidebarProps {
   onDeleteFeed?: (feedId: string) => void;
   onRenameFeed?: (feedId: string, name: string) => void | Promise<void>;
   onLayoutChange?: (groups: FeedGroup[], groupOrder: string[]) => void | Promise<void>;
+  /** 与库页顶栏时间范围一致，用于「拉取本组正文」说明 */
+  days?: DefaultDays;
 }
 
 type DragKind = "group" | "feed";
@@ -57,9 +62,16 @@ function sortFeedsByName(feedList: Feed[]): Feed[] {
 
 interface MenuItem {
   label: string;
-  onClick: () => void;
+  onClick?: () => void;
   disabled?: boolean;
   danger?: boolean;
+  submenu?: MenuItem[];
+}
+
+function menuItemClass(item: MenuItem, extra = ""): string {
+  return `flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
+    item.danger ? "text-red-600 hover:bg-[var(--error-soft)]" : "text-[var(--ink)] hover:bg-[var(--paper)]"
+  } ${extra}`;
 }
 
 function DropdownMenu({
@@ -73,44 +85,153 @@ function DropdownMenu({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
+  const submenuAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const [submenuOpen, setSubmenuOpen] = useState<string | null>(null);
+  const [submenuPos, setSubmenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  function clearCloseTimer() {
+    if (closeTimerRef.current != null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }
+
+  function scheduleCloseSubmenu() {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      setSubmenuOpen(null);
+      setSubmenuPos(null);
+      submenuAnchorRef.current = null;
+    }, 140);
+  }
+
+  function openSubmenuFor(label: string, button: HTMLButtonElement) {
+    clearCloseTimer();
+    const rect = button.getBoundingClientRect();
+    submenuAnchorRef.current = button;
+    setSubmenuPos({ top: rect.top, left: rect.right + 4 });
+    setSubmenuOpen(label);
+  }
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      clearCloseTimer();
+      setSubmenuOpen(null);
+      setSubmenuPos(null);
+      submenuAnchorRef.current = null;
+      return;
+    }
     function handleClick(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        onOpenChange(false);
-      }
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      if (submenuRef.current?.contains(target)) return;
+      onOpenChange(false);
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open, onOpenChange]);
 
+  useEffect(() => {
+    if (!submenuOpen) return;
+    function updatePosition() {
+      const button = submenuAnchorRef.current;
+      if (!button) return;
+      const rect = button.getBoundingClientRect();
+      setSubmenuPos({ top: rect.top, left: rect.right + 4 });
+    }
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [submenuOpen]);
+
+  useEffect(() => () => clearCloseTimer(), []);
+
+  const activeSubmenu = useMemo(
+    () => items.find((item) => item.label === submenuOpen)?.submenu ?? null,
+    [items, submenuOpen],
+  );
+
   return (
-    <div ref={ref} className="relative">
+    <div ref={rootRef} className="relative">
       <div onClick={() => onOpenChange(!open)}>{trigger}</div>
-      {open && (
-        <div className="absolute right-0 top-full z-20 mt-1 min-w-[9rem] rounded-md border border-slate-200 bg-white py-1 shadow-lg">
-          {items.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              disabled={item.disabled}
-              onClick={() => {
-                onOpenChange(false);
-                item.onClick();
-              }}
-              className={`block w-full px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
-                item.danger
-                  ? "text-red-600 hover:bg-red-50"
-                  : "text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
+      {open ? (
+        <div
+          ref={menuRef}
+          className="absolute right-0 top-full z-50 mt-1 min-w-[9rem] rounded-md border border-[var(--rule)] bg-[var(--paper-raised)] py-1 shadow-lg"
+        >
+          {items.map((item) =>
+            item.submenu && item.submenu.length > 0 ? (
+              <button
+                key={item.label}
+                type="button"
+                disabled={item.disabled}
+                onMouseEnter={(event) => openSubmenuFor(item.label, event.currentTarget)}
+                onMouseLeave={scheduleCloseSubmenu}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openSubmenuFor(item.label, event.currentTarget);
+                }}
+                className={menuItemClass(item)}
+              >
+                <span>{item.label}</span>
+                <span className="text-[var(--ink-muted)]">›</span>
+              </button>
+            ) : (
+              <button
+                key={item.label}
+                type="button"
+                disabled={item.disabled}
+                onClick={() => {
+                  onOpenChange(false);
+                  item.onClick?.();
+                }}
+                className={menuItemClass(item)}
+              >
+                {item.label}
+              </button>
+            ),
+          )}
         </div>
-      )}
+      ) : null}
+      {open &&
+      submenuOpen &&
+      submenuPos &&
+      activeSubmenu &&
+      activeSubmenu.length > 0
+        ? createPortal(
+            <div
+              ref={submenuRef}
+              style={{ top: submenuPos.top, left: submenuPos.left }}
+              onMouseEnter={clearCloseTimer}
+              onMouseLeave={scheduleCloseSubmenu}
+              className="fixed z-[80] max-h-56 min-w-[9rem] overflow-y-auto rounded-md border border-[var(--rule)] bg-[var(--paper-raised)] py-1 shadow-lg"
+            >
+              {activeSubmenu.map((sub) => (
+                <button
+                  key={sub.label}
+                  type="button"
+                  disabled={sub.disabled}
+                  onClick={() => {
+                    onOpenChange(false);
+                    sub.onClick?.();
+                  }}
+                  className={menuItemClass(sub)}
+                >
+                  <span className="truncate">{sub.label}</span>
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -126,6 +247,8 @@ function FeedRow({
   onRenameChange,
   onConfirmRename,
   onCancelRename,
+  onMoveTo,
+  moveTargets = [],
   onDragStart,
   onDragEnd,
   renameDraft = "",
@@ -142,6 +265,8 @@ function FeedRow({
   onRenameChange?: (value: string) => void;
   onConfirmRename?: () => void;
   onCancelRename?: () => void;
+  onMoveTo?: (groupId: string) => void;
+  moveTargets?: { id: string; name: string; disabled?: boolean }[];
   onDragStart: (event: DragEvent) => void;
   onDragEnd: () => void;
   renameDraft?: string;
@@ -149,7 +274,9 @@ function FeedRow({
   savingRename?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const hasActions = Boolean(onRename || onDelete);
+  const enabledMoveTargets = moveTargets.filter((target) => !target.disabled);
+  const canMove = Boolean(onMoveTo) && enabledMoveTargets.length > 0;
+  const hasActions = Boolean(onRename || onDelete || canMove);
   const draggable = canDrag && !renaming;
 
   return (
@@ -179,14 +306,14 @@ function FeedRow({
                 onCancelRename?.();
               }
             }}
-            className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+            className="w-full rounded border border-[var(--rule)] px-2 py-1 text-sm"
           />
           <div className="mt-1 flex gap-1">
             <button
               type="button"
               disabled={savingRename}
               onClick={() => onConfirmRename?.()}
-              className="rounded px-2 py-0.5 text-xs text-emerald-600 hover:bg-emerald-50 disabled:opacity-50"
+              className="rounded px-2 py-0.5 text-xs text-[var(--success)] hover:bg-[var(--success-soft)] disabled:opacity-50"
             >
               确认
             </button>
@@ -194,7 +321,7 @@ function FeedRow({
               type="button"
               disabled={savingRename}
               onClick={() => onCancelRename?.()}
-              className="rounded px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+              className="rounded px-2 py-0.5 text-xs text-[var(--ink-muted)] hover:bg-[var(--paper)] disabled:opacity-50"
             >
               取消
             </button>
@@ -212,10 +339,10 @@ function FeedRow({
                 onSelect();
               }
             }}
-            className={`min-w-0 flex-1 rounded-md px-2.5 py-2 text-left text-sm ${
+            className={`relative min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-left text-[13px] ${
               active
-                ? "bg-blue-50 font-medium text-blue-900 ring-1 ring-blue-200"
-                : "text-slate-700 hover:bg-slate-50"
+                ? "bg-[var(--accent-soft)] font-medium text-[var(--ink)] before:absolute before:inset-y-1 before:left-0 before:w-0.5 before:rounded-full before:bg-[var(--accent)]"
+                : "text-[var(--ink)] hover:bg-[var(--paper)]"
             }`}
             title={
               feed.sync_time
@@ -224,7 +351,7 @@ function FeedRow({
             }
           >
             <span className="block truncate">{feed.name}</span>
-            <span className="mt-0.5 block truncate text-[11px] font-normal text-slate-400">
+            <span className="mt-0.5 block truncate text-[11px] font-normal text-[var(--ink-muted)]">
               {formatFeedSyncTime(feed.sync_time)}
             </span>
           </div>
@@ -240,7 +367,7 @@ function FeedRow({
                     type="button"
                     title="更多"
                     onMouseDown={(e) => e.stopPropagation()}
-                    className="rounded px-1.5 py-1 text-xs text-slate-400 hover:bg-white hover:text-slate-700"
+                    className="rounded px-1.5 py-1 text-xs text-[var(--ink-muted)] hover:bg-[var(--paper-raised)] hover:text-[var(--ink)]"
                   >
                     ⋯
                   </button>
@@ -251,6 +378,17 @@ function FeedRow({
                         {
                           label: "重命名",
                           onClick: () => onStartRename?.(),
+                        },
+                      ]
+                    : []),
+                  ...(canMove
+                    ? [
+                        {
+                          label: "移动到",
+                          submenu: enabledMoveTargets.map((target) => ({
+                            label: target.name,
+                            onClick: () => onMoveTo?.(target.id),
+                          })),
                         },
                       ]
                     : []),
@@ -293,6 +431,7 @@ export default function FeedSidebar({
   onDeleteFeed,
   onRenameFeed,
   onLayoutChange,
+  days = 1,
 }: FeedSidebarProps) {
   const feedRefreshBusy = refreshing || refreshingAll || Boolean(refreshingGroupId);
   const groupBodiesBusy = loadingBodies || Boolean(loadingBodiesGroupId);
@@ -340,11 +479,6 @@ export default function FeedSidebar({
     return base;
   }, [sections, searchQuery]);
 
-  const expandedSection = useMemo(() => {
-    if (!expandedGroupId) return null;
-    return filteredSections.find((section) => section.id === expandedGroupId) ?? null;
-  }, [filteredSections, expandedGroupId]);
-
   useEffect(() => {
     setDragging(null);
     setDropTarget(null);
@@ -360,20 +494,18 @@ export default function FeedSidebar({
   }, [feeds, editingFeedId]);
 
   useEffect(() => {
-    if (sections.length === 0) return;
-
-    if (!initializedExpand.current) {
-      initializedExpand.current = true;
-      setExpandedGroupId(
-        selectedGroupId ?? sections.find((section) => !section.isSystem)?.id ?? sections[0]?.id ?? null,
-      );
-      return;
-    }
-
-    if (selectedGroupId) {
-      setExpandedGroupId(selectedGroupId);
-    }
+    if (initializedExpand.current || sections.length === 0) return;
+    initializedExpand.current = true;
+    setExpandedGroupId(
+      selectedGroupId ?? sections.find((section) => !section.isSystem)?.id ?? sections[0]?.id ?? null,
+    );
   }, [sections, selectedGroupId]);
+
+  // 仅在选中组变化时跟随展开；分组拖动重排会改 sections，不应自动展开
+  useEffect(() => {
+    if (!initializedExpand.current || !selectedGroupId) return;
+    setExpandedGroupId(selectedGroupId);
+  }, [selectedGroupId]);
 
   useEffect(() => {
     if (!searchQuery.trim()) return;
@@ -446,6 +578,9 @@ export default function FeedSidebar({
     const isFeedDropOver =
       dropTarget?.type === "feed-to-group" && dropTarget.groupId === section.id;
     const isActiveGroup = selectedGroupId === section.id;
+    const feedIds = getSectionFeedIds(section.id);
+    const hasGroupActions =
+      feedIds.length > 0 && Boolean(onRefreshGroup || onLoadGroupBodies);
 
     return (
       <div
@@ -473,61 +608,126 @@ export default function FeedSidebar({
           }
           handleDragEnd();
         }}
-        className={`flex items-center gap-0.5 rounded-md border px-1 py-0.5 ${
+        className={`group/section rounded-[var(--radius-control)] ${
           isFeedDropOver
-            ? isExpanded
-              ? "border-emerald-400 bg-emerald-700 shadow-sm"
-              : "border-emerald-400 bg-emerald-100"
+            ? "bg-[var(--success-soft)] ring-1 ring-[var(--success)]"
             : isGroupReorderOver
-              ? "border-blue-300 bg-blue-100"
-              : isExpanded
-                ? "border-slate-400 bg-slate-700 shadow-sm"
-                : "border-transparent bg-slate-200/80 hover:bg-slate-200"
+              ? "bg-[var(--accent-soft)] ring-1 ring-[var(--accent)]"
+              : ""
         }`}
       >
-        {canManageLayout && !section.isSystem && (
-          <button
-            type="button"
-            draggable
-            title="拖动调整分组顺序"
-            onMouseDown={(e) => e.stopPropagation()}
-            onDragStart={(event) => {
-              setDragData(event, { kind: "group", groupId: section.id });
-            }}
-            onDragEnd={handleDragEnd}
-            className={`shrink-0 cursor-grab rounded px-0.5 py-1 text-xs active:cursor-grabbing ${
-              isExpanded ? "text-slate-400 hover:text-slate-200" : "text-slate-400 hover:text-slate-600"
-            }`}
-          >
-            ⠿
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => toggleSection(section.id)}
-          className={`flex min-w-0 flex-1 items-center justify-between rounded px-1.5 py-1.5 text-left text-xs font-semibold uppercase tracking-wide ${
-            isExpanded ? "text-white" : isActiveGroup ? "text-slate-800" : "text-slate-600"
+        <div
+          className={`flex items-center gap-0.5 px-1 py-0.5 ${
+            isExpanded || isActiveGroup ? "bg-[color-mix(in_srgb,var(--paper)_70%,transparent)]" : ""
           }`}
         >
-          <span className="truncate">
-            {section.name}
-            <span
-              className={`ml-1 font-normal normal-case tracking-normal ${
-                isExpanded ? "text-slate-300" : "text-slate-400"
-              }`}
+          {canManageLayout && !section.isSystem ? (
+            <button
+              type="button"
+              draggable
+              title="拖动调整分组顺序"
+              onMouseDown={(e) => e.stopPropagation()}
+              onDragStart={(event) => {
+                setDragData(event, { kind: "group", groupId: section.id });
+              }}
+              onDragEnd={handleDragEnd}
+              className="flex w-4 shrink-0 cursor-grab items-center justify-center rounded py-1 text-xs text-[var(--ink-muted)] opacity-0 hover:text-[var(--ink)] group-hover/section:opacity-100 active:cursor-grabbing"
             >
-              ({section.feeds.length})
+              ⠿
+            </button>
+          ) : (
+            <span className="w-4 shrink-0" aria-hidden />
+          )}
+          <button
+            type="button"
+            onClick={() => toggleSection(section.id)}
+            className={`flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1.5 text-left text-[13px] ${
+              isExpanded
+                ? "font-semibold text-[var(--ink)]"
+                : isActiveGroup
+                  ? "font-medium text-[var(--ink)]"
+                  : "font-medium text-[var(--ink-muted)] hover:text-[var(--ink)]"
+            }`}
+          >
+            <span
+              className={`shrink-0 text-[10px] text-[var(--ink-muted)] ${isExpanded ? "text-[var(--accent)]" : ""}`}
+              aria-hidden
+            >
+              {isExpanded ? "▾" : "▸"}
             </span>
+            <span className="min-w-0 flex-1 truncate">{section.name}</span>
+          </button>
+          <span className="w-6 shrink-0 text-right text-[11px] tabular-nums text-[var(--ink-muted)]">
+            {section.feeds.length}
           </span>
-          <span className={`ml-1 shrink-0 ${isExpanded ? "text-slate-300" : "text-slate-400"}`}>
-            {isExpanded ? "▾" : "▸"}
-          </span>
-        </button>
+          <div
+            className={`flex w-8 shrink-0 justify-end ${
+              hasGroupActions
+                ? isExpanded
+                  ? "opacity-100"
+                  : "opacity-0 group-hover/section:opacity-100"
+                : "pointer-events-none opacity-0"
+            }`}
+          >
+            {hasGroupActions ? (
+              <OverflowMenu
+                label="本组操作"
+                disabled={feedRefreshBusy || groupBodiesBusy}
+                items={[
+                  ...(onRefreshGroup
+                    ? [
+                        {
+                          label:
+                            refreshingGroupId === section.id ? "更新中…" : "更新本组",
+                          hint: "刷新本组各源的文章列表",
+                          disabled: feedRefreshBusy || groupBodiesBusy,
+                          onClick: () =>
+                            onRefreshGroup(section.id, section.name, feedIds),
+                        },
+                      ]
+                    : []),
+                  ...(onLoadGroupBodies
+                    ? [
+                        {
+                          label:
+                            loadingBodiesGroupId === section.id
+                              ? "拉取中…"
+                              : "拉取本组正文",
+                          hint: `当前范围（${formatDaysLabel(days)}）内本组列表文章的正文`,
+                          disabled: feedRefreshBusy || groupBodiesBusy,
+                          onClick: () =>
+                            onLoadGroupBodies(section.id, section.name, feedIds),
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+            ) : (
+              <span className="inline-block w-7" aria-hidden />
+            )}
+          </div>
+        </div>
+
+        {isExpanded ? (
+          <ul className="mb-1 ml-3 space-y-0.5 border-l border-[var(--rule)] pl-2">
+            {section.feeds.length === 0 ? (
+              <li className="px-2 py-2 text-[11px] text-[var(--ink-muted)]">此组暂无数据源</li>
+            ) : (
+              section.feeds.map((feed) => renderFeedItem(feed, section.id))
+            )}
+          </ul>
+        ) : null}
       </div>
     );
   }
 
   function renderFeedItem(feed: Feed, sectionId: string) {
+    const moveTargets = sections.map((section) => ({
+      id: section.id,
+      name: section.name,
+      disabled: section.id === sectionId,
+    }));
+
     return (
       <li key={feed.id}>
         <FeedRow
@@ -567,6 +767,17 @@ export default function FeedSidebar({
             setRenameDraft("");
           }}
           onDelete={onDeleteFeed ? () => onDeleteFeed(feed.id) : undefined}
+          moveTargets={canManageLayout ? moveTargets : []}
+          onMoveTo={
+            canManageLayout && onLayoutChange
+              ? (targetGroupId) => {
+                  if (targetGroupId === sectionId) return;
+                  const nextGroups = moveFeedInLayout(groups, feed.id, targetGroupId);
+                  setExpandedGroupId(targetGroupId);
+                  void onLayoutChange(nextGroups, groupOrder);
+                }
+              : undefined
+          }
           onDragStart={(event) => {
             if (!canManageLayout) return;
             setDragData(event, {
@@ -581,132 +792,71 @@ export default function FeedSidebar({
     );
   }
 
+  const libraryMenuItems = [
+    ...(onManageGroups
+      ? [
+          {
+            label: "管理分组",
+            onClick: onManageGroups,
+          },
+        ]
+      : []),
+    {
+      label: refreshingAll ? "更新中…" : "更新全部",
+      hint: "刷新所有数据源的文章列表",
+      disabled: feeds.length === 0 || feedRefreshBusy,
+      onClick: onRefreshAll,
+    },
+  ];
+
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-slate-200 bg-white">
-      <div className="shrink-0 border-b border-slate-200 px-3 py-3">
-        <div className="flex items-baseline justify-between gap-2">
-          <h1 className="text-sm font-semibold">订阅列表</h1>
-          <span className="text-xs text-slate-400">{feeds.length} 个源</span>
+    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--paper-raised)]">
+      <div className="shrink-0 border-b border-[var(--rule)] px-3 py-3">
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-sm font-semibold tracking-tight text-[var(--ink)]">订阅</h1>
+            <p className="mt-0.5 text-[11px] text-[var(--ink-muted)]">{feeds.length} 个源</p>
+          </div>
+          {libraryMenuItems.length > 0 ? <OverflowMenu items={libraryMenuItems} label="库操作" /> : null}
         </div>
 
-        {feeds.length > 0 && (
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索数据源…"
-            className="mt-2 w-full rounded-md border border-slate-200 px-2.5 py-1.5 text-xs placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
-          />
-        )}
-
-        <div className="mt-2 space-y-1.5">
+        <div className="mt-2.5 flex items-center gap-1.5">
+          {feeds.length > 0 ? (
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="搜索…"
+              className="ui-input min-w-0 flex-1 text-xs placeholder:text-[var(--ink-muted)]"
+            />
+          ) : (
+            <span className="min-w-0 flex-1 text-xs text-[var(--ink-muted)]">添加第一个数据源</span>
+          )}
           <button
             type="button"
             onClick={onAddSource}
-            className="w-full rounded-md bg-slate-900 px-2.5 py-1.5 text-xs text-white hover:bg-slate-700"
+            className="ui-btn ui-btn-accent shrink-0 px-2.5 py-1.5 text-xs font-medium"
           >
-            添加数据源
+            添加
           </button>
-          <div className="flex gap-1.5">
-            {onManageGroups && (
-              <button
-                type="button"
-                onClick={onManageGroups}
-                className="min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
-              >
-                管理分组
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={feeds.length === 0 || feedRefreshBusy}
-              onClick={onRefreshAll}
-              className="min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {refreshingAll ? "更新中…" : "更新全部"}
-            </button>
-          </div>
         </div>
       </div>
 
       {loading ? (
-        <p className="px-4 py-6 text-sm text-slate-500">加载中...</p>
+        <p className="px-4 py-6 text-sm text-[var(--ink-muted)]">加载中...</p>
       ) : feeds.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-slate-500">暂无数据源，点击上方添加</p>
+        <p className="px-4 py-6 text-sm text-[var(--ink-muted)]">暂无数据源，点击上方添加</p>
       ) : filteredSections.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-slate-500">没有匹配的数据源</p>
+        <p className="px-4 py-6 text-sm text-[var(--ink-muted)]">没有匹配的数据源</p>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          {/* 分组区 */}
-          <div className="shrink-0 border-b-2 border-slate-300 bg-slate-200 px-2 py-2">
-            <p className="mb-1.5 px-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-              分组
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+          {canManageLayout ? (
+            <p className="mb-2 px-2 text-[10px] text-[var(--ink-muted)]">
+              拖动分组排序 · 拖动源到其他组
             </p>
-            <div className="max-h-40 space-y-1 overflow-y-auto">
-              {filteredSections.map((section) => renderGroupHeader(section))}
-            </div>
-          </div>
-
-          {/* 数据源区 */}
-          <div className="min-h-0 flex-1 overflow-y-auto bg-white px-2 py-3">
-            {!expandedSection ? (
-              <p className="px-2 py-6 text-center text-xs text-slate-400">展开分组以查看数据源</p>
-            ) : (
-              <div className="rounded-lg border border-slate-200 bg-slate-50/40 p-2">
-                <div className="mb-2 flex items-center gap-2 px-0.5">
-                  <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 ring-1 ring-slate-200">
-                    数据源
-                  </span>
-                  <span className="truncate text-xs font-medium text-slate-700">{expandedSection.name}</span>
-                  <span className="h-px flex-1 bg-slate-300" />
-                </div>
-                {getSectionFeedIds(expandedSection.id).length > 0 &&
-                  (onRefreshGroup || onLoadGroupBodies) && (
-                    <div className="mb-2 flex gap-1.5">
-                      {onRefreshGroup && (
-                        <button
-                          type="button"
-                          title="更新本组各源的文章列表"
-                          disabled={feedRefreshBusy || groupBodiesBusy}
-                          onClick={() =>
-                            onRefreshGroup(
-                              expandedSection.id,
-                              expandedSection.name,
-                              getSectionFeedIds(expandedSection.id),
-                            )
-                          }
-                          className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {refreshingGroupId === expandedSection.id ? "更新中…" : "更新本组"}
-                        </button>
-                      )}
-                      {onLoadGroupBodies && (
-                        <button
-                          type="button"
-                          title="拉取本组各源列表内文章正文（每源最近 20 篇）"
-                          disabled={feedRefreshBusy || groupBodiesBusy}
-                          onClick={() =>
-                            onLoadGroupBodies(
-                              expandedSection.id,
-                              expandedSection.name,
-                              getSectionFeedIds(expandedSection.id),
-                            )
-                          }
-                          className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {loadingBodiesGroupId === expandedSection.id ? "拉取中…" : "拉取本组正文"}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                <ul className="space-y-0.5 rounded-md border border-slate-200 bg-white p-1 shadow-sm">
-                  {canManageLayout && (
-                    <p className="px-2 py-1 text-[11px] text-slate-400">按住数据源可拖到上方分组</p>
-                  )}
-                  {expandedSection.feeds.map((feed) => renderFeedItem(feed, expandedSection.id))}
-                </ul>
-              </div>
-            )}
+          ) : null}
+          <div className="space-y-0.5">
+            {filteredSections.map((section) => renderGroupHeader(section))}
           </div>
         </div>
       )}

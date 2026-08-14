@@ -11,19 +11,57 @@ import random
 import time
 import urllib.error
 import urllib.request
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 # 与 backend/feed_http_policy.py 同步（所有 discovery 必须遵循，禁止覆盖）
 REQUEST_TIMEOUT_SECONDS = 5
-DEFAULT_RETRIES = 1
+DEFAULT_RETRIES = 3
 RETRYABLE_HTTP_CODES = frozenset({429, 502, 503})
-BACKOFF_BASE_SECONDS = 0.8
-BACKOFF_JITTER_SECONDS = 0.25
-PAGE_DELAY_BASE_SECONDS = 0.8
-PAGE_DELAY_JITTER_SECONDS = 0.3
+BACKOFF_BASE_SECONDS = 1.2
+BACKOFF_JITTER_SECONDS = 0.4
+# 429 额外拉长退避，减少连刷触发反爬
+BACKOFF_429_BASE_SECONDS = 2.5
+BACKOFF_429_MAX_SECONDS = 60.0
+PAGE_DELAY_BASE_SECONDS = 1.2
+PAGE_DELAY_JITTER_SECONDS = 0.4
 
 
-def _backoff_sleep(attempt: int) -> None:
+def _retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
+    """解析 Retry-After（秒数或 HTTP-date）。"""
+    headers = getattr(exc, "headers", None)
+    if not headers:
+        return None
+    raw = str(headers.get("Retry-After") or headers.get("retry-after") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        pass
+    try:
+        dt = parsedate_to_datetime(raw)
+        return max(0.0, dt.timestamp() - time.time())
+    except Exception:
+        return None
+
+
+def _backoff_sleep(
+    attempt: int,
+    *,
+    code: int | None = None,
+    retry_after: float | None = None,
+) -> None:
+    if retry_after is not None and retry_after > 0:
+        delay = min(retry_after, BACKOFF_429_MAX_SECONDS) + random.uniform(0, 0.5)
+        time.sleep(delay)
+        return
+    if code == 429:
+        delay = BACKOFF_429_BASE_SECONDS * (2**attempt) + random.uniform(
+            0, BACKOFF_JITTER_SECONDS
+        )
+        time.sleep(min(delay, BACKOFF_429_MAX_SECONDS))
+        return
     delay = BACKOFF_BASE_SECONDS * (2**attempt) + random.uniform(0, BACKOFF_JITTER_SECONDS)
     time.sleep(delay)
 
@@ -57,7 +95,11 @@ def fetch_bytes_and_headers(
         except urllib.error.HTTPError as exc:
             last_err = exc
             if exc.code in RETRYABLE_HTTP_CODES and attempt < retries:
-                _backoff_sleep(attempt)
+                _backoff_sleep(
+                    attempt,
+                    code=exc.code,
+                    retry_after=_retry_after_seconds(exc) if exc.code == 429 else None,
+                )
                 continue
             raise
         except Exception as exc:  # noqa: BLE001

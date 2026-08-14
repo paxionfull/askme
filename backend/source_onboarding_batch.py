@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Literal
 
+from auth_signals import (
+    classify_exception_as_auth,
+    resolve_slot_from_url,
+)
 from feed_errors import FeedError
 from llm import LLMError
 from source_onboarding_cursor import cancel_cursor_run, load_cursor_api_key, run_onboarding_agent
@@ -21,20 +25,37 @@ from source_onboarding_refresh import refresh_with_auto_repair
 from source_platform_scaffold import detect_platform
 from source_skill_writer import (
     is_complete_discovery_skill,
+    read_skill_entry_url,
     remove_discovery_skill_dir,
     resolve_feed_id_for_target,
     resolve_onboard_target,
     skill_dir_for,
+    source_identity_key,
+    update_discovery_display_name,
 )
 
 from feed_registry import UNGROUPED_GROUP_ID, feed_registry
+from credential_store import (
+    cookie_satisfies_slot,
+    get_cookie_for_slot,
+    slot_configured,
+    sync_runtime_cookies,
+)
 
 MAX_BATCH_SIZE = 20
 DEFAULT_MAX_CONCURRENCY = 5
 RELOAD_DEBOUNCE_SECONDS = 1.5
 
-ItemStatus = Literal["queued", "running", "done", "failed", "cancelled", "skipped"]
-BatchStatus = Literal["running", "done", "cancelled"]
+ItemStatus = Literal[
+    "queued",
+    "running",
+    "done",
+    "failed",
+    "cancelled",
+    "skipped",
+    "needs_auth",
+]
+BatchStatus = Literal["running", "done", "cancelled", "needs_auth"]
 
 
 def parse_entry_urls(raw_urls: list[str]) -> list[str]:
@@ -65,6 +86,7 @@ class BatchItem:
     job_id: str | None = None
     skip_reason: str | None = None
     reuse_existing: bool = False
+    auth_slot: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -79,7 +101,112 @@ class BatchItem:
             "job_id": self.job_id,
             "skip_reason": self.skip_reason,
             "reuse_existing": self.reuse_existing,
+            "auth_slot": self.auth_slot,
         }
+
+
+def _mark_needs_auth(item: BatchItem, message: str, *, slot: str | None = None) -> None:
+    item.status = "needs_auth"
+    item.phase = "needs_auth"
+    item.auth_slot = slot or resolve_slot_from_url(item.entry_url) or item.auth_slot
+    item.error = message
+    item.message = (
+        f"需要登录授权（{item.auth_slot or '未知平台'}）：请完成 Cookie 授权后重试。"
+        if item.auth_slot
+        else "需要登录授权：请完成 Cookie 授权后重试。"
+    )
+
+
+def _refresh_indicates_auth(refresh_result: dict[str, Any], entry_url: str, slug: str) -> str | None:
+    """首拉成功但 0 篇时，对已知登录站 / source 声明返回 slot。"""
+    article_count = int(refresh_result.get("article_count") or 0)
+    new_count = int(refresh_result.get("new_article_count") or 0)
+    if article_count > 0 or new_count > 0:
+        return None
+    slot = resolve_slot_from_url(entry_url)
+    if slot:
+        return slot
+    # source.yaml requires_cookie
+    source_yaml = skill_dir_for(slug) / "source.yaml"
+    if source_yaml.is_file():
+        text = source_yaml.read_text(encoding="utf-8")
+        if "requires_cookie: true" in text or "requires_auth: true" in text:
+            import re
+
+            m = re.search(r"auth_slot:\s*([a-z0-9_-]+)", text, re.I)
+            return (m.group(1).lower() if m else slot) or "unknown"
+    return None
+
+
+def _empty_refresh_auth_decision(
+    slot: str,
+    *,
+    entry_url: str,
+) -> tuple[bool, str]:
+    """首拉 0 篇时判断是否真的缺授权。
+
+    返回 (needs_auth, detail)。
+    - Cookie 缺失 / 访客态 → needs_auth=True
+    - 已真实登录但仍 0 篇 → needs_auth=False（可能是 token/空主页等问题）
+    """
+    sync_runtime_cookies()
+    cookie = get_cookie_for_slot(slot)
+    if not cookie_satisfies_slot(slot, cookie):
+        return True, "未配置有效 Cookie，请完成登录授权后重试"
+
+    slot_id = slot.strip().lower()
+    if slot_id == "xiaohongshu":
+        try:
+            from xiaohongshu_auth import verify_xiaohongshu_cookie
+
+            result = verify_xiaohongshu_cookie(cookie, probe_url=entry_url)
+            notes = int(result.get("notes_with_id") or 0)
+            nick = str(
+                result.get("profile_nickname") or result.get("nickname") or ""
+            ).strip()
+            if notes <= 0:
+                return (
+                    False,
+                    f"登录有效{f'（{nick}）' if nick else ''}，但主页暂未解析到笔记"
+                    "（常见原因：分享链接 xsec_token 过期，可稍后在库页刷新）",
+                )
+            return False, f"登录有效（{nick or '已登录'}），首拉暂无入库文章"
+        except ValueError as exc:
+            return True, str(exc)
+
+    if not slot_configured(slot_id):
+        return True, "未配置有效 Cookie，请完成登录授权后重试"
+    return False, "授权已配置，首拉暂无文章（可稍后在库页刷新）"
+
+
+def _apply_empty_refresh_outcome(
+    item: BatchItem,
+    *,
+    slot: str,
+    refresh_result: dict[str, Any],
+    session,
+    result_detail: dict[str, Any],
+) -> None:
+    needs_auth, detail = _empty_refresh_auth_decision(slot, entry_url=item.entry_url)
+    if needs_auth:
+        _mark_needs_auth(item, detail, slot=slot)
+        session.finish(
+            success=False,
+            detail={**result_detail, "refresh": refresh_result, "needs_auth": True},
+        )
+        return
+    item.status = "done"
+    item.phase = "done"
+    base = str(refresh_result.get("message") or f"已接入 {item.feed_id}")
+    item.message = f"{base}；{detail}"
+    session.finish(
+        success=True,
+        detail={**result_detail, "refresh": refresh_result, "empty_but_authed": True},
+    )
+
+
+def _exception_needs_auth(exc: BaseException) -> dict[str, Any] | None:
+    return classify_exception_as_auth(exc)
 
 
 def _assign_feed_group(feed_id: str | None, group_id: str | None) -> None:
@@ -117,9 +244,74 @@ def _attach_existing_feed(
     return "数据源已存在，无需重复接入"
 
 
+def _refresh_reused_platform_display_name(item: BatchItem) -> str | None:
+    """复用已有平台 skill 时，用「平台-{昵称}」覆盖占位名。"""
+    platform = detect_platform(item.entry_url)
+    if not platform:
+        return None
+    name = ""
+    try:
+        if platform.platform == "xiaohongshu":
+            from source_platform_scaffold import probe_xiaohongshu_profile
+
+            probe = probe_xiaohongshu_profile(platform)
+            name = str(probe.get("display_name") or "").strip()
+            if name == platform.user_id or name == f"小红书-{platform.user_id}":
+                name = ""
+        elif platform.platform == "zhihu":
+            from source_platform_scaffold import fetch_zhihu_profile_name
+
+            name = str(fetch_zhihu_profile_name(platform) or "").strip()
+            if name == platform.user_id or name == f"知乎-{platform.user_id}":
+                name = ""
+        elif platform.platform == "reddit":
+            from source_platform_scaffold import format_reddit_source_name
+
+            name = format_reddit_source_name(platform.user_id)
+        elif platform.platform == "x":
+            from source_platform_scaffold import (
+                format_x_source_name,
+                probe_x_profile,
+                refresh_x_display_name_from_list,
+            )
+
+            name = refresh_x_display_name_from_list(item.slug, platform) or ""
+            if not name:
+                probe = probe_x_profile(platform)
+                name = str(
+                    probe.get("display_name") or format_x_source_name(platform.user_id)
+                ).strip()
+        elif platform.platform == "weixin":
+            from source_platform_scaffold import (
+                format_weixin_source_name,
+                probe_weixin_account,
+            )
+
+            probe = probe_weixin_account(platform)
+            name = str(
+                probe.get("display_name")
+                or format_weixin_source_name(str(probe.get("nickname") or ""))
+                or format_weixin_source_name(platform.user_id)
+            ).strip()
+        else:
+            return None
+    except Exception:
+        return None
+    if not name:
+        return None
+    feed_id = item.feed_id or platform.feed_id
+    update_discovery_display_name(item.slug, name, feed_id=feed_id)
+    item.name = name
+    return name
+
+
 async def _refresh_onboarded_feed(feed_client, feed_id: str) -> dict[str, Any]:
     feed_client.ensure_feed_visible(feed_id)
-    return await feed_client.refresh_feed(feed_id)
+    # 首拉用近 3 天：默认「今天」对小红书等更新频率不均的源过窄，易得到 0 篇
+    # 微信：限制页数并加大 page size，减少 list_ex 次数
+    if str(feed_id).startswith("website:weixin:"):
+        return await feed_client.refresh_feed(feed_id, days=3, max_pages=3, per=20)
+    return await feed_client.refresh_feed(feed_id, days=3)
 
 
 @dataclass
@@ -163,11 +355,15 @@ class OnboardingBatch:
         return self.count_by_status("queued")
 
     @property
+    def needs_auth(self) -> int:
+        return self.count_by_status("needs_auth")
+
+    @property
     def finished(self) -> int:
         return sum(
             1
             for item in self.items
-            if item.status in {"done", "failed", "cancelled", "skipped"}
+            if item.status in {"done", "failed", "cancelled", "skipped", "needs_auth"}
         )
 
     def summary_message(self) -> str:
@@ -178,6 +374,8 @@ class OnboardingBatch:
             parts.append(f"已接入 {self.completed} 个")
         if self.skipped:
             parts.append(f"跳过 {self.skipped} 个")
+        if self.needs_auth:
+            parts.append(f"待授权 {self.needs_auth} 个")
         if self.failed:
             parts.append(f"失败 {self.failed} 个")
         if self.count_by_status("cancelled"):
@@ -192,6 +390,7 @@ class OnboardingBatch:
             "completed": self.completed,
             "failed": self.failed,
             "skipped": self.skipped,
+            "needs_auth": self.needs_auth,
             "running": self.running,
             "queued": self.queued,
             "message": self.summary_message(),
@@ -229,7 +428,19 @@ def _prepare_item(entry_url: str, seen_slugs: set[str]) -> BatchItem:
             except Exception:
                 pass
         else:
-            # skill 已完整：加入所选分组，而不是判定为失败/跳过
+            # skill 已完整：仅当入口页同一用户/同一站点时才复用，否则不应走到这里
+            existing_entry = read_skill_entry_url(slug)
+            if existing_entry and source_identity_key(existing_entry) != source_identity_key(
+                normalized
+            ):
+                item.slug = slug
+                item.name = name
+                item.status = "skipped"
+                item.skip_reason = (
+                    f"slug「{slug}」已被其他页面占用（{existing_entry}），请联系开发排查"
+                )
+                item.message = item.skip_reason
+                return item
             if slug in seen_slugs:
                 item.slug = slug
                 item.name = name
@@ -306,18 +517,91 @@ async def _run_item(
             feed_id = item.feed_id or resolve_feed_id_for_target(item.entry_url, item.slug)
             item.feed_id = feed_id
             item.phase = "attach"
-            item.message = "数据源已存在，正在加入分组…"
+            item.message = "数据源已存在，正在加入分组并刷新…"
+            session = create_session(
+                entry_url=item.entry_url,
+                slug=item.slug,
+                name=item.name,
+            )
+            item.job_id = session.job_id
             try:
-                item.message = _attach_existing_feed(feed_id=feed_id, group_id=batch.group_id)
-                item.status = "done"
-                item.phase = "attached"
+                display_name = _refresh_reused_platform_display_name(item)
+                if display_name:
+                    session.name = display_name
+                    item.message = f"数据源已存在，已更新显示名为「{display_name}」，正在刷新…"
+                    session.log("display_name", name=display_name)
+                attach_msg = _attach_existing_feed(feed_id=feed_id, group_id=batch.group_id)
+                sync_runtime_cookies()
+                refresh_result: dict[str, Any] | None = None
+                async for refresh_event in refresh_with_auto_repair(
+                    slug=item.slug,
+                    do_refresh=lambda fid=feed_id: _refresh_onboarded_feed(feed_client, fid),
+                    reload_skills=feed_client.reload_skills,
+                    session=session,
+                    auto_validate=batch.auto_validate,
+                    auto_repair=batch.auto_repair,
+                ):
+                    if batch.cancelled or session.cancelled:
+                        break
+                    rev_kind = refresh_event.get("event", "status")
+                    if rev_kind == "refresh_done":
+                        refresh_result = refresh_event.get("data") or {}
+                    elif rev_kind == "status":
+                        item.phase = str(refresh_event.get("phase") or item.phase)
+                        item.message = str(refresh_event.get("message") or item.message)
+                if batch.cancelled or session.cancelled:
+                    item.status = "cancelled"
+                    item.phase = "cancelled"
+                    item.message = "已取消"
+                    return
+                if refresh_result is None:
+                    raise FeedError("复用接入未返回刷新结果", status_code=502)
+                auth_slot = _refresh_indicates_auth(refresh_result, item.entry_url, item.slug)
+                check_slot = None
+                if auth_slot and auth_slot != "unknown":
+                    check_slot = auth_slot
+                elif auth_slot == "unknown":
+                    check_slot = resolve_slot_from_url(item.entry_url)
+                if check_slot:
+                    _apply_empty_refresh_outcome(
+                        item,
+                        slot=check_slot,
+                        refresh_result=refresh_result,
+                        session=session,
+                        result_detail={"attached": True, "display_name": display_name},
+                    )
+                else:
+                    item.status = "done"
+                    item.phase = "attached"
+                    repaired = bool(refresh_result.get("auto_repaired"))
+                    base_msg = str(refresh_result.get("message") or attach_msg)
+                    if display_name:
+                        base_msg = f"显示名「{display_name}」· {base_msg}"
+                    item.message = f"自动修复后{base_msg}" if repaired else base_msg
+                    session.finish(
+                        success=True,
+                        detail={
+                            "refresh": refresh_result,
+                            "attached": True,
+                            "display_name": display_name,
+                        },
+                    )
                 if batch.reload:
                     await _schedule_reload(feed_client)
             except Exception as exc:
-                item.status = "failed"
-                item.phase = "attach_failed"
-                item.error = str(exc) or "加入分组失败"
-                item.message = item.error
+                auth = _exception_needs_auth(exc)
+                if auth:
+                    _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
+                    session.finish(
+                        success=False,
+                        detail={"error": str(exc), "needs_auth": True},
+                    )
+                else:
+                    item.status = "failed"
+                    item.phase = "attach_failed"
+                    item.error = str(exc) or "加入分组失败"
+                    item.message = item.error
+                    session.finish(success=False, detail={"error": item.error})
             return
 
         session = create_session(
@@ -369,23 +653,50 @@ async def _run_item(
                             break
                         if refresh_result is None:
                             raise FeedError("首拉未返回结果", status_code=502)
-                        item.status = "done"
-                        item.phase = "done"
-                        repaired = bool(refresh_result.get("auto_repaired"))
-                        base_msg = str(
-                            refresh_result.get("message")
-                            or f"已接入并更新 {item.feed_id}"
+                        auth_slot = _refresh_indicates_auth(
+                            refresh_result, item.entry_url, item.slug
                         )
-                        item.message = (
-                            f"自动修复后{base_msg}" if repaired else base_msg
+                        check_slot = (
+                            auth_slot
+                            if auth_slot and auth_slot != "unknown"
+                            else (resolve_slot_from_url(item.entry_url) if auth_slot else None)
                         )
-                        session.finish(
-                            success=True,
-                            detail={**data, "refresh": refresh_result},
-                        )
+                        if check_slot:
+                            _apply_empty_refresh_outcome(
+                                item,
+                                slot=check_slot,
+                                refresh_result=refresh_result,
+                                session=session,
+                                result_detail=data,
+                            )
+                        else:
+                            item.status = "done"
+                            item.phase = "done"
+                            repaired = bool(refresh_result.get("auto_repaired"))
+                            base_msg = str(
+                                refresh_result.get("message")
+                                or f"已接入并更新 {item.feed_id}"
+                            )
+                            item.message = (
+                                f"自动修复后{base_msg}" if repaired else base_msg
+                            )
+                            session.finish(
+                                success=True,
+                                detail={**data, "refresh": refresh_result},
+                            )
                         if batch.reload:
                             await _schedule_reload(feed_client)
                     except FeedError as exc:
+                        auth = _exception_needs_auth(exc)
+                        if auth:
+                            _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
+                            session.finish(
+                                success=False,
+                                detail={**data, "refresh_error": str(exc), "needs_auth": True},
+                            )
+                            if batch.reload:
+                                await _schedule_reload(feed_client)
+                            break
                         item.status = "failed"
                         item.phase = "refresh_failed"
                         item.error = str(exc)
@@ -416,19 +727,32 @@ async def _run_item(
             session.cleanup_partial_skill()
             session.finish(success=False, detail={"cancelled": True})
         except LLMError as exc:
-            item.status = "failed"
-            item.error = str(exc)
-            item.message = str(exc)
-            session.log("error", detail=str(exc))
-            session.cleanup_partial_skill()
-            session.finish(success=False, detail={"error": str(exc)})
+            auth = _exception_needs_auth(exc)
+            if auth:
+                _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
+                session.log("needs_auth", detail=str(exc))
+                # 保留已写 skill，便于授权后重试
+                session.finish(success=False, detail={"error": str(exc), "needs_auth": True})
+            else:
+                item.status = "failed"
+                item.error = str(exc)
+                item.message = str(exc)
+                session.log("error", detail=str(exc))
+                session.cleanup_partial_skill()
+                session.finish(success=False, detail={"error": str(exc)})
         except Exception as exc:
-            item.status = "failed"
-            item.error = str(exc) or "接入失败"
-            item.message = item.error
-            session.log("error", detail=item.error)
-            session.cleanup_partial_skill()
-            session.finish(success=False, detail={"error": item.error})
+            auth = _exception_needs_auth(exc)
+            if auth:
+                _mark_needs_auth(item, str(exc), slot=auth.get("slot"))
+                session.log("needs_auth", detail=str(exc))
+                session.finish(success=False, detail={"error": str(exc), "needs_auth": True})
+            else:
+                item.status = "failed"
+                item.error = str(exc) or "接入失败"
+                item.message = item.error
+                session.log("error", detail=item.error)
+                session.cleanup_partial_skill()
+                session.finish(success=False, detail={"error": item.error})
         finally:
             unregister_session(session.job_id)
 
@@ -451,7 +775,12 @@ async def _run_batch(batch: OnboardingBatch, feed_client) -> None:
                     await _reload_task
                 except Exception:
                     pass
-        batch.status = "cancelled" if batch.cancelled else "done"
+        if batch.cancelled:
+            batch.status = "cancelled"
+        elif batch.needs_auth > 0 and batch.failed == 0:
+            batch.status = "needs_auth"
+        else:
+            batch.status = "done"
 
 
 def get_batch(batch_id: str) -> OnboardingBatch | None:

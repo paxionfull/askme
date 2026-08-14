@@ -16,6 +16,7 @@ import {
   type ArticleScopeItem,
   type ChatMessagePayload,
   type CitationItem,
+  type DigestTree,
 } from "../api";
 import { getLlmConfigPayload, useSettings } from "../hooks/useSettings";
 import { useStoredFlag } from "../hooks/useStoredFlag";
@@ -39,6 +40,7 @@ export interface ScopedArticle {
 interface ChatContextValue {
   days: number;
   panelSummary: string;
+  digestTree: DigestTree | null;
   articleRefs: ScopedArticle[];
   scopedArticles: ScopedArticle[];
   addScopedArticle: (article: ScopedArticle) => void;
@@ -117,6 +119,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   } = useDigest();
   const initialRagCache = loadRagStatusCache(days);
   const [panelSummary, setPanelSummary] = useState("");
+  const [digestTree, setDigestTree] = useState<DigestTree | null>(null);
   const [articleRefs, setArticleRefs] = useState<ScopedArticle[]>([]);
   const [scopedArticles, setScopedArticles] = useState<ScopedArticle[]>([]);
   const [loadingSummary, setLoadingSummary] = useState(false);
@@ -209,6 +212,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const loadPanelSummary = useCallback(async () => {
     if (selectedGroupIds.length === 0) {
       setPanelSummary("");
+      setDigestTree(null);
       setArticleRefs([]);
       return;
     }
@@ -216,6 +220,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       const data = await fetchCachedSummary(days, undefined, selectedGroupIds);
       setPanelSummary(data.summary ?? "");
+      setDigestTree(data.digest_tree ?? null);
       setArticleRefs(
         (data.article_refs ?? []).map((item) => ({
           feed_id: item.feed_id,
@@ -226,6 +231,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       );
     } catch {
       setPanelSummary("");
+      setDigestTree(null);
       setArticleRefs([]);
     } finally {
       setLoadingSummary(false);
@@ -243,6 +249,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const wasGenerating = prevDigestGeneratingRef.current;
     prevDigestGeneratingRef.current = digestGenerating;
+    if (digestGenerating && !wasGenerating) {
+      setDigestTree(null);
+    }
     if (wasGenerating && !digestGenerating) {
       void loadPanelSummary();
     }
@@ -463,6 +472,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       value={{
         days,
         panelSummary,
+        digestTree,
         articleRefs,
         scopedArticles,
         addScopedArticle,

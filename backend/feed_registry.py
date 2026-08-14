@@ -19,8 +19,52 @@ DEFAULT_REGISTRY: dict[str, Any] = {
     "groups": [],
     "group_order": [],
     "feed_display_names": {},
+    "platform_accounts": {},
     "default_digest_skill": "general-digest",
 }
+
+# 已知多账号平台：一平台一 skill，账号参数存在 platform_accounts
+PLATFORM_IDS = frozenset({"zhihu", "weixin", "xiaohongshu", "reddit", "x"})
+
+
+def _normalize_platform_account(raw: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    feed_id = str(raw.get("feed_id") or "").strip()
+    platform = str(raw.get("platform") or "").strip().lower()
+    account_key = str(raw.get("account_key") or "").strip()
+    if not feed_id or not platform or not account_key:
+        return None
+    if platform not in PLATFORM_IDS:
+        return None
+    return {
+        "feed_id": _normalize_feed_id(feed_id),
+        "platform": platform,
+        "account_key": account_key,
+        "user_type": str(raw.get("user_type") or "").strip(),
+        "entry_url": str(raw.get("entry_url") or "").strip(),
+        "posts_url": str(raw.get("posts_url") or "").strip(),
+        "display_name": str(raw.get("display_name") or "").strip(),
+        "list_api_path": str(raw.get("list_api_path") or "").strip(),
+        "slug": str(raw.get("slug") or "").strip(),
+        "xsec_token": str(raw.get("xsec_token") or "").strip(),
+    }
+
+
+def _normalize_platform_accounts(raw: Any) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    if not isinstance(raw, dict):
+        return result
+    for key, value in raw.items():
+        item = _normalize_platform_account(value if isinstance(value, dict) else {})
+        if not item:
+            continue
+        fid = item["feed_id"]
+        # 允许 key 与 feed_id 不一致时以记录内 feed_id 为准
+        if str(key).strip() and str(key).strip() != fid:
+            item = {**item, "feed_id": fid}
+        result[fid] = item
+    return result
 
 
 def _normalize_feed_id(feed_id: str) -> str:
@@ -131,6 +175,7 @@ class FeedRegistry:
                 normalized_groups,
             ),
             "feed_display_names": display_names,
+            "platform_accounts": _normalize_platform_accounts(data.get("platform_accounts")),
             "default_digest_skill": str(data.get("default_digest_skill") or "general-digest").strip(),
         }
 
@@ -178,7 +223,52 @@ class FeedRegistry:
         names = dict(self._data.get("feed_display_names") or {})
         names.pop(fid, None)
         self._data["feed_display_names"] = names
+        accounts = dict(self._data.get("platform_accounts") or {})
+        accounts.pop(fid, None)
+        self._data["platform_accounts"] = accounts
         self.save()
+
+    def list_platform_accounts(self) -> dict[str, dict[str, Any]]:
+        return {
+            fid: dict(account)
+            for fid, account in (self._data.get("platform_accounts") or {}).items()
+        }
+
+    def get_platform_account(self, feed_id: str) -> dict[str, Any] | None:
+        fid = _normalize_feed_id(feed_id)
+        account = (self._data.get("platform_accounts") or {}).get(fid)
+        return dict(account) if isinstance(account, dict) else None
+
+    def upsert_platform_account(self, account: dict[str, Any]) -> dict[str, Any]:
+        item = _normalize_platform_account(account)
+        if not item:
+            raise ValueError("无效的平台账号配置")
+        accounts = dict(self._data.get("platform_accounts") or {})
+        accounts[item["feed_id"]] = item
+        self._data["platform_accounts"] = accounts
+        display = item.get("display_name") or ""
+        if display:
+            names = dict(self._data.get("feed_display_names") or {})
+            names[item["feed_id"]] = display
+            self._data["feed_display_names"] = names
+        # 重新接入时确保可见
+        hidden = [x for x in (self._data.get("hidden_feed_ids") or []) if x != item["feed_id"]]
+        self._data["hidden_feed_ids"] = hidden
+        self.save()
+        return dict(item)
+
+    def remove_platform_account(self, feed_id: str) -> bool:
+        fid = _normalize_feed_id(feed_id)
+        accounts = dict(self._data.get("platform_accounts") or {})
+        if fid not in accounts:
+            return False
+        accounts.pop(fid, None)
+        self._data["platform_accounts"] = accounts
+        self.save()
+        return True
+
+    def is_platform_feed(self, feed_id: str) -> bool:
+        return self.get_platform_account(feed_id) is not None
 
     def display_name_for_feed(self, feed_id: str) -> str | None:
         fid = _normalize_feed_id(feed_id)

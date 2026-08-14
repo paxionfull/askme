@@ -5,9 +5,47 @@ from typing import Any
 from article_body_store import ArticleBodyStore
 from feed_errors import FeedError
 from feed_registry import feed_registry
-from skill_registry import load_skill_adapters, reload_skill_adapters
+from platform_adapter import BoundPlatformAdapter
+from platform_scaffold_bind import clear_compiled_adapters, compile_scaffold_adapter
+from skill_registry import (
+    load_platform_modules,
+    load_skill_adapters,
+    reload_skill_adapters,
+)
 from website_article_store import WebsiteArticleStore
 from website_feed import WebsiteFeed
+
+# 常量烤进脚手架模板的平台：按账号内存编译，不走 ContextVar
+_COMPILE_PLATFORMS = frozenset({"xiaohongshu", "x"})
+
+
+def _build_feeds(store: WebsiteArticleStore) -> dict[str, WebsiteFeed]:
+    feeds: dict[str, WebsiteFeed] = {}
+    for adapter in load_skill_adapters():
+        feed_id = str(getattr(adapter, "FEED_ID", "") or "").strip()
+        if not feed_id:
+            continue
+        if feed_registry.get_platform_account(feed_id):
+            continue
+        feeds[feed_id] = WebsiteFeed(adapter, store)
+
+    platform_modules = load_platform_modules()
+    for feed_id, account in feed_registry.list_platform_accounts().items():
+        platform = str(account.get("platform") or "").strip().lower()
+        try:
+            if platform in _COMPILE_PLATFORMS:
+                adapter = compile_scaffold_adapter(platform, account)
+            else:
+                module = platform_modules.get(platform)
+                if module is None:
+                    # 无 ContextVar 平台 skill 时回退编译脚手架
+                    adapter = compile_scaffold_adapter(platform, account)
+                else:
+                    adapter = BoundPlatformAdapter(module, account)
+        except Exception:
+            continue
+        feeds[feed_id] = WebsiteFeed(adapter, store)
+    return feeds
 
 
 class FeedClient:
@@ -24,16 +62,12 @@ class FeedClient:
         if feeds is not None:
             self._feeds = feeds
         else:
-            self._feeds = {
-                adapter.FEED_ID: WebsiteFeed(adapter, self.store)
-                for adapter in load_skill_adapters()
-            }
+            self._feeds = _build_feeds(self.store)
 
     def reload_skills(self) -> int:
-        self._feeds = {
-            adapter.FEED_ID: WebsiteFeed(adapter, self.store)
-            for adapter in reload_skill_adapters()
-        }
+        reload_skill_adapters()
+        clear_compiled_adapters()
+        self._feeds = _build_feeds(self.store)
         return len(self._feeds)
 
     def _get_feed(self, feed_id: str, *, allow_hidden: bool = False) -> WebsiteFeed:
@@ -45,12 +79,12 @@ class FeedClient:
         return feed
 
     def hide_feed(self, feed_id: str) -> None:
-        if feed_id not in self._feeds:
+        if feed_id not in self._feeds and not feed_registry.get_platform_account(feed_id):
             raise FeedError(f"未知数据源: {feed_id}", status_code=404)
         feed_registry.hide_feed(feed_id)
 
     def ensure_feed_visible(self, feed_id: str) -> None:
-        """重新接入后恢复可见性，并确保 skill 已装载。"""
+        """重新接入后恢复可见性，并确保 skill / 平台账号已装载。"""
         if feed_registry.is_hidden(feed_id):
             feed_registry.unhide_feed(feed_id)
         if feed_id not in self._feeds:
@@ -59,9 +93,15 @@ class FeedClient:
             raise FeedError(f"skill 未装载: {feed_id}", status_code=404)
 
     def rename_feed(self, feed_id: str, name: str) -> str:
-        if feed_id not in self._feeds:
+        if feed_id not in self._feeds and not feed_registry.get_platform_account(feed_id):
             raise FeedError(f"未知数据源: {feed_id}", status_code=404)
-        return feed_registry.set_feed_display_name(feed_id, name)
+        label = feed_registry.set_feed_display_name(feed_id, name)
+        account = feed_registry.get_platform_account(feed_id)
+        if account:
+            feed_registry.upsert_platform_account({**account, "display_name": label})
+            self.reload_skills()
+        return label
+
 
     def list_groups(self) -> list[dict[str, Any]]:
         return feed_registry.list_groups()
@@ -124,9 +164,9 @@ class FeedClient:
             return
         self.body_store.delete_feed(feed_id)
 
-    async def refresh_feed(self, feed_id: str, *, days: int = 1) -> dict[str, Any]:
+    async def refresh_feed(self, feed_id: str, *, days: int = 1, **overrides: Any) -> dict[str, Any]:
         try:
-            return await self._get_feed(feed_id).refresh_feed(days=days)
+            return await self._get_feed(feed_id).refresh_feed(days=days, **overrides)
         except Exception as exc:
             if isinstance(exc, FeedError):
                 raise
@@ -294,6 +334,13 @@ class FeedClient:
                     "body_detail": stored.get("body_detail", ""),
                 }
             return None
+        # 库页点开正文时常只传 id：从文章表补齐 url，供小红书等需要笔记级 token 的源使用
+        if not (url and title and published_at):
+            row = self.store.get_article(feed_id, article_id)
+            if row:
+                url = url or str(row.get("url") or "")
+                title = title or str(row.get("title") or "")
+                published_at = published_at or str(row.get("published_at") or "")
         detail = await self.fetch_and_persist_body(
             feed_id,
             article_id,

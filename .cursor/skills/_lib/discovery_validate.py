@@ -125,9 +125,37 @@ def validate_skill(slug: str, *, min_items: int = MIN_LIST_ITEMS) -> dict:
     if missing:
         raise ValueError(f"discover.py 缺少接口: {', '.join(missing)}")
 
-    payload = module.fetch_list_page(1, 5)
+    from auth_signals_local import looks_like_login_wall, resolve_slot_hint
+
+    try:
+        payload = module.fetch_list_page(1, 5)
+    except Exception as exc:
+        err = str(exc)
+        slot_hint = resolve_slot_hint(skill_dir, getattr(module, "FEED_META", {}) or {})
+        low = err.lower()
+        if any(token in low for token in ("401", "403", "unauthorized", "login", "cookie", "未登录", "登录")):
+            raise ValueError(
+                f"ASKME_AUTH_REQUIRED:slot={slot_hint or 'unknown'} 拉取列表失败（疑似需要登录）: {exc}"
+            ) from exc
+        raise
+
+    # 部分站点把登录墙放在 payload 文本里
+    payload_text = ""
+    try:
+        payload_text = json.dumps(payload, ensure_ascii=False)[:4000]
+    except Exception:
+        payload_text = str(payload)[:4000]
+
     items = module.list_items(payload)
     if len(items) < min_items:
+        slot_hint = resolve_slot_hint(skill_dir, getattr(module, "FEED_META", {}) or {})
+        if looks_like_login_wall(payload_text) or len(items) == 0:
+            # 空列表 + 已知需登录域名 / source 声明 → 明确要求授权
+            raise ValueError(
+                f"ASKME_AUTH_REQUIRED:slot={slot_hint or 'unknown'} "
+                f"列表文章数不足（{len(items)} < {min_items}），站点可能需要登录 Cookie。"
+                "请在 Askme 完成登录授权后重试验证。"
+            )
         raise ValueError(f"列表文章数不足: {len(items)} < {min_items}")
 
     normalized = [module.normalize_list_item(item) for item in items[: min(len(items), 3)]]

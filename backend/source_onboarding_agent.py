@@ -11,6 +11,7 @@ from llm import LLMError, complete
 from source_platform_scaffold import (
     detect_platform,
     fetch_zhihu_profile_name,
+    format_zhihu_source_name,
     probe_zhihu_api,
     scaffold_zhihu_files,
 )
@@ -34,11 +35,11 @@ WebsiteFeedAdapter 接口（discover.py 必须实现）：
 - normalize_list_item(item) -> {id,title,url,published_at,author,image,summary}
 - fetch_article_detail(article_id, **hints) -> 含 content_html；批量拉正文时 backend 会传入 url/title/published_at 等列表元数据，必须优先 resolve_detail_url / meta.get("url")，禁止为查元数据重复拉整表列表或仅靠首页第一页定位 url
 - normalize_article_body(raw_html, article_id="") -> str，可选，可委托 content_utils.clean_html_fragment
-- 列表项较多时：用 _lib/list_index.ListByIdIndex 建 id 索引；快讯类列表在 _request_list 时写入内存索引，fetch_article_detail 禁止每篇重拉整包列表
+- 列表项较多时：用 `_lib/list_index.ListByIdIndex` 建 id 索引。API：`rebuild(items)` 或 `clear()`+`put(id, item)`，读取用 `get(id)`；快讯类列表在拉取时写入内存索引，`fetch_article_detail` 禁止每篇重拉整包列表
 
 约束：
 - 仅 urllib / json / 标准库 + skill 内 _lib（http_client、content_utils、zhihu_common 等），不要 import backend
-- 所有 HTTP 必须通过 _lib/http_client（统一 5s 超时、失败重试 1 次、429/502/503 退避、页间 sleep_between_pages）；禁止 urllib.request.urlopen 与自定义 timeout
+- 所有 HTTP 必须通过 _lib/http_client（统一 5s 超时、最多重试 3 次、429/502/503 退避含 Retry-After、页间 sleep_between_pages）；禁止 urllib.request.urlopen 与自定义 timeout
 - 自行分页时在页间调用 sleep_between_pages()
 - 不要使用 RSS/Atom
 - 针对该网站的真实 API/HTML 结构写代码
@@ -325,6 +326,21 @@ async def _run_platform_scaffold_onboarding(
     llm_config: dict[str, Any] | None,
     session: OnboardingSession | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
+    # 非知乎已知平台统一走 source_platform_onboard（Reddit/X/微信/小红书/金十）
+    if platform.platform != "zhihu":
+        from source_platform_onboard import run_platform_onboarding
+
+        async for event in run_platform_onboarding(
+            platform=platform,
+            slug=slug,
+            name=name,
+            auto_validate=auto_validate,
+            session=session,
+            auto_repair=True,
+        ):
+            yield event
+        return
+
     yield _emit_status(
         session,
         phase="detect",
@@ -341,7 +357,7 @@ async def _run_platform_scaffold_onboarding(
         detail = probe.get("error") or "平台 API 探测失败"
         if "ZHIHU_COOKIE" in detail or not probe.get("cookie_configured"):
             raise LLMError(
-                "知乎接入需要先在设置页配置 ZHIHU_COOKIE（从浏览器复制 d_c0、__zse_ck 等）",
+                "知乎接入需要登录授权：请先添加知乎 Cookie 凭证（从浏览器复制 d_c0、__zse_ck 等）",
                 status_code=400,
             )
         raise LLMError(f"知乎 API 探测失败: {detail}", status_code=502)
@@ -349,11 +365,14 @@ async def _run_platform_scaffold_onboarding(
     display_name = name
     if platform.platform == "zhihu":
         display_name = probe.get("display_name") or fetch_zhihu_profile_name(platform)
+        display_name = format_zhihu_source_name(str(display_name or platform.user_id)) or str(
+            display_name or platform.user_id
+        )
 
     yield _emit_status(
         session,
         phase="scaffold",
-        message=f"使用 {platform.platform} 模板生成 skill（{display_name}）…",
+        message=f"使用知乎模板生成 skill（{display_name}）…",
     )
     file_map = scaffold_zhihu_files(platform, display_name=display_name)
 

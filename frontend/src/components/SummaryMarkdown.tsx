@@ -505,7 +505,7 @@ function AddToChatButton({
         event.stopPropagation();
         onClick();
       }}
-      className="ml-1.5 inline-flex shrink-0 items-center rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 opacity-0 transition-opacity hover:bg-indigo-100 group/item:opacity-100"
+      className="ml-1.5 inline-flex shrink-0 items-center rounded border border-[color-mix(in_srgb,var(--accent)_30%,var(--rule))] bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent)] opacity-0 transition-opacity hover:bg-[color-mix(in_srgb,var(--accent-soft)_80%,white)] group/item:opacity-100"
     >
       加入对话
     </button>
@@ -526,7 +526,7 @@ function DraggableAggregateHeading({
       <strong
         draggable
         title={`拖动到右侧对话区，一次性添加 ${articles.length} 篇文章`}
-        className="cursor-grab rounded px-0.5 text-slate-900 hover:bg-indigo-50 active:cursor-grabbing"
+        className="cursor-grab rounded px-0.5 text-[var(--ink)] hover:bg-[var(--accent-soft)] active:cursor-grabbing"
         onDragStart={(event) => {
           writeArticleGroupDragData(event.dataTransfer, { label, articles });
         }}
@@ -557,14 +557,14 @@ function DraggableSectionHeading({
   const Tag = level === 2 ? "h2" : "h3";
   const baseClass =
     level === 2
-      ? "markdown-body mt-6 mb-3 text-lg font-semibold text-slate-900"
-      : "markdown-body mt-5 mb-2 text-base font-semibold text-slate-900";
+      ? "markdown-body mt-6 mb-3 text-lg font-semibold text-[var(--ink)]"
+      : "markdown-body mt-5 mb-2 text-base font-semibold text-[var(--ink)]";
   return (
     <Tag className={`${baseClass} group/item flex max-w-full items-center gap-1`}>
       <span
         draggable
         title={`拖动到右侧对话区，一次性添加「${label}」下 ${articles.length} 篇文章`}
-        className="cursor-grab rounded px-0.5 hover:bg-indigo-50 active:cursor-grabbing"
+        className="cursor-grab rounded px-0.5 hover:bg-[var(--accent-soft)] active:cursor-grabbing"
         onDragStart={(event) => {
           writeArticleGroupDragData(event.dataTransfer, { label, articles });
         }}
@@ -594,7 +594,7 @@ function DraggableArticleLink({
 }) {
   if (!articleRef) {
     return (
-      <a href={href} target="_blank" rel="noreferrer" className="text-indigo-700 no-underline hover:text-indigo-900">
+      <a href={href} target="_blank" rel="noreferrer" className="text-[var(--accent)] no-underline hover:text-[var(--ink)]">
         {children}
       </a>
     );
@@ -608,7 +608,7 @@ function DraggableArticleLink({
         rel="noreferrer"
         draggable
         title="按住拖动到右侧对话区，可添加文章并生成摘要或限定提问"
-        className="cursor-grab rounded px-0.5 text-indigo-700 no-underline hover:bg-indigo-50 hover:text-indigo-900 active:cursor-grabbing"
+        className="cursor-grab rounded px-0.5 text-[var(--accent)] no-underline hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] active:cursor-grabbing"
         onDragStart={(event) => {
           writeArticleDragData(event.dataTransfer, articleRef);
         }}
@@ -746,7 +746,7 @@ export default function SummaryMarkdown({
   headingContextRef.current.h2 = "";
 
   return (
-    <div className={`markdown-body text-sm leading-7 text-slate-800 ${className}`}>
+    <div className={`markdown-body text-sm leading-7 text-[var(--ink)] ${className}`}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>

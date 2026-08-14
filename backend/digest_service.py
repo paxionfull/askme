@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from skill_runtime import get_digest_input_mode, get_digest_system_prompt
+from skill_runtime import get_digest_input_mode, get_digest_profile, get_digest_system_prompt
 from feed_registry import UNGROUPED_GROUP_ID, feed_registry
 from skill_config import get_default_digest_skill, get_fallback_digest_prompt
+from digest_pipeline import generate_structured_digest
 
 
 def resolve_digest_skill_for_group(group: dict[str, Any] | None) -> str:
@@ -149,6 +150,75 @@ def resolve_selected_feed_ids(
 
 def get_system_prompt_for_skill(skill_id: str) -> str:
     return get_digest_system_prompt(skill_id)
+
+
+def get_profile_for_skill(skill_id: str) -> dict[str, Any] | None:
+    return get_digest_profile(skill_id)
+
+
+async def generate_partition_summary(
+    article_service,
+    *,
+    articles: list[dict],
+    days: int,
+    digest_skill_id: str,
+    prompt_override: str = "",
+    llm_config: dict[str, Any] | None = None,
+    enable_thinking: bool = False,
+    on_status=None,
+) -> tuple[str, bool, dict[str, Any] | None]:
+    """生成单个分组概览。有 profile 且无 prompt 覆盖时走结构化流水线。
+
+    返回 (markdown, truncated, digest_tree|None)。
+    """
+    from llm import complete
+
+    profile = None if prompt_override.strip() else get_digest_profile(digest_skill_id)
+    if profile:
+        text, tree = await generate_structured_digest(
+            articles,
+            profile,
+            llm_config=llm_config,
+            on_status=on_status,
+        )
+        return text, False, tree
+
+    prompt = prompt_override.strip() or get_digest_system_prompt(digest_skill_id)
+    messages, truncated = build_summary_messages_for_partition(
+        article_service,
+        system_prompt=prompt,
+        articles=articles,
+        days=days,
+        digest_skill_id=digest_skill_id,
+    )
+    text = await complete(
+        messages,
+        llm_config,
+        temperature=0,
+        enable_thinking=enable_thinking,
+    )
+    return text, truncated, None
+
+
+def stitch_digest_trees(
+    partitions: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """合并多分组结构化树。任一分组无 tree 则整体返回 None（回退 Markdown）。"""
+    items: list[dict[str, Any]] = []
+    for partition in partitions:
+        tree = partition.get("digest_tree")
+        if not isinstance(tree, dict) or not isinstance(tree.get("sections"), list):
+            return None
+        items.append(
+            {
+                "group_id": str(partition.get("group_id") or ""),
+                "group_name": str(partition.get("group_name") or ""),
+                "sections": tree["sections"],
+            }
+        )
+    if not items:
+        return None
+    return {"version": 1, "partitions": items}
 
 
 async def resolve_feed_ids_for_groups(

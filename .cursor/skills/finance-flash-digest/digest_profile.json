@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "input_mode": "titles",
+  "focus": {
+    "enabled": true,
+    "criteria": "美联储、欧央行、日央行、英国央行等关键政策表态；CPI / 非农 / GDP / PMI 等重磅宏观数据发布及市场冲击；地缘政治与监管变化引发的跨市场波动；重大公司财报、指引、并购、违约或流动性风险事件",
+    "max_events": 10,
+    "exclusive": true
+  },
+  "categories": [
+    {
+      "id": "macro",
+      "name": "宏观与央行",
+      "criteria": "央行政策、宏观数据、财政政策、经济展望"
+    },
+    {
+      "id": "fx-rates",
+      "name": "外汇与利率",
+      "criteria": "汇率、国债收益率、利率预期、货币走势"
+    },
+    {
+      "id": "equities",
+      "name": "股票与股指",
+      "criteria": "个股、股指、股市波动、交易与估值相关"
+    },
+    {
+      "id": "commodities",
+      "name": "大宗商品",
+      "criteria": "原油、黄金、金属、农产品等大宗商品"
+    },
+    {
+      "id": "corp",
+      "name": "公司与产业",
+      "criteria": "公司财报、并购、产业政策、行业动态"
+    }
+  ],
+  "ignore": {
+    "criteria": "广告、软广、无实质市场信息、与财经主题无关的内容"
+  },
+  "cluster": {
+    "enabled": true
+  }
+}

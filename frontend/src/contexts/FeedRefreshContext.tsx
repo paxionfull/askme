@@ -28,6 +28,16 @@ function formatFailures(failures: RefreshFeedFailure[]): string {
   ].join("\n");
 }
 
+export function isRefreshAuthError(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    text.includes("askme_auth_required") ||
+    text.includes("需要登录") ||
+    text.includes("重新登录授权") ||
+    (text.includes("cookie") && (text.includes("授权") || text.includes("访客")))
+  );
+}
+
 function formatProgressMessage(status: FeedSchedulerConfig): string {
   const item = status.refresh_progress;
   if (!item || item.total <= 0) {
@@ -53,9 +63,18 @@ interface FeedRefreshContextValue {
   error: string;
   failures: RefreshFeedFailure[];
   bannerTitle: string;
+  /** 刷新因鉴权失败时，可供「去授权」重开添加源弹窗的入口 URL */
+  authFailureUrls: string[];
+  /** 批量刷新鉴权失败但无 entry_url 时，引导去设置页 */
+  authFailureDetected: boolean;
   startRefreshAll: (days?: number) => Promise<void>;
   startRefreshGroup: (groupId: string, groupName: string, days?: number) => Promise<void>;
-  startRefreshFeed: (feedId: string, feedName?: string, days?: number) => Promise<void>;
+  startRefreshFeed: (
+    feedId: string,
+    feedName?: string,
+    days?: number,
+    entryUrl?: string,
+  ) => Promise<void>;
   clearResult: () => void;
 }
 
@@ -71,6 +90,8 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState("");
   const [failures, setFailures] = useState<RefreshFeedFailure[]>([]);
   const [bannerTitle, setBannerTitle] = useState("更新数据源");
+  const [authFailureUrls, setAuthFailureUrls] = useState<string[]>([]);
+  const [authFailureDetected, setAuthFailureDetected] = useState(false);
 
   const jobInFlightRef = useRef(false);
   const generationRef = useRef(0);
@@ -105,12 +126,16 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         setResultMessage("");
         setStatusMessage("");
         setError(failureDetail || summary);
+        setAuthFailureUrls([]);
+        setAuthFailureDetected(nextFailures.some((item) => isRefreshAuthError(item.error || "")));
         return;
       }
 
       setResultMessage(summary);
       setStatusMessage("");
       setError(failureDetail);
+      setAuthFailureUrls([]);
+      setAuthFailureDetected(nextFailures.some((item) => isRefreshAuthError(item.error || "")));
     },
     [markFeedsNeedReload],
   );
@@ -151,6 +176,8 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
       setError("");
       setResultMessage("");
       setFailures([]);
+      setAuthFailureUrls([]);
+      setAuthFailureDetected(false);
       setBannerTitle(options.title);
       setStatusMessage(options.startingMessage);
       setProgress(null);
@@ -171,9 +198,13 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         await watchUntilComplete(start.message || options.startingMessage, generation);
       } catch (err) {
         if (generation !== generationRef.current) return;
+        const message = err instanceof Error ? err.message : "更新失败";
         setStatusMessage("");
         setResultMessage("");
-        setError(err instanceof Error ? err.message : "更新失败");
+        setError(message);
+        if (isRefreshAuthError(message)) {
+          setAuthFailureDetected(true);
+        }
       } finally {
         if (generation === generationRef.current) {
           setRefreshingAll(false);
@@ -208,7 +239,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
   );
 
   const startRefreshFeed = useCallback(
-    async (feedId: string, feedName?: string, days = 1) => {
+    async (feedId: string, feedName?: string, days = 1, entryUrl?: string) => {
       if (jobInFlightRef.current) {
         throw new Error("已有更新任务进行中，请稍后再试");
       }
@@ -216,9 +247,12 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
       const generation = ++generationRef.current;
       jobInFlightRef.current = true;
       const label = (feedName || "").trim() || feedId;
+      const retryUrl = (entryUrl || "").trim();
       setError("");
       setResultMessage("");
       setFailures([]);
+      setAuthFailureUrls([]);
+      setAuthFailureDetected(false);
       setProgress(null);
       setRefreshingAll(false);
       setRefreshingGroupId(null);
@@ -234,9 +268,14 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         setResultMessage(result.message || `「${label}」刷新完成`);
       } catch (err) {
         if (generation !== generationRef.current) return;
+        const message = err instanceof Error ? err.message : "刷新失败";
         setStatusMessage("");
         setResultMessage("");
-        setError(err instanceof Error ? err.message : "刷新失败");
+        setError(message);
+        if (isRefreshAuthError(message)) {
+          setAuthFailureDetected(true);
+          setAuthFailureUrls(retryUrl ? [retryUrl] : []);
+        }
       } finally {
         if (generation === generationRef.current) {
           setRefreshingFeedId(null);
@@ -252,6 +291,8 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
     setError("");
     setFailures([]);
     setStatusMessage("");
+    setAuthFailureUrls([]);
+    setAuthFailureDetected(false);
   }, []);
 
   // 刷新后 / 挂载时恢复「更新全部 / 分组」进度（单源刷新为同步请求，仅靠 App 级 Context 存活）
@@ -316,6 +357,8 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         error,
         failures,
         bannerTitle,
+        authFailureUrls,
+        authFailureDetected,
         startRefreshAll,
         startRefreshGroup,
         startRefreshFeed,

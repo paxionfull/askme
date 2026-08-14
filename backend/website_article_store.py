@@ -133,6 +133,19 @@ class WebsiteArticleStore:
             ).fetchone()
         return row is not None
 
+    def get_article(self, feed_id: str, article_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT feed_id, article_id, title, url, published_at, author, image, summary
+                FROM articles
+                WHERE feed_id = ? AND article_id = ?
+                LIMIT 1
+                """,
+                (feed_id, article_id),
+            ).fetchone()
+        return dict(row) if row else None
+
     def list_articles(self, feed_id: str, limit: int | None = None) -> list[dict]:
         with self._connect() as conn:
             if limit is None or limit <= 0:
