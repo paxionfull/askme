@@ -1,0 +1,16 @@
+services:
+  api:
+    build: ./backend
+    ports:
+      - "8001:8000"
+    environment:
+      - LLM_MODEL=${LLM_MODEL:-openai/gpt-4o-mini}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_API_BASE=${LLM_API_BASE:-}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-4096}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-120}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+# 开发模式见 docker-compose.dev.yml 或 scripts/dev.sh

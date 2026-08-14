@@ -1,0 +1,7 @@
+# 开发模式：挂载 backend 代码并启用 uvicorn --reload，改代码无需 rebuild
+# 用法: docker compose -f docker-compose.yml -f docker-compose.dev.yml up api
+services:
+  api:
+    volumes:
+      - ./backend:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload

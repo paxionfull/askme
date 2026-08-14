@@ -1,0 +1,19 @@
+id: qbitai
+name: 量子位
+homepage: https://www.qbitai.com
+entry_url: https://www.qbitai.com
+
+discovery:
+  type: wordpress_rest
+  url: https://www.qbitai.com/wp-json/wp/v2/posts
+  pagination:
+    page_param: page
+    per_param: per_page
+    total_pages_header: X-WP-TotalPages
+
+content:
+  type: wordpress_rest
+  url_template: https://www.qbitai.com/wp-json/wp/v2/posts/{id}
+
+validation:
+  last_verified_at: "2026-07-02"

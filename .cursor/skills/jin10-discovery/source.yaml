@@ -1,0 +1,20 @@
+id: jin10
+name: 金十数据
+homepage: https://www.jin10.com/
+entry_url: https://www.jin10.com/
+platform: jin10
+feed_id: website:jin10
+
+discovery:
+  type: jin10_flash_api
+  url: https://flash-api.jin10.com/get_flash_list
+  headers:
+    x-app-id: bVBF4FyRTn5NJF5n
+    x-version: 1.0.0
+  query:
+    channel: "-8200"
+    vip: 1
+
+validation:
+  min_body_chars: 30
+  last_verified_at: "2026-07-03"

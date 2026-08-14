@@ -1,0 +1,75 @@
+id: zhihu
+name: 知乎·Khazix
+homepage: https://www.zhihu.com
+entry_url: https://www.zhihu.com/people/Khazix
+
+discovery:
+  type: json_api
+  method: GET
+  url: https://www.zhihu.com/api/v4/members/Khazix/articles
+  query:
+    include: "data[*].comment_count,voteup_count,created,title,content,is_normal,image_url,url"
+    offset: 0
+    limit: 20
+  headers:
+    Accept: "application/json, text/plain, */*"
+    Accept-Language: "zh-CN,zh;q=0.9,en;q=0.8"
+    Referer: https://www.zhihu.com/people/Khazix
+    User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    Cookie: "${ZHIHU_COOKIE}"
+  items_path: data
+  fields:
+    id: id
+    title: title
+    url: url
+    published_at: created
+    author: author.name
+    image: image_url
+    summary: excerpt
+  pagination:
+    offset_param: offset
+    limit_param: limit
+    is_end: paging.is_end
+    next_url: paging.next
+  fallback:
+    strategy: html_embed
+    url: https://www.zhihu.com/people/Khazix
+    selector: 'script#js-initialData'
+    json_path: 'initialState.entities.articles'
+
+content:
+  type: html
+  url_template: https://www.zhihu.com/p/{id}
+  headers:
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    Referer: https://www.zhihu.com/people/Khazix
+    User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    Cookie: "${ZHIHU_COOKIE}"
+  extraction:
+    strategy: json_embed
+    selector: 'script#js-initialData'
+    json_path: 'initialState.entities.articles.{id}'
+  fields:
+    title: title
+    published_at: created
+    author: author.name
+    html: content
+    image: image_url
+  fallback_extraction:
+    strategy: dom
+    selector: 'div.RichText ztext Post-RichText'
+    html: inner_html
+
+quirks:
+  - 需在请求头中注入真实用户 Cookie (通过环境变量 ZHIHU_COOKIE 配置)，否则将触发 403 反爬验证并重定向至 /account/unhuman。
+  - 页面包含 zse-ck 反爬脚本，无浏览器环境执行该脚本将无法通过验证。
+  - 当未携带有效 Cookie 导致抓取失败时，discover.py 中的 fetch_list_page 会返回空数据集而不再抛出异常，以免阻断主流程。
+  - 列表及正文的时间戳多为 Unix 毫秒，需手动转换为 ISO8601 (Asia/Shanghai)。
+  - 图片等静态资源需处理多域名前缀（如 pica.zhimg.com, pic1.zhimg.com 等）。
+  - 正文依赖页面内嵌的 js-initialData 提取，若无则降级从 DOM 容器解析。
+
+validation:
+  last_verified_at: "2026-07-02"
+  sample_article_ids:
+    - "123456789"
+  expected_min_items: 1

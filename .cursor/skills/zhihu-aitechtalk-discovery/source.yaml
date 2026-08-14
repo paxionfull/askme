@@ -1,0 +1,15 @@
+id: zhihu-aitechtalk
+name: AI科技评论
+homepage: https://www.zhihu.com/people/aitechtalk
+entry_url: https://www.zhihu.com/people/aitechtalk/posts
+platform: zhihu
+user_type: people
+user_id: aitechtalk
+
+discovery:
+  type: zhihu_api
+  list_url: /api/v4/members/aitechtalk/articles
+  requires_cookie: true
+
+validation:
+  last_verified_at: "2026-07-02"

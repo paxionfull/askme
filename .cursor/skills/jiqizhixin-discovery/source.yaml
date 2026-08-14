@@ -1,0 +1,63 @@
+id: jiqizhixin
+name: 机器之心
+homepage: https://www.jiqizhixin.com
+entry_url: https://www.jiqizhixin.com/articles
+
+discovery:
+  type: json_api
+  method: GET
+  url: https://www.jiqizhixin.com/api/article_library/articles.json
+  query:
+    sort: time
+    page: 1
+    per: 20
+  headers:
+    Accept: application/json
+    Referer: https://www.jiqizhixin.com/articles
+    X-Requested-With: XMLHttpRequest
+    User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
+  items_path: articles
+  fields:
+    id: id
+    title: title
+    slug: slug
+    url_template: https://www.jiqizhixin.com/articles/{slug}
+    published_at: publishedAt
+    author: author
+    cover_image: coverImageUrl
+    category: category
+    tags: tagList
+    summary: content
+  pagination:
+    page_param: page
+    per_param: per
+    has_next: hasNextPage
+    total: totalCount
+
+content:
+  type: json_api
+  url_template: https://www.jiqizhixin.com/api/article_library/articles/{slug}.json
+  headers:
+    Accept: application/json
+    Referer: https://www.jiqizhixin.com/articles/{slug}
+  fields:
+    title: title
+    published_at: published_at
+    author: author.name
+    html: content
+    cover_image: cover_image_url
+
+quirks:
+  - 首页 https://www.jiqizhixin.com/ 现为「数据服务」落地页，发现层应使用 /articles 或 JSON API，勿用首页。
+  - 旧 RSS 地址 /rss 已跳转到数据服务页，不可再作为发现源。
+  - 无 Referer 时部分路径会返回落地页 HTML；请求 API 时必须带 Referer。
+  - 列表接口 publishedAt 格式为 YYYY/MM/DD HH:mm（Asia/Shanghai 语义）。
+  - 列表项 content 为截断摘要，完整正文用 slug 调详情接口。
+  - 分页：page 从 1 开始，hasNextPage 表示是否还有下一页。
+
+validation:
+  last_verified_at: "2026-07-02"
+  sample_slugs:
+    - "2026-07-02-9"
+    - "2026-07-02-8"
+  expected_min_items: 5
