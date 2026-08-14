@@ -112,7 +112,7 @@ def _normalize_group_ids(raw: Any) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     for item in raw:
-        gid = str(item or "").strip()
+        gid = str(item or "").strip().lower()
         if not gid or gid in seen:
             continue
         seen.add(gid)
@@ -159,31 +159,37 @@ def _normalize_schedule(entry: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _schedule_dedupe_key(item: dict[str, Any]) -> tuple[Any, ...]:
+def _schedule_time_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    kind = item.get("kind", "daily")
+    if kind == "interval":
+        return ("interval", int(item.get("every_hours", 6)))
     return (
-        item.get("kind", "daily"),
+        "daily",
         int(item.get("hour", 0)),
         int(item.get("minute", 0)),
         int(item.get("second", 0)),
-        int(item.get("every_hours", 6)),
-        tuple(item.get("group_ids") or []),
     )
 
 
 def validate_schedules(schedules: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    seen: set[tuple[Any, ...]] = set()
+    merged_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
+    order: list[tuple[Any, ...]] = []
     for entry in schedules:
         if not isinstance(entry, dict):
             continue
         item = _normalize_schedule(entry)
         if item is None:
             continue
-        key = _schedule_dedupe_key(item)
-        if key in seen:
+        key = _schedule_time_key(item)
+        existing = merged_by_key.get(key)
+        if existing is None:
+            merged_by_key[key] = item
+            order.append(key)
             continue
-        seen.add(key)
-        normalized.append(item)
+        existing["group_ids"] = _normalize_group_ids(
+            list(existing.get("group_ids") or []) + list(item.get("group_ids") or [])
+        )
+    normalized = [merged_by_key[key] for key in order]
     normalized.sort(
         key=lambda item: (
             0 if item.get("kind") == "daily" else 1,
@@ -435,7 +441,13 @@ class FeedSchedulerManager:
 
         return await resolve_feed_ids_for_groups(self._client, ids)
 
-    async def _pull_bodies_for_feeds(self, feed_ids: list[str], *, days: int = 1) -> dict[str, Any]:
+    async def _pull_bodies_for_feeds(
+        self,
+        feed_ids: list[str],
+        *,
+        days: int = 1,
+        list_limit: int = 0,
+    ) -> dict[str, Any]:
         """定时刷新列表后拉取正文（与源页手动更新对齐）。"""
         from api.deps import article_service
         from feed.content_job_manager import content_job_manager
@@ -453,6 +465,7 @@ class FeedSchedulerManager:
             "feed_ids": ids,
             "message": "定时更新：正在拉取正文…",
             "group_id": "",
+            "list_limit": list_limit,
         }
 
         async def runner(on_progress, is_cancelled=None):
@@ -460,6 +473,7 @@ class FeedSchedulerManager:
                 days=days,
                 feed_ids=ids,
                 enrich=True,
+                list_limit=list_limit,
                 on_progress=on_progress,
                 is_cancelled=is_cancelled,
             )
@@ -1221,7 +1235,7 @@ class FeedSchedulerManager:
     def prune_deleted_groups(self, removed_group_ids: list[str]) -> dict[str, Any]:
         """分组删除后同步定时：仅含该组的规则整条移除，否则只从 group_ids 去掉该组。"""
         removed = {
-            str(gid).strip()
+            str(gid).strip().lower()
             for gid in removed_group_ids
             if str(gid or "").strip()
         }

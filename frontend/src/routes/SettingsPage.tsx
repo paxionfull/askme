@@ -57,6 +57,24 @@ function parseSettingsTab(value: string | null): SettingsTab | null {
 
 const PENDING_AUTH_SLOT_KEY = "askme.settings.pendingAuthSlot";
 const AUTH_AUTOSTART_DONE_KEY = "askme.settings.authAutoStartDone";
+const ACTIVE_TAB_STORAGE_KEY = "askme.settings.activeTab";
+const DEFAULT_SETTINGS_TAB: SettingsTab = "skill";
+
+function readStoredSettingsTab(): SettingsTab | null {
+  try {
+    return parseSettingsTab(localStorage.getItem(ACTIVE_TAB_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSettingsTab(tab: SettingsTab) {
+  try {
+    localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, tab);
+  } catch {
+    // ignore
+  }
+}
 
 function readPendingAuthSlot(): string | null {
   try {
@@ -127,7 +145,7 @@ export default function SettingsPage() {
   const { settings, setSettings, saveLlmToServer, clearLlmFromServer } = useSettings();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<SettingsTab>(
-    () => parseSettingsTab(searchParams.get("tab")) ?? "model",
+    () => parseSettingsTab(searchParams.get("tab")) ?? readStoredSettingsTab() ?? DEFAULT_SETTINGS_TAB,
   );
   const [draft, setDraft] = useState<LlmDraft>({
     llmModel: settings.llmModel,
@@ -200,13 +218,23 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const fromUrl = parseSettingsTab(searchParams.get("tab"));
-    if (fromUrl) setActiveTab(fromUrl);
+    if (fromUrl) {
+      setActiveTab(fromUrl);
+      writeStoredSettingsTab(fromUrl);
+    } else {
+      const next = new URLSearchParams(searchParams);
+      next.set("tab", activeTab);
+      setSearchParams(next, { replace: true });
+    }
     const slot = (searchParams.get("slot") || "").trim().toLowerCase();
     if (slot) setPendingAuthSlot(slot);
+    // Restore last tab into the URL when arriving at /settings without ?tab=
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   function switchTab(tab: SettingsTab) {
     setActiveTab(tab);
+    writeStoredSettingsTab(tab);
     const next = new URLSearchParams(searchParams);
     next.set("tab", tab);
     if (pendingAuthSlot) {
@@ -493,6 +521,7 @@ export default function SettingsPage() {
     next.set("slot", slot);
     next.set("tab", "auth");
     setActiveTab("auth");
+    writeStoredSettingsTab("auth");
     setSearchParams(next, { replace: true });
     return true;
   }

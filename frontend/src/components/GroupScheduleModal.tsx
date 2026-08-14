@@ -6,6 +6,7 @@ import {
 } from "../api";
 import {
   clampEveryHours,
+  mergeDrafts,
   notifySchedulesUpdated,
   parseDrafts,
   removeGroupFromSchedules,
@@ -62,29 +63,34 @@ export default function GroupScheduleModal({
 
   const visibleDrafts = useMemo(() => {
     if (!groupId) return [];
-    return drafts.filter((item) => (item.group_ids ?? []).includes(groupId));
+    const normalizedGroupId = groupId.trim().toLowerCase();
+    return drafts.filter((item) =>
+      (item.group_ids ?? []).some((id) => id.trim().toLowerCase() === normalizedGroupId),
+    );
   }, [drafts, groupId]);
 
   function updateDraft(id: string, patch: Partial<ScheduleTime>) {
     setDrafts((current) =>
-      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+      mergeDrafts(current.map((item) => (item.id === id ? { ...item, ...patch } : item))),
     );
   }
 
   function handleAddSchedule() {
     if (!groupId) return;
-    setDrafts((current) => [
-      ...current,
-      {
-        id: `new-${Date.now()}`,
-        kind: "daily",
-        hour: 9,
-        minute: 0,
-        second: 0,
-        every_hours: 6,
-        group_ids: [groupId],
-      },
-    ]);
+    setDrafts((current) =>
+      mergeDrafts([
+        ...current,
+        {
+          id: `new-${Date.now()}`,
+          kind: "daily",
+          hour: 9,
+          minute: 0,
+          second: 0,
+          every_hours: 6,
+          group_ids: [groupId],
+        },
+      ]),
+    );
   }
 
   function handleRemoveFromGroup(scheduleId: string) {

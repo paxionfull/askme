@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from auth.auth_signals import auth_error_should_skip_repair
+from auth.auth_signals import auth_error_should_skip_repair, account_missing_should_skip_repair
 from core.llm import LLMError
 from feed.platform_accounts import ensure_platform_skill, register_platform_account
 from onboarding.async_blocking import run_blocking
@@ -367,10 +367,27 @@ async def run_platform_onboarding(
                     raise
                 except Exception as exc:
                     last_error = str(exc)
+                    skip_auth = auth_error_should_skip_repair(last_error)
+                    skip_soft_empty = spec.fail_mode == "soft" and "列表文章数不足" in last_error
+                    skip_missing = account_missing_should_skip_repair(last_error)
                     if session:
                         session.log("validation", ok=False, error=last_error, attempt=attempt + 1)
                     if session and session.cancelled:
                         raise OnboardingCancelled("接入任务已取消") from exc
+                    # 与 source_onboarding_cursor 一致：ASKME_AUTH_REQUIRED 禁止 auto_repair
+                    if skip_auth:
+                        raise LLMError(
+                            last_error
+                            if last_error.upper().startswith("ASKME_AUTH_REQUIRED")
+                            else f"ASKME_AUTH_REQUIRED 验证需登录授权: {last_error}",
+                            status_code=400,
+                        ) from exc
+                    # 账号不存在/空列表：改共享 skill 无益
+                    if skip_missing or skip_soft_empty:
+                        raise LLMError(
+                            f"skill 验证失败: {last_error}",
+                            status_code=502,
+                        ) from exc
                     if attempt >= MAX_REPAIR_ATTEMPTS - 1:
                         raise LLMError(
                             f"skill 验证失败: {last_error}",

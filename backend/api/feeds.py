@@ -189,9 +189,11 @@ async def get_feed_groups():
 @router.put("/api/feeds/groups")
 async def save_feed_groups(body: FeedGroupsRequest):
     try:
-        previous_group_ids = {str(group.get("id", "")).strip() for group in feed_client.list_groups()}
-        next_group_ids = {group.id.strip() for group in body.groups if group.id.strip()}
-        removed_group_ids = sorted(previous_group_ids - next_group_ids)
+        previous_group_ids = {
+            str(group.get("id", "")).strip().lower()
+            for group in feed_client.list_groups()
+            if str(group.get("id", "")).strip()
+        }
 
         groups, group_order = feed_client.set_layout(
             [
@@ -206,6 +208,12 @@ async def save_feed_groups(body: FeedGroupsRequest):
             ],
             body.group_order,
         )
+        persisted_group_ids = {
+            str(group.get("id", "")).strip().lower()
+            for group in groups
+            if str(group.get("id", "")).strip()
+        }
+        removed_group_ids = sorted(previous_group_ids - persisted_group_ids)
         if body.default_digest_skill:
             feed_registry.set_default_digest_skill(body.default_digest_skill)
         if removed_group_ids:

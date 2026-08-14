@@ -2,8 +2,8 @@
 name: x-platform-discovery
 description: >-
   Discovers X (Twitter) user original posts only (no replies, retweets, or quote
-  tweets) via logged-in GraphQL (Cookie auth_token+ct0), with Nitter/syndication
-  fallback. One skill covers all accounts; screen_name from
+  tweets) via logged-in GraphQL (Cookie auth_token+ct0), with FxEmbed / syndication
+  / Nitter fallback. One skill covers all accounts; screen_name from
   feed_registry.platform_accounts. Use when fetching updates from x.com profiles.
   Requires X Cookie (auth_slot=x).
 ---
@@ -19,9 +19,11 @@ description: >-
 | 目录 | `skills/discovery/x-platform-discovery/` |
 | `account_key` | `screen_name`（不含 `@`） |
 | 鉴权 | 需要 X Cookie（`auth_token` + `ct0`），slot=`x` |
-| 列表 | 登录态 GraphQL `UserTweets` → Nitter 主页 → syndication |
+| 列表 | 登录态 GraphQL `UserTweets`（thread 根帖 + cursor）→ FxEmbed → syndication.x.com → Nitter |
 | 范围 | **只抓原创主帖**；跳过回复、RT、QT 与 `/with_replies` |
 | 实现 | `scripts/discover.py`；`BoundPlatformAdapter` + ContextVar |
+| 字段 | GraphQL User 的 `name`/`screen_name` 读自 `core`（legacy 可能为空） |
+| 更名 | 旧 handle 无法解析时尝试 CamelCase 前缀/常见后缀候选（如 `RedwireSpace`→`Redwire`） |
 
 ## 授权
 

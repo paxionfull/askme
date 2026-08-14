@@ -40,8 +40,13 @@ def _resolve_onboard_group_id(group_id: str | None) -> str | None:
     raise HTTPException(status_code=400, detail=f"分组不存在: {raw}")
 
 
-async def _refresh_onboarded_feed(feed_id: str) -> dict:
-    return await refresh_onboarded_feed(feed_client, feed_id)
+async def _refresh_onboarded_feed(feed_id: str, *, days: int = 3) -> dict:
+    return await refresh_onboarded_feed(
+        feed_client,
+        feed_id,
+        days=max(1, int(days)),
+        proof=False,
+    )
 
 
 async def _watch_onboard_disconnect(request: Request, session) -> None:
@@ -66,6 +71,7 @@ async def _sse_onboard_stream(body: OnboardSourceRequest, request: Request):
         watcher = asyncio.create_task(_watch_onboard_disconnect(request, session))
         llm_config = body.llm_config.model_dump() if body.llm_config else None
         target_group_id = _resolve_onboard_group_id(body.group_id)
+        onboard_days = max(1, min(30, int(body.days)))
         result_data: dict | None = None
 
         yield sse_event(
@@ -112,7 +118,9 @@ async def _sse_onboard_stream(body: OnboardSourceRequest, request: Request):
                     try:
                         async for refresh_event in refresh_with_auto_repair(
                             slug=slug,
-                            do_refresh=lambda fid=feed_id: _refresh_onboarded_feed(fid),
+                            do_refresh=lambda fid=feed_id, d=onboard_days: _refresh_onboarded_feed(
+                                fid, days=d
+                            ),
                             reload_skills=feed_client.reload_skills,
                             session=session,
                             auto_validate=body.auto_validate,
@@ -325,6 +333,7 @@ async def onboard_source(body: OnboardSourceRequest, request: Request):
 
     llm_config = body.llm_config.model_dump() if body.llm_config else None
     target_group_id = _resolve_onboard_group_id(body.group_id)
+    onboard_days = max(1, min(30, int(body.days)))
     result_data: dict | None = None
     async for event in run_onboarding_agent(
         slug=slug,
@@ -348,7 +357,7 @@ async def onboard_source(body: OnboardSourceRequest, request: Request):
         refresh_result: dict | None = None
         async for refresh_event in refresh_with_auto_repair(
             slug=slug,
-            do_refresh=lambda fid=feed_id: _refresh_onboarded_feed(fid),
+            do_refresh=lambda fid=feed_id, d=onboard_days: _refresh_onboarded_feed(fid, days=d),
             reload_skills=feed_client.reload_skills,
             auto_validate=body.auto_validate,
             auto_repair=body.auto_repair,
@@ -382,6 +391,7 @@ async def onboard_source_batch(body: OnboardBatchRequest):
             reload=body.reload,
             group_id=body.group_id,
             auto_repair=body.auto_repair,
+            days=body.days,
         )
         return batch.to_dict()
     except ValueError as exc:

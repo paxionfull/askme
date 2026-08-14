@@ -989,6 +989,7 @@ export function startOnboardBatch(body: {
   auto_validate?: boolean;
   reload?: boolean;
   group_id?: string;
+  days?: number;
 }) {
   return request<OnboardBatchStatus>("/api/sources/onboard/batch", {
     method: "POST",

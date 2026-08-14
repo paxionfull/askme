@@ -82,6 +82,7 @@ class OnboardSourceRequest(BaseModel):
     auto_repair: bool = True
     llm_config: LlmConfigInput | None = None
     group_id: str | None = None
+    days: int = Field(default=3, ge=1, le=30)
 
 
 class OnboardBatchRequest(BaseModel):
@@ -91,6 +92,7 @@ class OnboardBatchRequest(BaseModel):
     reload: bool = True
     auto_repair: bool = True
     group_id: str | None = None
+    days: int = Field(default=3, ge=1, le=30)
 
 
 class RefreshGroupRequest(BaseModel):

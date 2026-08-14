@@ -131,6 +131,16 @@ def _min_body_chars_for(skill_dir: Path) -> int:
     return MIN_BODY_CHARS
 
 
+def _is_x_platform_skill(skill_dir: Path) -> bool:
+    source_yaml = skill_dir / "source.yaml"
+    if not source_yaml.is_file():
+        return skill_dir.name == "x-platform-discovery"
+    text = source_yaml.read_text(encoding="utf-8")
+    if re.search(r"^\s*platform:\s*x\s*$", text, re.MULTILINE | re.I):
+        return True
+    return skill_dir.name == "x-platform-discovery"
+
+
 def _is_platform_skill(skill_dir: Path) -> bool:
     source_yaml = skill_dir / "source.yaml"
     if not source_yaml.is_file():
@@ -229,10 +239,16 @@ def validate_skill(slug: str, *, min_items: int = MIN_LIST_ITEMS) -> dict:
                 raise ValueError(err) from exc
             slot_hint = resolve_slot_hint(skill_dir, getattr(module, "FEED_META", {}) or {})
             low = err.lower()
-            if any(
-                token in low
-                for token in ("401", "403", "unauthorized", "login", "cookie", "未登录", "登录")
-            ):
+            auth_tokens = ("401", "403", "unauthorized", "login", "cookie", "未登录", "登录")
+            matched = [token for token in auth_tokens if token in low]
+            not_auth = (
+                "cookie 已配置" in low
+                or "不存在" in err
+                or "已停用" in err
+                or "无法解析用户" in err
+            )
+            wrap_auth = bool(matched) and not not_auth
+            if wrap_auth:
                 raise ValueError(
                     f"ASKME_AUTH_REQUIRED:slot={slot_hint or 'unknown'} "
                     f"拉取列表失败（疑似需要登录）: {exc}"
@@ -253,6 +269,20 @@ def validate_skill(slug: str, *, min_items: int = MIN_LIST_ITEMS) -> dict:
                 looks_like_login_wall(payload_text) or len(items) == 0
             ):
                 slot_hint = resolve_slot_hint(skill_dir, getattr(module, "FEED_META", {}) or {})
+                cookie_present = False
+                if slot_hint and not looks_like_login_wall(payload_text):
+                    try:
+                        from auth_cookie import get_request_cookie
+
+                        cookie_present = bool((get_request_cookie(slot_hint) or "").strip())
+                    except Exception:
+                        cookie_present = False
+                # Cookie 已配置且非登录墙：空列表是拉取失败，不应伪装成未授权门禁
+                if cookie_present and len(items) == 0 and not looks_like_login_wall(payload_text):
+                    raise ValueError(
+                        f"列表文章数不足（{len(items)} < {min_items}）："
+                        "已配置登录凭证但仍未拉到内容，可能是限流、账号对当前会话不可见或接口变更。"
+                    )
                 raise ValueError(
                     f"ASKME_AUTH_REQUIRED:slot={slot_hint or 'unknown'} "
                     f"列表文章数不足（{len(items)} < {min_items}），站点可能需要登录 Cookie。"
@@ -270,6 +300,11 @@ def validate_skill(slug: str, *, min_items: int = MIN_LIST_ITEMS) -> dict:
         sample_id = sample["id"]
 
         from detail_hints import hints_from_list_item
+
+        if _is_x_platform_skill(skill_dir):
+            from x_access_policy import sleep_between_x_access
+
+            sleep_between_x_access()
 
         hint_payload = hints_from_list_item(sample)
         if hint_payload.get("url"):

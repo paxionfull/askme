@@ -17,6 +17,7 @@ import {
   type OnboardBatchStatus,
   type OnboardSourceResult,
 } from "../api";
+import { normalizeDefaultDays } from "../hooks/useSettings";
 import { useLocale } from "../i18n/LocaleContext";
 import { formatMessage } from "../i18n/messages";
 
@@ -27,6 +28,17 @@ const BATCH_POLL_MS = 800;
 /** 连续「任务不存在」次数达到阈值后才放弃轮询（避免切换天数/后端短暂 reload 立刻清栏） */
 const BATCH_GONE_MAX_MISSES = 5;
 const BATCH_GONE_DETAIL = "批量任务不存在或已结束";
+const DIGEST_DAYS_KEY = "askme.digest.days";
+
+function readOnboardRefreshDays(): number {
+  try {
+    const raw = localStorage.getItem(DIGEST_DAYS_KEY);
+    if (raw) return normalizeDefaultDays(Number(raw));
+  } catch {
+    // ignore quota / private mode
+  }
+  return 1;
+}
 
 function readPersistedBatchId(): string | null {
   try {
@@ -98,7 +110,7 @@ interface OnboardingContextValue {
   job: OnboardingJob | null;
   batch: OnboardBatchStatus | null;
   authRetryUrls: string[];
-  startBatchOnboarding: (entryUrls: string[], groupId?: string) => Promise<void>;
+  startBatchOnboarding: (entryUrls: string[], groupId?: string, days?: number) => Promise<void>;
   startSkillRepair: (
     slug: string,
     payload: { feedback: string; issueTypes: string[]; sampleUrl: string },
@@ -328,7 +340,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   }, [batch?.status]);
 
   const startBatchOnboarding = useCallback(
-    async (entryUrls: string[], groupId?: string) => {
+    async (entryUrls: string[], groupId?: string, days?: number) => {
       const urls = entryUrls.map((url) => url.trim()).filter(Boolean);
       if (urls.length === 0) return;
       // 修复任务进行中时不启动接入；已有 batch 则由后端合并追加
@@ -341,6 +353,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
           auto_validate: true,
           reload: true,
           group_id: groupId,
+          days: days ?? readOnboardRefreshDays(),
         });
         applyBatchStatus(initial);
         if (initial.status === "running") {

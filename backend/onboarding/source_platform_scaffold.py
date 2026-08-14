@@ -570,13 +570,16 @@ def probe_x_profile(match: PlatformMatch) -> dict[str, Any]:
     # 2) Nitter 镜像取全名
     if not profile_name:
         try:
+            import json
             from http_client import fetch_text
+            from x_access_policy import sleep_between_x_access
 
             for mirror in (
                 "https://xcancel.com",
                 "https://nitter.poast.org",
                 "https://nitter.privacyredirect.com",
             ):
+                sleep_between_x_access()
                 try:
                     html = fetch_text(
                         f"{mirror}/{match.user_id}",

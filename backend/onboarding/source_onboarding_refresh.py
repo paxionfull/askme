@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from auth.auth_signals import auth_error_should_skip_repair
+from auth.auth_signals import auth_error_should_skip_repair, account_missing_should_skip_repair
 from feed.feed_errors import FeedError
 from core.llm import LLMError
 from onboarding.source_onboarding_cursor import load_cursor_api_key
@@ -18,25 +18,53 @@ from onboarding.source_skill_repair import (
 
 logger = logging.getLogger(__name__)
 
-# 首拉时间窗：默认「今天」对更新频率不均的源过窄
+# 接入完成后首拉默认时间窗（与前端「今天 / 近 3 天」对齐，可由请求覆盖）
 ONBOARD_REFRESH_DAYS = 3
+# 仅用于显式 proof 调用（非接入主流程；skill 验证在 discovery_validate 内完成）
+ONBOARD_PROOF_PER = 5
+ONBOARD_PROOF_MAX_PAGES = 1
 
 
-async def refresh_onboarded_feed(feed_client, feed_id: str, *, days: int = ONBOARD_REFRESH_DAYS) -> dict[str, Any]:
-    """接入成功后的自动更新：刷新文章列表，并拉取正文（与源页手动更新对齐）。"""
+async def refresh_onboarded_feed(
+    feed_client,
+    feed_id: str,
+    *,
+    days: int = ONBOARD_REFRESH_DAYS,
+    proof: bool = False,
+) -> dict[str, Any]:
+    """接入成功后的自动更新：按时间窗刷新列表，并拉取该范围内全部正文。
+
+    proof=True 时仅拉最近一页列表 + 1 篇正文（调试用）；正常接入应 proof=False。
+    """
     fid = str(feed_id or "").strip()
     if not fid:
         raise FeedError("缺少 feed_id", status_code=400)
 
     feed_client.ensure_feed_visible(fid)
-    result = await feed_client.refresh_feed(fid, days=days)
+    if proof:
+        result = await feed_client.refresh_feed(
+            fid,
+            days=0,
+            max_pages=ONBOARD_PROOF_MAX_PAGES,
+            per=ONBOARD_PROOF_PER,
+        )
+        body_days = 0
+        body_list_limit = 1
+    else:
+        result = await feed_client.refresh_feed(fid, days=days)
+        body_days = days
+        body_list_limit = 0
     if not isinstance(result, dict):
         result = {"message": str(result or "列表已更新"), "ok": True}
 
     try:
         from feed.feed_scheduler import feed_scheduler
 
-        bodies_status = await feed_scheduler._pull_bodies_for_feeds([fid], days=days)
+        bodies_status = await feed_scheduler._pull_bodies_for_feeds(
+            [fid],
+            days=body_days,
+            list_limit=body_list_limit,
+        )
     except Exception as bodies_exc:
         logger.exception("接入后拉取正文异常: feed_id=%s", fid)
         return {
@@ -117,7 +145,9 @@ async def refresh_with_auto_repair(
         return
     except FeedError as first_exc:
         first_error = str(first_exc)
-        if auth_error_should_skip_repair(first_error):
+        if auth_error_should_skip_repair(first_error) or account_missing_should_skip_repair(
+            first_error
+        ):
             raise
         if not auto_repair:
             raise

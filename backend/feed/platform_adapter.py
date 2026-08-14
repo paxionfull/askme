@@ -36,6 +36,19 @@ class BoundPlatformAdapter:
         }
         defaults = getattr(platform_module, "REFRESH_DEFAULTS", None)
         self.REFRESH_DEFAULTS = dict(defaults) if isinstance(defaults, dict) else {}
+        self.PLATFORM = str(
+            account.get("platform") or getattr(platform_module, "PLATFORM", "") or ""
+        ).strip().lower()
+
+    def page_delay_seconds_for_refresh(self) -> float | None:
+        if self.PLATFORM != "x":
+            return None
+        fn = getattr(self._module, "page_delay_seconds_for_refresh", None)
+        if callable(fn):
+            return float(fn())
+        from feed.x_access_policy import x_access_delay_seconds
+
+        return x_access_delay_seconds()
 
     def _call(self, name: str, *args: Any, **kwargs: Any) -> Any:
         fn = getattr(self._module, name)

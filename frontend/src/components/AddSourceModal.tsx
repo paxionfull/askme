@@ -21,6 +21,7 @@ import {
   collectFilesFromDataTransfer,
   type ParsedSkillDirectory,
 } from "../utils/skillDirectory";
+import { useDigest } from "../contexts/DigestContext";
 import { useOnboarding } from "../contexts/OnboardingContext";
 import AuthHandoffPanel from "./AuthHandoffPanel";
 import { useLocale } from "../i18n/LocaleContext";
@@ -65,6 +66,7 @@ export default function AddSourceModal({
 }: AddSourceModalProps) {
   const { t, locale } = useLocale();
   const { job, startBatchOnboarding } = useOnboarding();
+  const { days } = useDigest();
   const [siteUrls, setSiteUrls] = useState("");
   const [groupId, setGroupId] = useState<string>(defaultGroupId);
   const [localError, setLocalError] = useState("");
@@ -390,7 +392,7 @@ export default function AddSourceModal({
     }
 
     onClose();
-    void startBatchOnboarding(urls, groupId);
+    void startBatchOnboarding(urls, groupId, days);
   }
 
   async function handleImportSkill() {

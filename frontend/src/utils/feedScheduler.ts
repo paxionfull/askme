@@ -36,7 +36,11 @@ export function clampEveryHours(value: number): number {
 export function normalizeSchedule(item: ScheduleTime): ScheduleTime {
   const kind = item.kind === "interval" ? "interval" : "daily";
   const groupIds = Array.from(
-    new Set((item.group_ids ?? []).map((id) => id.trim()).filter(Boolean)),
+    new Set(
+      (item.group_ids ?? [])
+        .map((id) => id.trim().toLowerCase())
+        .filter(Boolean),
+    ),
   );
   if (kind === "interval") {
     return {
@@ -58,9 +62,54 @@ export function normalizeSchedule(item: ScheduleTime): ScheduleTime {
   };
 }
 
+function scheduleTimeKey(item: ScheduleTime): string {
+  const n = normalizeSchedule(item);
+  if (n.kind === "interval") return `interval|${n.every_hours}`;
+  return `daily|${n.hour}|${n.minute}|${n.second}`;
+}
+
 function scheduleKey(item: ScheduleTime): string {
   const n = normalizeSchedule(item);
-  return [n.kind, n.hour, n.minute, n.second, n.every_hours, ...(n.group_ids ?? [])].join("|");
+  return [scheduleTimeKey(n), ...(n.group_ids ?? [])].join("|");
+}
+
+export function mergeSchedules(schedules: ScheduleTime[]): ScheduleTime[] {
+  const merged = new Map<string, ScheduleTime>();
+  const order: string[] = [];
+  for (const raw of schedules) {
+    const item = normalizeSchedule(raw);
+    const key = scheduleTimeKey(item);
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, item);
+      order.push(key);
+      continue;
+    }
+    existing.group_ids = Array.from(
+      new Set([...(existing.group_ids ?? []), ...(item.group_ids ?? [])]),
+    );
+  }
+  return order.map((key) => merged.get(key)!);
+}
+
+export function mergeDrafts(drafts: ScheduleDraft[]): ScheduleDraft[] {
+  const merged = new Map<string, ScheduleDraft>();
+  const order: string[] = [];
+  for (const raw of drafts) {
+    const normalized = normalizeSchedule(raw);
+    const item: ScheduleDraft = { ...raw, ...normalized };
+    const key = scheduleTimeKey(item);
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, item);
+      order.push(key);
+      continue;
+    }
+    existing.group_ids = Array.from(
+      new Set([...(existing.group_ids ?? []), ...(item.group_ids ?? [])]),
+    );
+  }
+  return order.map((key) => merged.get(key)!);
 }
 
 export function schedulesEqual(a: ScheduleTime[], b: ScheduleTime[]): boolean {
@@ -78,7 +127,7 @@ export function toDrafts(schedules: ScheduleTime[]): ScheduleDraft[] {
 }
 
 export function parseDrafts(drafts: ScheduleDraft[]): ScheduleTime[] {
-  return drafts.map((item) => normalizeSchedule(item));
+  return mergeSchedules(drafts);
 }
 
 export function timeValue(hour: number, minute: number): string {
@@ -101,7 +150,9 @@ export function removeGroupFromSchedules(
       if (item.id !== scheduleId) return item;
       return {
         ...item,
-        group_ids: (item.group_ids ?? []).filter((id) => id !== groupId),
+        group_ids: (item.group_ids ?? []).filter(
+          (id) => id.trim().toLowerCase() !== groupId.trim().toLowerCase(),
+        ),
       };
     })
     .filter((item) => (item.group_ids ?? []).length > 0);

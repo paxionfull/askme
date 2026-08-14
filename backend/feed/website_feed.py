@@ -43,10 +43,17 @@ class WebsiteFeed:
         else:
             max_pages = 0
         hard_max_pages = int(overrides.get("hard_max_pages", 500))
-        # 只入库「今天 / 近 N 天」范围内文章；翻到更早内容即停（假定列表时间倒序）
-        days = max(1, int(overrides.get("days", 1)))
-        cutoff = calendar_scope_cutoff(days)
-        range_label = days_range_label(days)
+        # 只入库「今天 / 近 N 天」范围内文章；翻到更早内容即停（假定列表时间倒序）。
+        # days<=0：不按发布时间过滤（接入首拉等场景，先拿最近一页列表）。
+        raw_days = overrides.get("days", 1)
+        if raw_days is not None and int(raw_days) <= 0:
+            days = 0
+            cutoff = None
+            range_label = "最近列表"
+        else:
+            days = max(1, int(raw_days))
+            cutoff = calendar_scope_cutoff(days)
+            range_label = days_range_label(days)
 
         before_count = self.store.count_articles(self.feed_id)
         before_latest = self.store.latest_published_at(self.feed_id)
@@ -80,7 +87,7 @@ class WebsiteFeed:
                     continue
                 seen.add(article_id)
                 published = parse_publish_time(str(normalized.get("published_at") or ""))
-                if published is None or published < cutoff:
+                if cutoff is not None and (published is None or published < cutoff):
                     too_old += 1
                     continue
                 in_scope += 1
@@ -103,19 +110,25 @@ class WebsiteFeed:
             if pending_rows:
                 scoped_upserts += self.store.upsert_articles(self.feed_id, pending_rows)
             # 本页已进入时间范围外（且假定倒序）→ 停止翻页
-            if too_old > 0 and in_scope == 0:
-                break
-            if too_old > 0 and in_scope > 0:
-                # 本页后半段已出范围，不必再翻
-                break
+            if cutoff is not None:
+                if too_old > 0 and in_scope == 0:
+                    break
+                if too_old > 0 and in_scope > 0:
+                    # 本页后半段已出范围，不必再翻
+                    break
             # 按时间倒序：本页范围内全是库里已有 → 已追上最新
             if already_known > 0 and added == 0 and before_count > 0:
                 break
             if not self.adapter.has_next_page(payload):
                 break
-            # 内存切片分页（sitemap 缓存）通常极快，可跳过页间 sleep；
-            # 真网络分页、近 N 天多页：一律限速，降低频控。
-            if fetch_elapsed >= 0.15 or days > 1:
+            page_delay_fn = getattr(self.adapter, "page_delay_seconds_for_refresh", None)
+            if callable(page_delay_fn):
+                custom_delay = page_delay_fn()
+                if custom_delay is not None:
+                    await asyncio.sleep(custom_delay)
+                elif fetch_elapsed >= 0.15 or days > 1:
+                    await asyncio.sleep(page_delay_seconds())
+            elif fetch_elapsed >= 0.15 or days > 1:
                 await asyncio.sleep(page_delay_seconds())
             page += 1
 
@@ -145,6 +158,7 @@ class WebsiteFeed:
             "article_count": article_count,
             "new_article_count": new_count,
             "scoped_upserts": scoped_upserts,
+            "list_items_seen": len(seen),
             "days": days,
             "elapsed_seconds": round(elapsed_seconds, 2),
             "has_new_content": has_new_content,

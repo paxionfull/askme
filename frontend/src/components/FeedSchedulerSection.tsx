@@ -13,6 +13,7 @@ import {
   SCHEDULES_UPDATED_EVENT,
   clampEveryHours,
   formatScheduleSummary,
+  mergeDrafts,
   notifySchedulesUpdated,
   parseDrafts,
   schedulesEqual,
@@ -185,25 +186,27 @@ export default function FeedSchedulerSection() {
 
   function updateDraft(id: string, patch: Partial<ScheduleTime>) {
     setDrafts((current) =>
-      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+      mergeDrafts(current.map((item) => (item.id === id ? { ...item, ...patch } : item))),
     );
     setSaved(false);
   }
 
   function handleAddSchedule() {
     const defaultGroupId = groupOptions[0]?.id;
-    setDrafts((current) => [
-      ...current,
-      {
-        id: `new-${Date.now()}`,
-        kind: "daily",
-        hour: 8,
-        minute: 0,
-        second: 0,
-        every_hours: 6,
-        group_ids: defaultGroupId ? [defaultGroupId] : [],
-      },
-    ]);
+    setDrafts((current) =>
+      mergeDrafts([
+        ...current,
+        {
+          id: `new-${Date.now()}`,
+          kind: "daily",
+          hour: 8,
+          minute: 0,
+          second: 0,
+          every_hours: 6,
+          group_ids: defaultGroupId ? [defaultGroupId] : [],
+        },
+      ]),
+    );
     setSaved(false);
   }
 

@@ -427,7 +427,10 @@ async def run_cursor_skill_task(
 
                     validation: dict[str, Any] | None = None
                     if auto_validate:
-                        from auth.auth_signals import auth_error_should_skip_repair
+                        from auth.auth_signals import (
+                            account_missing_should_skip_repair,
+                            auth_error_should_skip_repair,
+                        )
                         from onboarding.source_skill_repair import (
                             build_validation_failure_feedback,
                             iter_auto_repair_agent,
@@ -480,6 +483,11 @@ async def run_cursor_skill_task(
                                             f"{last_error}"
                                         ),
                                         status_code=400,
+                                    ) from exc
+                                if account_missing_should_skip_repair(last_error):
+                                    raise LLMError(
+                                        f"skill 验证失败: {last_error}",
+                                        status_code=502,
                                     ) from exc
                                 if attempt >= attempts - 1:
                                     raise LLMError(

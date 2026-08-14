@@ -239,3 +239,9 @@ def classify_exception_as_auth(exc: BaseException | str) -> dict[str, Any] | Non
 def auth_error_should_skip_repair(message: str) -> bool:
     """auto_repair 应跳过：明确的授权门禁，而非泛化的 403/cookie 字样。"""
     return is_auth_gate_error(message) or bool(parse_auth_required_slot(message))
+
+
+def account_missing_should_skip_repair(message: str) -> bool:
+    """账号不存在/已停用：改 skill 无益，禁止 auto_repair。"""
+    text = message or ""
+    return "不存在" in text or "已停用" in text

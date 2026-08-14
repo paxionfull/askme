@@ -120,6 +120,8 @@ class BatchItem:
 def _user_facing_failure_message(exc: BaseException, *, is_platform: bool = False) -> str:
     """区分「要登录」与「适配器/代码问题」，避免用户误判。"""
     text = str(exc).strip() or "接入失败"
+    if "不存在" in text or "已停用" in text:
+        return text
     if text.upper().startswith("ASKME_AUTH_REQUIRED") or "需要登录" in text:
         return text
     if is_platform:
@@ -137,6 +139,8 @@ def _user_facing_failure_message(exc: BaseException, *, is_platform: bool = Fals
 def _user_facing_refresh_failure_message(exc: BaseException) -> str:
     """首拉失败给用户看的话术（隐藏内部状态错误）。"""
     text = str(exc).strip() or "首次拉取失败"
+    if "不存在" in text or "已停用" in text:
+        return text
     lowered = text.lower()
     if "数据源已移除" in text or "skill 未装载" in text:
         return (
@@ -193,6 +197,27 @@ def _auth_handoff_message(meta: dict[str, str], message: str, slot: str) -> str:
     return f"需要登录授权（{label}）：请完成 Cookie 授权后重试。"
 
 
+def _is_progress_status_message(message: str) -> bool:
+    """接入过程中的阶段文案，不能当作失败根因展示。"""
+    text = (message or "").strip()
+    if not text:
+        return True
+    progress_markers = (
+        "正在验证 skill",
+        "正在探测",
+        "接入启动中",
+        "正在准备修复",
+        "正在启动 Cursor",
+        "Cursor 正在",
+        "命令执行完成",
+        "文件操作完成",
+        "自动修复中",
+        "平台账号已登记",
+        "登记",
+    )
+    return any(text.startswith(m) or m in text for m in progress_markers)
+
+
 def _auth_exhausted_message(slot: str, message: str, *, slug: str = "") -> str:
     label = str((get_slot_meta(slot) or {}).get("label") or slot)
     if _is_antibot_auth_message(message):
@@ -204,37 +229,57 @@ def _auth_exhausted_message(slot: str, message: str, *, slug: str = "") -> str:
             f"{extra}"
             " 若多次失败，该站点可能无法在本环境稳定接入。"
         )
+    reason = (message or "").strip()
+    if _is_progress_status_message(reason):
+        reason = "首拉未获取到文章（列表为空）"
     return (
         f"「{label}」Cookie 已保存，但拉取仍失败。"
-        f" 原因：{(message or '未知')[:220]}。"
+        f" 原因：{reason[:220]}。"
         " 请确认 Cookie 来自真实登录且未过期；若仍失败，该源可能暂不支持接入。"
     )
 
 
-def _zero_article_failure_message(item: BatchItem, *, slot: str = "") -> str:
-    if slot and slot_configured(slot):
-        return _auth_exhausted_message(
-            slot,
-            item.error or item.message or "",
-            slug=item.slug,
-        )
-    if _skill_requires_cookie(item.slug):
+def _zero_article_failure_message(
+    item: BatchItem,
+    *,
+    slot: str = "",
+    refresh_result: dict[str, Any] | None = None,
+) -> str:
+    _ = slot  # 保留参数以兼容旧调用；空列表不再归因于 Cookie
+    if _skill_requires_cookie(item.slug) and not slot_configured(slot):
         meta = get_slot_meta(slot) if slot else None
         label = str((meta or {}).get("label") or slot or item.name or item.slug)
         return (
             f"「{label}」首拉未获取到文章：需要有效的反爬/登录 Cookie。"
             " 请完成授权后重试；若已授权仍失败，令牌可能已过期。"
         )
-    return (
-        f"「{item.name or item.slug}」首拉未获取到文章，"
-        "可能是反爬拦截、网络不可达或列表解析失败，请稍后重试或更换入口 URL。"
-    )
+    return _neutral_empty_refresh_message(item, refresh_result=refresh_result)
 
 
 def _refresh_has_articles(refresh_result: dict[str, Any]) -> bool:
-    return int(refresh_result.get("article_count") or 0) > 0 or int(
-        refresh_result.get("new_article_count") or 0
-    ) > 0
+    if int(refresh_result.get("scoped_upserts") or 0) > 0:
+        return True
+    if int(refresh_result.get("article_count") or 0) > 0:
+        return True
+    return int(refresh_result.get("new_article_count") or 0) > 0
+
+
+def _neutral_empty_refresh_message(
+    item: BatchItem,
+    *,
+    refresh_result: dict[str, Any] | None = None,
+) -> str:
+    label = item.name or item.slug
+    list_seen = int((refresh_result or {}).get("list_items_seen") or 0)
+    if list_seen <= 0:
+        return (
+            f"「{label}」首拉未获取到文章：账号列表为空或暂无可解析的原创帖。"
+            " 请确认入口 URL 是否正确，或稍后重试。"
+        )
+    return (
+        f"「{label}」已拉取到列表条目但未入库新文章。"
+        " 可能是条目均已存在或字段解析不完整，请稍后重试。"
+    )
 
 
 def _mark_refresh_empty_failure(
@@ -310,26 +355,16 @@ def _mark_needs_auth(item: BatchItem, message: str, *, slot: str | None = None) 
 
 
 def _refresh_indicates_auth(refresh_result: dict[str, Any], entry_url: str, slug: str) -> str | None:
-    """首拉成功但 0 篇时，对已知登录站 / source 声明返回 slot。"""
-    article_count = int(refresh_result.get("article_count") or 0)
-    new_count = int(refresh_result.get("new_article_count") or 0)
-    if article_count > 0 or new_count > 0:
-        return None
-    platform_match = detect_platform(entry_url)
-    if platform_match and not platform_match.requires_cookie:
-        return None
-    slot = resolve_slot_from_url(entry_url)
-    if slot:
-        return slot
-    # source.yaml requires_cookie
-    source_yaml = skill_dir_for(slug) / "source.yaml"
-    if source_yaml.is_file():
-        text = source_yaml.read_text(encoding="utf-8")
-        if "requires_cookie: true" in text or "requires_auth: true" in text:
-            import re
-
-            m = re.search(r"auth_slot:\s*([a-z0-9_-]+)", text, re.I)
-            return (m.group(1).lower() if m else slot) or "unknown"
+    """仅当刷新结果明确指向鉴权失败时返回 slot；空列表不等同于 Cookie 失效。"""
+    _ = slug
+    if refresh_result.get("auth_required"):
+        return (
+            str(refresh_result.get("auth_slot") or "").strip().lower()
+            or resolve_slot_from_url(entry_url)
+        )
+    message = str(refresh_result.get("message") or refresh_result.get("error") or "")
+    if message and auth_error_should_skip_repair(message):
+        return resolve_slot_from_url(entry_url)
     return None
 
 
@@ -339,14 +374,23 @@ def _empty_refresh_auth_decision(
     entry_url: str,
     slug: str = "",
     message: str = "",
+    item: BatchItem | None = None,
+    refresh_result: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
-    """首拉 0 篇：True=引导授权，False=应明确失败（不可假成功）。"""
+    """首拉 0 篇：True=引导授权，False=明确失败（不可假成功）。"""
+    _ = entry_url, slug, message
     sync_runtime_cookies()
     cookie = get_cookie_for_slot(slot)
     slot_id = slot.strip().lower()
     if not cookie_satisfies_slot(slot, cookie) or not slot_configured(slot_id):
         return True, "未配置有效 Cookie，请完成登录授权后重试"
-    return False, _auth_exhausted_message(slot_id, message, slug=slug)
+    if item is not None:
+        return False, _neutral_empty_refresh_message(item, refresh_result=refresh_result)
+    label = str((get_slot_meta(slot_id) or {}).get("label") or slot_id)
+    return False, (
+        f"「{label}」首拉未获取到文章：账号列表为空或暂无可解析的原创帖。"
+        " 请确认入口 URL 是否正确，或稍后重试。"
+    )
 
 
 def _apply_empty_refresh_outcome(
@@ -362,6 +406,8 @@ def _apply_empty_refresh_outcome(
         entry_url=item.entry_url,
         slug=item.slug,
         message=item.error or item.message or "",
+        item=item,
+        refresh_result=refresh_result,
     )
     if needs_auth:
         _mark_needs_auth(item, detail, slot=slot)
@@ -390,7 +436,11 @@ def _finish_refresh_success(
     phase: str = "done",
 ) -> None:
     if not _refresh_has_articles(refresh_result):
-        detail = _zero_article_failure_message(item)
+        detail = _zero_article_failure_message(
+            item,
+            slot=str(item.auth_slot or resolve_slot_from_url(item.entry_url) or ""),
+            refresh_result=refresh_result,
+        )
         _mark_refresh_empty_failure(
             item,
             slot=str(item.auth_slot or resolve_slot_from_url(item.entry_url) or ""),
@@ -411,6 +461,8 @@ def _exception_needs_auth(exc: BaseException, *, entry_url: str = "") -> dict[st
     if platform_match and not platform_match.requires_cookie:
         return None
     info = classify_exception_as_auth(exc)
+    if "不存在" in str(exc) or "已停用" in str(exc):
+        return None
     if not info:
         return None
     # 硬门禁一定走 needs_auth；泛化 auth 信号也引导授权（避免当代码失败）
@@ -488,10 +540,20 @@ def _refresh_reused_platform_display_name(item: BatchItem) -> str | None:
     return name
 
 
-async def _refresh_onboarded_feed(feed_client, feed_id: str) -> dict[str, Any]:
-    from onboarding.source_onboarding_refresh import refresh_onboarded_feed
+async def _refresh_onboarded_feed(
+    feed_client,
+    feed_id: str,
+    *,
+    days: int | None = None,
+) -> dict[str, Any]:
+    from onboarding.source_onboarding_refresh import ONBOARD_REFRESH_DAYS, refresh_onboarded_feed
 
-    return await refresh_onboarded_feed(feed_client, feed_id)
+    return await refresh_onboarded_feed(
+        feed_client,
+        feed_id,
+        days=max(1, int(days or ONBOARD_REFRESH_DAYS)),
+        proof=False,
+    )
 
 
 @dataclass
@@ -505,6 +567,7 @@ class OnboardingBatch:
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY
     group_id: str | None = None
     auto_repair: bool = True
+    refresh_days: int = 3
     _task: asyncio.Task | None = field(default=None, repr=False)
     _sem: asyncio.Semaphore | None = field(default=None, repr=False)
     _wake: asyncio.Event | None = field(default=None, repr=False)
@@ -724,7 +787,9 @@ async def _run_item(
                 refresh_result: dict[str, Any] | None = None
                 async for refresh_event in refresh_with_auto_repair(
                     slug=item.slug,
-                    do_refresh=lambda fid=feed_id: _refresh_onboarded_feed(feed_client, fid),
+                    do_refresh=lambda fid=feed_id, d=batch.refresh_days: _refresh_onboarded_feed(
+                        feed_client, fid, days=d
+                    ),
                     reload_skills=feed_client.reload_skills,
                     session=session,
                     auto_validate=batch.auto_validate,
@@ -823,8 +888,8 @@ async def _run_item(
                         refresh_result: dict[str, Any] | None = None
                         async for refresh_event in refresh_with_auto_repair(
                             slug=item.slug,
-                            do_refresh=lambda fid=item.feed_id: _refresh_onboarded_feed(
-                                feed_client, fid
+                            do_refresh=lambda fid=item.feed_id, d=batch.refresh_days: _refresh_onboarded_feed(
+                                feed_client, fid, days=d
                             ),
                             reload_skills=feed_client.reload_skills,
                             session=session,
@@ -1135,6 +1200,7 @@ async def start_batch(
     reload: bool = True,
     group_id: str | None = None,
     auto_repair: bool = True,
+    days: int = 3,
 ) -> OnboardingBatch:
     global _active_batch_id
 
@@ -1179,6 +1245,7 @@ async def start_batch(
         max_concurrency=min(10, max(1, max_concurrency or DEFAULT_MAX_CONCURRENCY)),
         group_id=gid,
         auto_repair=auto_repair,
+        refresh_days=max(1, min(30, int(days))),
     )
 
     with _batch_lock:

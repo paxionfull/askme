@@ -256,7 +256,8 @@ export function DigestProvider({ children }: { children: ReactNode }) {
 
   const bodiesReady = bodiesLoadedForDays === days && bodyCount > 0;
   const indexReady = indexBuiltForDays === days && indexChunkCount > 0;
-  const digestBusy = loadingBodies || loadingIndex || generating;
+  // 索引在后台跑，不锁 Brief / 其它操作；仅正文拉取与生成摘要视为 busy
+  const digestBusy = loadingBodies || generating;
 
   const reloadSummaryGroups = useCallback(async () => {
     try {
@@ -609,7 +610,8 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         llmConfig,
         scopedIds.length > 0 ? scopedIds : undefined,
       );
-      await watchIndexJob();
+      // 任务已在后端后台跑；前端只轮询状态，不阻塞调用方（确认弹窗可立即关闭）
+      void watchIndexJob();
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : t("digestIndexFailed"));
       setIndexStatusMessage("");

@@ -50,6 +50,7 @@ export function useIndexBuildConfirm() {
   );
   const [previewFailed, setPreviewFailed] = useState(false);
 
+  // 索引进行中禁止重复启动；正文/摘要 busy 时也先不抢资源
   const indexBuildBusy = loadingIndex || digestBusy;
   const embeddingConfigured = isEmbeddingConfigured(settings);
 
@@ -99,11 +100,14 @@ export function useIndexBuildConfirm() {
     clearErrors();
     try {
       const scopedIds = (pending.feedIds ?? []).map((id) => id.trim()).filter(Boolean);
+      // buildIndex 仅等待任务启动；完成后立即关弹窗，进度由顶部 banner 后台展示
       await buildIndex(scopedIds.length > 0 ? scopedIds : undefined);
       setOpen(false);
       setPending(null);
       setPreview(null);
       setPreviewFailed(false);
+    } catch {
+      // 启动失败时错误已由 DigestContext 写入 loadError，弹窗保持可关
     } finally {
       setConfirmLoading(false);
     }

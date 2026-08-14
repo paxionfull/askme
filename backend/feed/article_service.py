@@ -8,13 +8,21 @@ from urllib.parse import urlparse, urlunparse
 
 from chat.chunk_service import ChunkService
 from feed.feed_client import FeedClient
+from feed.x_access_policy import is_x_feed_id, x_access_delay_seconds
 from core.time_scope import calendar_scope_cutoff, filter_articles_by_days, parse_publish_time
 
 ARTICLE_CHAR_LIMIT = 3000
 TOTAL_CHAR_LIMIT = 80_000
 CONTEXT_CACHE_TTL = 86400.0
 DEFAULT_BODY_FETCH_CONCURRENCY = 4
+DEFAULT_BODY_FETCH_DELAY_SECONDS = 0.35
 DEFAULT_FEED_LIST_LIMIT = 20
+
+
+def _body_fetch_delay_seconds(feed_id: str) -> float:
+    if is_x_feed_id(feed_id):
+        return x_access_delay_seconds()
+    return DEFAULT_BODY_FETCH_DELAY_SECONDS
 
 
 def _xml_escape(text: str) -> str:
@@ -363,7 +371,7 @@ class ArticleService:
             feed_id_set = set(feed_ids)
             feeds = [feed for feed in feeds if feed.get("id") in feed_id_set]
 
-        cutoff = calendar_scope_cutoff(days)
+        cutoff = None if int(days) <= 0 else calendar_scope_cutoff(days)
 
         async def _articles_for_feed(feed: dict) -> list[dict]:
             feed_id = feed.get("id", "")
@@ -374,9 +382,10 @@ class ArticleService:
             articles = await self.client.get_articles(feed_id, limit=None, include_content=False)
             recent: list[dict] = []
             for article in articles:
-                published = parse_publish_time(article.get("published_at", ""))
-                if published is None or published < cutoff:
-                    continue
+                if cutoff is not None:
+                    published = parse_publish_time(article.get("published_at", ""))
+                    if published is None or published < cutoff:
+                        continue
                 recent.append(
                     {
                         **article,
@@ -416,7 +425,7 @@ class ArticleService:
                 return []
 
             articles = await self.client.get_articles(feed_id, limit=fetch_limit, include_content=False)
-            if days is not None:
+            if days is not None and int(days) > 0:
                 articles = filter_articles_by_days(articles, days)
             elif limit is not None and limit > 0:
                 articles = articles[:limit]
@@ -513,7 +522,7 @@ class ArticleService:
                         except Exception:
                             pass
                 # 正文逐篇限速，降低同站连刷触发 429
-                await asyncio.sleep(0.35)
+                await asyncio.sleep(_body_fetch_delay_seconds(feed_id))
                 return {
                     **article,
                     "content_html": content_html,
