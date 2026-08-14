@@ -21,12 +21,18 @@ import {
   type RefreshProgress,
 } from "../api";
 import { collectAuthSlotsFromMessages, parseAuthRequiredSlot } from "../utils/authSlot";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
+import type { Locale } from "../i18n/locale";
 
-function formatFailures(failures: RefreshFeedFailure[]): string {
+function formatFailures(failures: RefreshFeedFailure[], locale: Locale): string {
   return [
-    `以下 ${failures.length} 个数据源更新失败（多为网络无法访问、超时或站点拦截）：`,
-    ...failures.map(
-      (item) => `· ${item.feed_name || item.feed_id}：${item.error || "未知错误"}`,
+    formatMessage(locale, "feedRefreshFailuresHeader", { count: failures.length }),
+    ...failures.map((item) =>
+      formatMessage(locale, "feedRefreshFailureLine", {
+        name: item.feed_name || item.feed_id,
+        error: item.error || formatMessage(locale, "feedRefreshUnknownError", {}),
+      }),
     ),
   ].join("\n");
 }
@@ -68,20 +74,35 @@ function writeDismissedRunAt(runAt: number | null | undefined) {
   }
 }
 
-function formatProgressMessage(status: FeedSchedulerConfig): string {
+function formatProgressMessage(status: FeedSchedulerConfig, locale: Locale): string {
   const item = status.refresh_progress;
   const queued = item?.queued ?? 0;
-  const queueHint = queued > 0 ? `（排队 ${queued}）` : "";
+  const queueHint =
+    queued > 0 ? formatMessage(locale, "feedRefreshQueued", { queued }) : "";
   if (!item || item.total <= 0) {
-    return status.refresh_progress?.scope === "group"
-      ? `正在更新分组「${status.refresh_progress.group_name || ""}」…${queueHint}`
-      : `正在更新数据源…${queueHint}`;
+    return item?.scope === "group"
+      ? formatMessage(locale, "feedRefreshUpdatingGroup", {
+          name: status.refresh_progress?.group_name || "",
+          queue: queueHint,
+        })
+      : formatMessage(locale, "feedRefreshUpdating", { queue: queueHint });
   }
   if (item.scope === "group") {
-    const label = item.group_name || "分组";
-    return `正在更新「${label}」${item.current}/${item.total}：${item.feed_name || "…"}${queueHint}`;
+    const label = item.group_name || formatMessage(locale, "feedRefreshGroupFallback", {});
+    return formatMessage(locale, "feedRefreshUpdatingGroupProgress", {
+      label,
+      current: item.current,
+      total: item.total,
+      feed: item.feed_name || "…",
+      queue: queueHint,
+    });
   }
-  return `正在更新 ${item.current}/${item.total}：${item.feed_name || "…"}${queueHint}`;
+  return formatMessage(locale, "feedRefreshUpdatingProgress", {
+    current: item.current,
+    total: item.total,
+    feed: item.feed_name || "…",
+    queue: queueHint,
+  });
 }
 
 interface FeedRefreshContextValue {
@@ -125,6 +146,7 @@ interface FeedRefreshContextValue {
 const FeedRefreshContext = createContext<FeedRefreshContextValue | null>(null);
 
 export function FeedRefreshProvider({ children }: { children: ReactNode }) {
+  const { t, locale } = useLocale();
   const [refreshingAll, setRefreshingAll] = useState(false);
   const [refreshingGroupId, setRefreshingGroupId] = useState<string | null>(null);
   const [refreshingFeedId, setRefreshingFeedId] = useState<string | null>(null);
@@ -133,7 +155,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
   const [resultMessage, setResultMessage] = useState("");
   const [error, setError] = useState("");
   const [failures, setFailures] = useState<RefreshFeedFailure[]>([]);
-  const [bannerTitle, setBannerTitle] = useState("更新数据源");
+  const [bannerTitle, setBannerTitle] = useState("");
   const [authFailureUrls, setAuthFailureUrls] = useState<string[]>([]);
   const [authFailureSlots, setAuthFailureSlots] = useState<string[]>([]);
   const [authFailureDetected, setAuthFailureDetected] = useState(false);
@@ -146,11 +168,14 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
     () => {},
   );
 
-  const isCancelledStatus = useCallback((status: FeedSchedulerConfig) => {
-    if (status.last_refresh_cancelled) return true;
-    const msg = status.last_refresh_message || "";
-    return msg.includes("已停止");
-  }, []);
+  const isCancelledStatus = useCallback(
+    (status: FeedSchedulerConfig) => {
+      if (status.last_refresh_cancelled) return true;
+      const msg = status.last_refresh_message || "";
+      return msg.includes(t("feedRefreshStopped"));
+    },
+    [t],
+  );
 
   const refreshBusy =
     refreshingAll || Boolean(refreshingGroupId) || Boolean(refreshingFeedId);
@@ -189,7 +214,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
       lastShownRunAtRef.current = status.last_run_at ?? null;
 
       const failureDetail =
-        nextFailures.length > 0 ? formatFailures(nextFailures) : "";
+        nextFailures.length > 0 ? formatFailures(nextFailures, locale) : "";
 
       if (feedCount === 0 && nextFailures.length > 0) {
         setResultMessage("");
@@ -206,7 +231,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
       setAuthFailureUrls([]);
       applyAuthFailures(nextFailures, [summary, failureDetail]);
     },
-    [applyAuthFailures, markFeedsNeedReload],
+    [applyAuthFailures, locale, markFeedsNeedReload],
   );
 
   applyFinishedStatusRef.current = applyFinishedStatus;
@@ -217,7 +242,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         if (generation !== generationRef.current) return;
         setProgress(current.refresh_progress ?? null);
         if (current.refresh_running) {
-          setStatusMessage(formatProgressMessage(current));
+          setStatusMessage(formatProgressMessage(current, locale));
           const item = current.refresh_progress;
           if (item?.scope === "group" && item.group_id) {
             setRefreshingAll(false);
@@ -242,7 +267,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         cancelled: stopRequestedRef.current || isCancelledStatus(status),
       };
     },
-    [isCancelledStatus],
+    [isCancelledStatus, locale],
   );
 
   const beginWatch = useCallback(
@@ -302,7 +327,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         if (generation !== generationRef.current) {
           return { cancelled: stopRequestedRef.current };
         }
-        const message = err instanceof Error ? err.message : "更新失败";
+        const message = err instanceof Error ? err.message : t("feedRefreshFailed");
         if (alreadyWatching) {
           setError(message);
           return { cancelled: stopRequestedRef.current };
@@ -327,7 +352,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [watchUntilComplete],
+    [watchUntilComplete, t],
   );
 
   const startRefreshAll = useCallback(
@@ -335,11 +360,11 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
       return beginWatch({
         scope: "all",
         start: () => refreshAllFeeds(days),
-        startingMessage: "正在启动更新全部数据源…",
-        title: "更新全部",
+        startingMessage: t("feedRefreshStartingAll"),
+        title: t("feedRefreshAllTitle"),
       });
     },
-    [beginWatch],
+    [beginWatch, t],
   );
 
   const startRefreshSelected = useCallback(
@@ -352,12 +377,12 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         scope: "all",
         start: () => refreshAllFeeds(days, ids),
         startingMessage: label
-          ? `正在启动更新「${label}」…`
-          : `正在启动更新所选 ${ids.length} 个源…`,
-        title: "更新所选",
+          ? formatMessage(locale, "feedRefreshStartingFeed", { name: label })
+          : formatMessage(locale, "feedRefreshStartingSelected", { count: ids.length }),
+        title: t("feedRefreshSelectedTitle"),
       });
     },
-    [beginWatch],
+    [beginWatch, locale, t],
   );
 
   const startRefreshGroup = useCallback(
@@ -366,11 +391,11 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         scope: "group",
         groupId,
         start: () => refreshGroupFeeds(groupId, days),
-        startingMessage: `正在启动更新分组「${groupName}」…`,
-        title: "更新分组",
+        startingMessage: formatMessage(locale, "feedRefreshStartingGroup", { name: groupName }),
+        title: t("feedRefreshGroupTitle"),
       });
     },
-    [beginWatch],
+    [beginWatch, locale, t],
   );
 
   const startRefreshFeed = useCallback(
@@ -385,12 +410,12 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         scope: "feed",
         feedId,
         start: () => refreshFeed(feedId, days),
-        startingMessage: `正在启动更新「${label}」…`,
-        title: "刷新数据源",
+        startingMessage: formatMessage(locale, "feedRefreshStartingFeed", { name: label }),
+        title: t("feedRefreshFeedTitle"),
         authRetryUrl: entryUrl,
       });
     },
-    [beginWatch],
+    [beginWatch, locale, t],
   );
 
   const stopRefresh = useCallback(() => {
@@ -429,20 +454,20 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
           if (progressItem?.scope === "group" && progressItem.group_id) {
             setRefreshingGroupId(progressItem.group_id);
             setRefreshingAll(false);
-            setBannerTitle("更新分组");
+            setBannerTitle(t("feedRefreshGroupTitle"));
           } else {
             setRefreshingGroupId(null);
             setRefreshingAll(true);
-            setBannerTitle("更新全部");
+            setBannerTitle(t("feedRefreshAllTitle"));
           }
           setRefreshingFeedId(null);
           setProgress(progressItem ?? null);
-          setStatusMessage(formatProgressMessage(status));
+          setStatusMessage(formatProgressMessage(status, locale));
           setError("");
           setResultMessage("");
 
           try {
-            await watchUntilComplete(formatProgressMessage(status), generation);
+            await watchUntilComplete(formatProgressMessage(status, locale), generation);
           } finally {
             if (generation === generationRef.current) {
               setRefreshingAll(false);
@@ -461,10 +486,10 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
         if (runAt != null && dismissed != null && Math.abs(dismissed - runAt) < 1) return;
         if (jobInFlightRef.current) return;
 
-        setBannerTitle("定时更新有失败");
+        setBannerTitle(t("feedRefreshScheduledFailed"));
         applyFinishedStatusRef.current(
           status,
-          status.last_refresh_message || "上次定时更新有失败",
+          status.last_refresh_message || t("feedRefreshScheduledFailedMsg"),
         );
       } catch {
         // ignore

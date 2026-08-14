@@ -7,6 +7,9 @@ import {
 } from "../api";
 import { formatFeedSyncTime, formatRelativePublished } from "../utils/formatSyncTime";
 import { getFeedLastReadArticleId, markFeedArticleRead } from "../utils/lastRead";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage, type MessageKey } from "../i18n/messages";
+import { IconRefresh } from "./icons/NavIcons";
 
 interface ArticleListProps {
   feedId: string | null;
@@ -44,45 +47,42 @@ function ExternalLinkIcon() {
   );
 }
 
-function resolveBodyError(body?: StoredArticleBody | null, fallback = "该文章暂无正文内容") {
+function resolveBodyError(body: StoredArticleBody | null | undefined, t: (key: MessageKey) => string) {
   const status = body?.body_status ?? "";
   const detail = body?.body_detail?.trim() ?? "";
   if (status === "anti_bot") {
-    return detail || "检测到反爬/机器人挑战，建议稍后重试或切换可稳定来源";
+    return detail || t("articleAntiBot");
   }
   if (status === "auth_required") {
-    return detail || "该页面需要登录或订阅权限，请先完成账号授权后重试";
+    return detail || t("articleAuthRequired");
   }
   if (status === "parse_failed") {
-    return detail || "页面可访问，但暂未解析出正文内容";
+    return detail || t("articleParseFailed");
   }
   if (status === "transient_error") {
-    return detail || "站点暂时不可用，请稍后重试";
+    return detail || t("articleSiteUnavailable");
   }
-  return detail || fallback;
-}
-
-function bodyHasContent(body?: StoredArticleBody | null): boolean {
-  return Boolean(body?.content_html?.trim() || (body?.plain_text ?? "").trim());
+  return detail || t("articleNoBody");
 }
 
 function resolveTakeoverHint(
   status: string,
-  _feedId: string | null,
-): { title: string; actionLabel?: string } | null {
+  t: (key: MessageKey) => string,
+): { title: string; action?: "settings" | "original" } | null {
   if (status === "auth_required") {
-    return {
-      title: "该站点需要登录或订阅权限，可到设置页添加 Cookie 授权，或先打开原文登录后再重试。",
-      actionLabel: "去设置页",
-    };
+    return { title: t("articleAuthHint"), action: "settings" };
   }
   if (status === "anti_bot") {
-    return { title: "检测到反爬挑战，建议先人工打开原文完成验证，再返回重试。", actionLabel: "打开原文" };
+    return { title: t("articleAntiBotHint"), action: "original" };
   }
   if (status === "parse_failed") {
-    return { title: "页面可访问但解析失败，建议反馈该数据源以修复解析规则。" };
+    return { title: t("articleParseHint") };
   }
   return null;
+}
+
+function bodyHasContent(body?: StoredArticleBody | null): boolean {
+  return Boolean(body?.content_html?.trim() || (body?.plain_text ?? "").trim());
 }
 
 export default function ArticleList({
@@ -96,6 +96,7 @@ export default function ArticleList({
   refreshing,
 }: ArticleListProps) {
   const navigate = useNavigate();
+  const { t, locale } = useLocale();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [body, setBody] = useState<StoredArticleBody | null>(null);
   const [loadingBody, setLoadingBody] = useState(false);
@@ -111,7 +112,7 @@ export default function ArticleList({
 
   const reading = selectedId !== null;
   const selectedArticle = articles.find((item) => item.id === selectedId) ?? null;
-  const takeoverHint = resolveTakeoverHint(bodyStatus, feedId);
+  const takeoverHint = resolveTakeoverHint(bodyStatus, t);
 
   const markAsJustRead = useCallback(
     (articleId: string) => {
@@ -195,7 +196,7 @@ export default function ArticleList({
         }
 
         if (stored && stored.body_status && stored.body_status !== "ok") {
-          setBodyError(resolveBodyError(stored));
+          setBodyError(resolveBodyError(stored, t));
           setBodyStatus(stored.body_status);
           setBodyDetail(stored.body_detail ?? "");
           return;
@@ -203,7 +204,7 @@ export default function ArticleList({
 
         const fetched = await fetchStoredArticleBody(feedId, article.id, true);
         if (!bodyHasContent(fetched)) {
-          setBodyError(resolveBodyError(fetched));
+          setBodyError(resolveBodyError(fetched, t));
           setBodyStatus(fetched?.body_status ?? "");
           setBodyDetail(fetched?.body_detail ?? "");
           return;
@@ -215,13 +216,15 @@ export default function ArticleList({
         setBody(null);
         setBodyStatus("");
         setBodyDetail("");
-        const message = err instanceof Error ? err.message : "拉取正文失败";
+        const message = err instanceof Error ? err.message : t("articleFetchFailed");
         if (
           message.includes("正文未拉取") ||
           message.includes("暂无可用正文") ||
-          message.includes("暂无正文")
+          message.includes("暂无正文") ||
+          message.includes("body not fetched") ||
+          message.includes("No body")
         ) {
-          setBodyError("该文章暂无正文内容");
+          setBodyError(t("articleNoBody"));
         } else {
           setBodyError(message);
         }
@@ -264,19 +267,22 @@ export default function ArticleList({
                 href={feedUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                title={`打开数据源：${feedUrl}`}
+                title={formatMessage(locale, "articleOpenFeed", { url: feedUrl })}
                 className="text-[var(--ink)] underline-offset-2 hover:text-[var(--accent)] hover:underline"
               >
                 {feedName}
               </a>
             ) : (
-              feedName || "请选择数据源"
+              feedName || t("articleSelectFeed")
             )}
           </h2>
           <p className="mt-0.5 text-xs text-[var(--ink-muted)]">
             {feedName
-              ? `${articles.length} 篇 · ${formatFeedSyncTime(syncTime)}`
-              : `${articles.length} 篇文章`}
+              ? formatMessage(locale, "articleCountWithSync", {
+                  count: articles.length,
+                  sync: formatFeedSyncTime(syncTime, locale),
+                })
+              : formatMessage(locale, "articleCountOnly", { count: articles.length })}
           </p>
         </div>
         {feedName ? (
@@ -284,11 +290,17 @@ export default function ArticleList({
             type="button"
             onClick={onRefresh}
             disabled={refreshing}
-            title="刷新"
-            aria-label="刷新当前源"
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-base text-[var(--ink-muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
+            title={t("commonRefresh")}
+            aria-label={t("articleRefreshAria")}
+            className="ui-icon-btn shrink-0 text-[var(--ink-muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
           >
-            {refreshing ? "…" : "↻"}
+            {refreshing ? (
+              <span className="text-xs" aria-hidden="true">
+                …
+              </span>
+            ) : (
+              <IconRefresh className="h-4 w-4" />
+            )}
           </button>
         ) : null}
       </div>
@@ -301,10 +313,10 @@ export default function ArticleList({
               onClick={backToQueue}
               className="shrink-0 text-xs text-[var(--ink-muted)] hover:text-[var(--accent)]"
             >
-              ← {articles.length} 篇
+              {formatMessage(locale, "articleBackCount", { count: articles.length })}
             </button>
             <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--ink)]">
-              {selectedArticle?.title ?? "阅读中"}
+              {selectedArticle?.title ?? t("commonReading")}
             </span>
             {selectedArticle?.url ? (
               <a
@@ -314,26 +326,27 @@ export default function ArticleList({
                 onClick={() => markAsJustRead(selectedArticle.id)}
                 className="shrink-0 text-xs text-[var(--ink-muted)] hover:text-[var(--ink)]"
               >
-                原文
+                {t("commonOriginal")}
               </a>
             ) : null}
           </div>
 
           <div className="flex-1 overflow-y-auto px-6 pb-10 pt-6">
             {!selectedArticle ? (
-              <p className="text-sm text-[var(--ink-muted)]">文章不存在</p>
+              <p className="text-sm text-[var(--ink-muted)]">{t("articleNotFound")}</p>
             ) : loadingBody ? (
-              <p className="text-sm text-[var(--ink-muted)]">正在拉取正文…</p>
+              <p className="text-sm text-[var(--ink-muted)]">{t("articleFetchingBody")}</p>
             ) : bodyError ? (
               <div className="mx-auto max-w-[40rem] space-y-3">
-                <p className="text-sm text-red-700">{bodyError}</p>
+                <p className="text-sm text-[var(--danger-text)]" role="alert">
+                  {bodyError}
+                </p>
                 {bodyDetail ? <p className="text-xs text-[var(--ink-muted)]">{bodyDetail}</p> : null}
                 {takeoverHint ? (
-                  <div className="border-l-2 border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2.5">
+                  <div className="rounded-[var(--radius-control)] border border-[color-mix(in_srgb,var(--accent)_35%,var(--border))] bg-[var(--accent-soft)] px-3 py-2.5">
                     <p className="text-xs text-[var(--accent)]">{takeoverHint.title}</p>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {takeoverHint.actionLabel === "去设置页配置" ||
-                      takeoverHint.actionLabel === "去设置页" ? (
+                      {takeoverHint.action === "settings" ? (
                         <button
                           type="button"
                           onClick={() => {
@@ -350,10 +363,10 @@ export default function ArticleList({
                           }}
                           className="ui-btn ui-btn-accent text-xs"
                         >
-                          {takeoverHint.actionLabel}
+                          {t("commonGoConfigure")}
                         </button>
                       ) : null}
-                      {(takeoverHint.actionLabel === "打开原文" || bodyStatus === "auth_required") &&
+                      {(takeoverHint.action === "original" || bodyStatus === "auth_required") &&
                       selectedArticle?.url ? (
                         <a
                           href={selectedArticle.url}
@@ -362,7 +375,7 @@ export default function ArticleList({
                           onClick={() => markAsJustRead(selectedArticle.id)}
                           className="ui-btn text-xs"
                         >
-                          打开原文
+                          {t("commonOriginal")}
                         </a>
                       ) : null}
                     </div>
@@ -375,7 +388,7 @@ export default function ArticleList({
                   {body.title}
                 </h4>
                 <p className="mt-2 text-xs text-[var(--ink-muted)]">
-                  {body.feed_name} · {formatRelativePublished(body.published_at)}
+                  {body.feed_name} · {formatRelativePublished(body.published_at, locale)}
                   {body.url ? (
                     <>
                       {" · "}
@@ -388,7 +401,7 @@ export default function ArticleList({
                           if (selectedArticle) markAsJustRead(selectedArticle.id);
                         }}
                       >
-                        原文
+                        {t("commonOriginal")}
                       </a>
                     </>
                   ) : null}
@@ -401,22 +414,22 @@ export default function ArticleList({
                 ) : (body.plain_text ?? "").trim() ? (
                   <p className="article-content mt-7 whitespace-pre-wrap">{body.plain_text}</p>
                 ) : (
-                  <p className="mt-4 text-sm text-[var(--ink-muted)]">暂无正文内容</p>
+                  <p className="mt-4 text-sm text-[var(--ink-muted)]">{t("articleNoBodyShort")}</p>
                 )}
               </article>
             ) : (
-              <p className="text-sm text-[var(--ink-muted)]">暂无正文内容</p>
+              <p className="text-sm text-[var(--ink-muted)]">{t("articleNoBodyShort")}</p>
             )}
           </div>
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
           {!feedName ? (
-            <p className="px-5 py-10 text-sm text-[var(--ink-muted)]">从左侧选择一个数据源</p>
+            <p className="px-5 py-10 text-sm text-[var(--ink-muted)]">{t("articlePickSource")}</p>
           ) : loading ? (
-            <p className="px-5 py-10 text-sm text-[var(--ink-muted)]">加载文章中…</p>
+            <p className="px-5 py-10 text-sm text-[var(--ink-muted)]">{t("articleLoading")}</p>
           ) : articles.length === 0 ? (
-            <p className="px-5 py-10 text-sm text-[var(--ink-muted)]">暂无文章，可从菜单刷新抓取</p>
+            <p className="px-5 py-10 text-sm text-[var(--ink-muted)]">{t("articleEmpty")}</p>
           ) : (
             <ul className="py-1">
               {articles.map((article) => {
@@ -431,14 +444,14 @@ export default function ArticleList({
                             ? "bg-[var(--accent)]"
                             : "bg-[color-mix(in_srgb,var(--ink-muted)_40%,transparent)]"
                         }`}
-                        title={hasBody ? "已有正文" : "正文未拉取"}
+                        title={hasBody ? t("articleHasBody") : t("articleNoBodyYet")}
                         aria-hidden
                       />
                       <div className="min-w-0 flex-1">
                         <button
                           type="button"
                           onClick={() => void loadBody(article)}
-                          title={hasBody ? undefined : "正文尚未拉取，点击尝试加载"}
+                          title={hasBody ? undefined : t("articleNoBodyClick")}
                           className={`w-full text-left text-[15px] font-medium leading-[1.45] tracking-tight underline-offset-2 ${
                             hasBody ? "text-[var(--ink)]" : "text-[var(--ink-muted)]"
                           } hover:text-[var(--accent)] hover:underline`}
@@ -446,13 +459,13 @@ export default function ArticleList({
                           {article.title}
                         </button>
                         <p className="mt-1 text-[11px] leading-none text-[var(--ink-muted)]">
-                          {formatRelativePublished(article.published_at)}
+                          {formatRelativePublished(article.published_at, locale)}
                           {article.author ? ` · ${article.author}` : ""}
                         </p>
                       </div>
                       {justRead ? (
-                        <span className="mt-1 shrink-0 text-[10px] font-medium tracking-wide text-[var(--accent)]">
-                          刚看过
+                        <span className="mt-1 shrink-0 text-[11px] font-medium tracking-wide text-[var(--accent)]">
+                          {t("articleJustRead")}
                         </span>
                       ) : null}
                       {article.url ? (
@@ -460,10 +473,10 @@ export default function ArticleList({
                           href={article.url}
                           target="_blank"
                           rel="noreferrer"
-                          title="打开原文"
-                          aria-label="打开原文"
+                          title={t("commonOriginal")}
+                          aria-label={t("commonOriginal")}
                           onClick={() => markAsJustRead(article.id)}
-                          className="mt-0.5 shrink-0 rounded p-1 text-[var(--ink-muted)] opacity-0 transition-opacity hover:bg-[var(--paper-raised)] hover:text-[var(--ink)] group-hover:opacity-100 focus:opacity-100"
+                          className="mt-0.5 shrink-0 rounded p-1 text-[var(--ink-muted)] opacity-0 transition-opacity hover:bg-[var(--paper-raised)] hover:text-[var(--ink)] group-hover:opacity-100 focus-visible:opacity-100"
                         >
                           <ExternalLinkIcon />
                         </a>

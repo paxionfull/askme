@@ -8,13 +8,11 @@ import {
 } from "../api";
 import CitationMarkdown from "../components/CitationMarkdown";
 import CitationSidebar from "../components/CitationSidebar";
+import ConfirmModal from "../components/ConfirmModal";
 import DaysRangeSelect from "../components/DaysRangeSelect";
 import DigestGeneratingPanel from "../components/DigestGeneratingPanel";
 import DigestTreeView from "../components/DigestTreeView";
-import GettingStartedGuide, {
-  GETTING_STARTED_INTRO,
-  GETTING_STARTED_TITLE,
-} from "../components/GettingStartedGuide";
+import GettingStartedGuide, { useGettingStartedCopy } from "../components/GettingStartedGuide";
 import OverflowMenu, { type OverflowMenuItem } from "../components/OverflowMenu";
 import RuleExplainModal from "../components/RuleExplainModal";
 import ScopedArticlesBar from "../components/ScopedArticlesBar";
@@ -27,6 +25,8 @@ import { useDigest } from "../contexts/DigestContext";
 import { useResizableRatio } from "../hooks/useResizableRatio";
 import { useIndexBuildConfirm } from "../hooks/useIndexBuildConfirm";
 import { formatDaysLabel, isLlmConfigured, useSettings } from "../hooks/useSettings";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage, type MessageKey } from "../i18n/messages";
 import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
 import {
   buildDigestExportFilename,
@@ -97,26 +97,30 @@ function getSubmitDisabledTitle(params: {
   llmConfigured: boolean;
   loadingStatus: boolean;
   canSubmit: boolean;
+  t: (key: MessageKey) => string;
 }): string | undefined {
-  const { input, scopedCount, effectiveRagReady, llmConfigured, loadingStatus, canSubmit } = params;
+  const { input, scopedCount, effectiveRagReady, llmConfigured, loadingStatus, canSubmit, t } =
+    params;
   if (canSubmit) return undefined;
   const trimmed = input.trim();
   if (trimmed) {
     if (!effectiveRagReady) {
-      return loadingStatus ? "正在同步索引，稍候即可问答" : "问答需先建立索引";
+      return loadingStatus ? t("chatSubmitSyncing") : t("chatSubmitNeedIndex");
     }
-    if (!llmConfigured) return "请先在设置配置 API Key 和模型";
+    if (!llmConfigured) return t("chatSubmitNeedLlm");
     return undefined;
   }
-  if (scopedCount > 0 && !llmConfigured) return "生成摘要需先在设置配置 API Key 和模型";
+  if (scopedCount > 0 && !llmConfigured) return t("chatSubmitSummaryNeedLlm");
   if (!effectiveRagReady && !loadingStatus) {
-    return "问答需先建立索引；可先加入文章做摘要";
+    return t("chatSubmitNeedIndexOrSummary");
   }
-  if (scopedCount > 0) return "空内容发送可生成摘要";
-  return "输入问题，或先加入文章后空内容发送生成摘要";
+  if (scopedCount > 0) return t("chatSubmitEmptySummary");
+  return t("chatEmptyHint");
 }
 
 export default function ChatPage() {
+  const { t, locale } = useLocale();
+  const gettingStarted = useGettingStartedCopy();
   const { settings } = useSettings();
   const {
     days,
@@ -188,6 +192,8 @@ export default function ChatPage() {
   const [editingText, setEditingText] = useState("");
   const [showPromptPreview, setShowPromptPreview] = useState(false);
   const [exportDone, setExportDone] = useState(false);
+  const [regenConfirmOpen, setRegenConfirmOpen] = useState(false);
+  const [mobilePane, setMobilePane] = useState<"brief" | "ask">("brief");
   const exportResetTimerRef = useRef<number | null>(null);
   const displaySummary = generating ? summary : chatSummary;
   const showTree = Boolean(!generating && digestTree);
@@ -212,10 +218,16 @@ export default function ChatPage() {
   });
   const todayLabel = (() => {
     const now = new Date();
-    const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+    if (locale === "zh") {
+      const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+      return {
+        date: `${now.getMonth() + 1} 月 ${now.getDate()} 日`,
+        weekday: `星期${weekdays[now.getDay()]}`,
+      };
+    }
     return {
-      date: `${now.getMonth() + 1} 月 ${now.getDate()} 日`,
-      weekday: `星期${weekdays[now.getDay()]}`,
+      date: now.toLocaleDateString("en-US", { month: "long", day: "numeric" }),
+      weekday: now.toLocaleDateString("en-US", { weekday: "long" }),
     };
   })();
   const [citationOpen, setCitationOpen] = useState(false);
@@ -228,7 +240,7 @@ export default function ChatPage() {
   const selectedGroup = summaryGroupOptions.find((group) => group.id === selectedGroupId) ?? null;
   const isUngrouped = selectedGroupId === UNGROUPED_GROUP_ID;
   const hasRuleBound = Boolean(selectedGroup?.digestSkillId) && !isUngrouped;
-  const indexScopeLabel = selectedGroup?.name?.trim() || "当前板块";
+  const indexScopeLabel = selectedGroup?.name?.trim() || t("chatCurrentSection");
   const indexFeedIds = useMemo(
     () => selectedGroup?.feedIds ?? [],
     [selectedGroup?.feedIds],
@@ -247,28 +259,30 @@ export default function ChatPage() {
     llmConfigured,
     loadingStatus,
     canSubmit,
+    t,
   });
   const composerHint = (() => {
     if (sending) return null;
     const trimmed = input.trim();
     if (trimmed) {
       if (!effectiveRagReady) {
-        if (loadingStatus) return <>正在同步索引，稍候即可问答</>;
+        if (loadingStatus) return t("chatSyncingReady");
         return (
           <>
-            问答需先{" "}
+            {t("chatNeedIndexPrefix")}{" "}
             <IndexBuildLink onClick={openIndexBuild} disabled={indexBuildBusy} />
+            {t("chatNeedIndexSuffix")}
           </>
         );
       }
       if (!llmConfigured) {
         return (
           <>
-            请先在{" "}
+            {t("chatConfigureLlmPrefix")}{" "}
             <Link to="/settings" className="text-[var(--accent)] hover:underline">
-              设置
+              {t("settingsTitle")}
             </Link>{" "}
-            配置 API Key 和模型
+            {t("chatConfigureLlmSuffix")}
           </>
         );
       }
@@ -277,11 +291,11 @@ export default function ChatPage() {
     if (scopedArticles.length > 0 && !llmConfigured) {
       return (
         <>
-          生成摘要需先在{" "}
+          {t("chatSummaryNeedLlmPrefix")}{" "}
           <Link to="/settings" className="text-[var(--accent)] hover:underline">
-            设置
+            {t("settingsTitle")}
           </Link>{" "}
-          配置 API Key 和模型
+          {t("chatSummaryNeedLlmSuffix")}
         </>
       );
     }
@@ -289,26 +303,26 @@ export default function ChatPage() {
       if (!effectiveRagReady && !loadingStatus) {
         return (
           <>
-            问答需先{" "}
+            {t("chatNeedIndexPrefix")}{" "}
             <IndexBuildLink onClick={openIndexBuild} disabled={indexBuildBusy} />
-            ；可先加入文章做摘要
+            {t("chatNeedIndexOrSummary")}
           </>
         );
       }
-      return "输入问题，或先加入文章后空内容发送生成摘要";
+      return t("chatEmptyHint");
     }
     return null;
   })();
   const inputPlaceholder = (() => {
     if (scopedArticles.length > 0) {
       return input.trim()
-        ? `已加入 ${scopedArticles.length} 篇 · Enter 发送`
-        : `已加入 ${scopedArticles.length} 篇 · Enter 生成摘要`;
+        ? formatMessage(locale, "chatScopedEnterSend", { count: scopedArticles.length })
+        : formatMessage(locale, "chatScopedEnterSummary", { count: scopedArticles.length });
     }
-    if (loadingStatus && !effectiveRagReady) return "正在同步索引…";
-    if (!effectiveRagReady) return "问答需建索引；可先加入文章做摘要";
-    if (!llmConfigured) return "请先在设置配置模型后再提问";
-    return "输入问题，Enter 发送";
+    if (loadingStatus && !effectiveRagReady) return t("askSyncing");
+    if (!effectiveRagReady) return t("askNeedIndexHint");
+    if (!llmConfigured) return t("askNeedLlm");
+    return t("askPlaceholder");
   })();
 
   const boundRuleName =
@@ -317,23 +331,23 @@ export default function ChatPage() {
     "";
 
   const handleExportMarkdown = useCallback(() => {
-    const groupName = selectedGroup?.name?.trim() || "简报";
+    const groupName = selectedGroup?.name?.trim() || t("chatDefaultBrief");
     const dayRange = formatDigestDayRange(days);
     const meta = {
       groupName,
       rangeLabel: formatDaysLabel(days),
       dayRange,
-      ruleName: boundRuleName || "未绑定",
+      ruleName: boundRuleName || t("chatUnbound"),
     };
     let md = "";
     if (digestTree && !generating) {
-      md = buildDigestMarkdownFromTree(digestTree, meta);
+      md = buildDigestMarkdownFromTree(digestTree, meta, locale);
     } else if (displaySummary.trim()) {
-      md = buildDigestMarkdownFromText(displaySummary, meta);
+      md = buildDigestMarkdownFromText(displaySummary, meta, locale);
     } else {
       return;
     }
-    downloadMarkdownFile(buildDigestExportFilename(groupName, dayRange), md);
+    downloadMarkdownFile(buildDigestExportFilename(groupName, dayRange, locale), md);
     setExportDone(true);
     if (exportResetTimerRef.current != null) {
       window.clearTimeout(exportResetTimerRef.current);
@@ -349,6 +363,7 @@ export default function ChatPage() {
     displaySummary,
     generating,
     selectedGroup?.name,
+    t,
   ]);
 
   useEffect(() => {
@@ -394,22 +409,22 @@ export default function ChatPage() {
 
   const statusLine = (() => {
     if (!hasRuleBound && !loadingSummary && !generating) {
-      return "需设置整理规则";
+      return t("briefNeedRuleStatus");
     }
     if (scopedArticles.length > 0) {
-      return `限定 ${scopedArticles.length} 篇`;
+      return `${t("briefScopedArticles")} ${scopedArticles.length} ${t("briefArticlesUnit")}`;
     }
     if (loadingIndex) {
-      return "建立索引中";
+      return t("briefBuildingIndexStatus");
     }
     if (loadingStatus && !effectiveRagReady) {
-      return "同步索引中";
+      return t("briefSyncingIndexStatus");
     }
     if (effectiveRagReady) {
-      if (statusRevalidating) return "同步中";
+      if (statusRevalidating) return t("briefSyncingStatus");
       return null;
     }
-    return "未建索引";
+    return t("briefNoIndexStatus");
   })();
 
   const emptyState = (() => {
@@ -454,21 +469,60 @@ export default function ChatPage() {
     [handleSend],
   );
 
-  // 点到对话区空白/消息后焦点常离开输入框；此时 Enter 仍应发送（不抢输入框/菜单内的 Enter）
+  // Enter 发送；/ 聚焦提问；G 生成；Shift+R 重新生成；? 帮助
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.defaultPrevented) {
+      if (event.isComposing || event.defaultPrevented) return;
+
+      if (event.key === "Enter" && !event.shiftKey) {
+        if (isComposerShortcutBlocked(event.target)) return;
+        if (sending) return;
+        event.preventDefault();
+        focusChatInput();
+        handleSend();
         return;
       }
+
       if (isComposerShortcutBlocked(event.target)) return;
-      if (sending) return;
-      event.preventDefault();
-      focusChatInput();
-      handleSend();
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      if (event.key === "/" && !event.shiftKey) {
+        event.preventDefault();
+        focusChatInput();
+        return;
+      }
+      if (event.key === "?" || (event.shiftKey && event.key === "/")) {
+        event.preventDefault();
+        window.dispatchEvent(new Event("askme:open-help"));
+        return;
+      }
+      if (event.key === "g" || event.key === "G") {
+        if (generating || digestBusy || !selectedGroupId || !hasRuleBound || !llmConfigured) return;
+        event.preventDefault();
+        if (hasOverview) setRegenConfirmOpen(true);
+        else void startSummarize();
+        return;
+      }
+      if (event.shiftKey && (event.key === "R" || event.key === "r")) {
+        if (!hasOverview || generating || digestBusy || !hasRuleBound || !llmConfigured) return;
+        event.preventDefault();
+        setRegenConfirmOpen(true);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [focusChatInput, handleSend, sending]);
+  }, [
+    focusChatInput,
+    handleSend,
+    sending,
+    generating,
+    digestBusy,
+    selectedGroupId,
+    hasRuleBound,
+    llmConfigured,
+    hasOverview,
+    startSummarize,
+  ]);
 
   const handleArticleDragOver = useCallback((event: React.DragEvent) => {
     if (!acceptsArticleDrag(event.dataTransfer)) return;
@@ -488,7 +542,7 @@ export default function ChatPage() {
           payload.group.articles.map((article) => ({
             feed_id: article.feed_id,
             article_id: article.article_id,
-            title: article.title || "未命名文章",
+            title: article.title || t("chatUnnamedArticle"),
             url: article.url || "",
           })),
         );
@@ -496,7 +550,7 @@ export default function ChatPage() {
         addScopedArticle({
           feed_id: payload.single.feed_id,
           article_id: payload.single.article_id,
-          title: payload.single.title || "未命名文章",
+          title: payload.single.title || t("chatUnnamedArticle"),
           url: payload.single.url || "",
         });
       } else {
@@ -665,15 +719,20 @@ export default function ChatPage() {
   }, [editingIndex, editingText, sendMessage]);
 
   const composerMenuItems: OverflowMenuItem[] = [];
+  composerMenuItems.push({
+    label: t("shortcutsMenu"),
+    hint: t("shortcutsHint"),
+    onClick: () => window.alert(t("shortcutsHint")),
+  });
   if (promptPreview) {
     composerMenuItems.push({
-      label: showPromptPreview ? "隐藏 Prompt" : "查看 Prompt",
+      label: showPromptPreview ? t("askHidePrompt") : t("askShowPrompt"),
       onClick: () => setShowPromptPreview((open) => !open),
     });
   }
   if (messages.length > 0) {
     composerMenuItems.push({
-      label: "清空对话",
+      label: t("askClearChat"),
       danger: true,
       onClick: () => {
         cancelInlineEdit();
@@ -688,140 +747,178 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full flex-col bg-[var(--paper)]">
-      <header className="shrink-0 border-b border-[var(--rule)] bg-[var(--paper-raised)] px-5 pb-3 pt-4">
-        <p className="text-[1.35rem] font-semibold tracking-tight text-[var(--ink)]">
-          <span className="mb-0.5 block text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
-            简报
-          </span>
-          {todayLabel.date}
-          <span className="ml-1.5 text-[0.95rem] font-medium text-[var(--ink-muted)]">
-            · {todayLabel.weekday}
-          </span>
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper)] px-3 py-2.5">
-          <label className="inline-flex min-w-0 items-center gap-1.5 text-sm">
-            <span className="shrink-0 text-xs text-[var(--ink-muted)]">板块</span>
-            <select
-              value={selectedGroupId ?? ""}
-              onChange={(e) => setSelectedSummaryGroup(e.target.value)}
-              disabled={summaryGroupOptions.length === 0 || digestBusy}
-              className="ui-select min-w-0 max-w-[10rem] truncate py-1.5 text-sm disabled:opacity-50"
-              aria-label="选择分组"
+      <header className="app-page-header px-5 pb-3 pt-4 sm:px-6">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1.5">
+          <h1 className="app-page-title min-w-0 text-[var(--ink)]">
+            {todayLabel.date}
+            <span className="ml-1.5 text-[0.9375rem] font-medium text-[var(--ink-muted)]">
+              · {todayLabel.weekday}
+            </span>
+          </h1>
+          {hasOverview && !generating ? (
+            <button
+              type="button"
+              onClick={handleExportMarkdown}
+              title={exportDone ? t("briefExportedTitle") : t("briefExportTitle")}
+              className="brief-export-btn ui-btn ui-btn-ghost"
             >
-              {summaryGroupOptions.length === 0 ? (
-                <option value="">暂无分组</option>
-              ) : (
-                summaryGroupOptions.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name}
-                  </option>
-                ))
-              )}
-            </select>
-          </label>
-          <label className="inline-flex items-center gap-1.5 text-sm">
-            <span className="shrink-0 text-xs text-[var(--ink-muted)]">范围</span>
-            <DaysRangeSelect
-              value={days}
-              onChange={setDays}
-              disabled={digestBusy}
-              size="sm"
-              className="shrink-0"
-            />
-          </label>
-          {selectedGroupId && !isUngrouped ? (
-            <label className="inline-flex min-w-0 items-center gap-1.5 text-sm">
-              <span className="shrink-0 text-xs text-[var(--ink-muted)]">整理规则</span>
-              <select
-                value={selectedGroup?.digestSkillId ?? ""}
-                onChange={(e) => void bindRuleToSelectedGroup(e.target.value)}
-                disabled={digestBusy || savingRule || digestSkills.length === 0}
-                className={`ui-select min-w-0 max-w-[11rem] truncate py-1.5 text-sm disabled:opacity-50 ${
-                  hasRuleBound
-                    ? ""
-                    : "border-[color-mix(in_srgb,var(--accent)_40%,var(--rule))] text-[var(--accent)]"
-                }`}
-                aria-label="选择整理规则"
-                title={hasRuleBound ? boundRuleName : "未设置整理规则时无法生成简报"}
-              >
-                <option value="">未设置</option>
-                {digestSkills.map((skill) => (
-                  <option key={skill.id} value={skill.id}>
-                    {skill.name || skill.id}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <button
-            type="button"
-            disabled={
-              generating
-                ? false
-                : digestBusy ||
-                  !isLlmConfigured(settings) ||
-                  !selectedGroupId ||
-                  !hasRuleBound
-            }
-            onClick={() => void (generating ? stopSummarize() : startSummarize())}
-            className={`group/gen relative min-w-[5.5rem] shrink-0 rounded-[var(--radius-control)] px-3 py-1.5 text-sm disabled:opacity-50 ${
-              generating
-                ? "ui-btn"
-                : hasOverview
-                  ? "border border-[var(--rule)] bg-[var(--paper-raised)] text-[var(--ink-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                  : "ui-btn ui-btn-primary"
-            }`}
-            title={
-              generating
-                ? "停止当前简报生成，保留上一版"
-                : !hasRuleBound
-                  ? "请先为当前板块设置整理规则"
-                  : hasOverview
-                    ? "重新生成简报"
-                    : "按当前板块绑定的整理规则生成简报"
-            }
-          >
-            {generating ? (
-              "停止生成"
-            ) : hasOverview ? (
-              <>
-                <span className="group-hover/gen:hidden group-focus-visible/gen:hidden">已生成</span>
-                <span className="hidden group-hover/gen:inline group-focus-visible/gen:inline">
-                  重新生成
-                </span>
-              </>
-            ) : (
-              "生成简报"
-            )}
-          </button>
-          {statusLine ? (
-            <>
-              <span className="text-[var(--ink-muted)]">·</span>
-              <span
-                className={`text-sm ${
-                  statusLine === "未建索引" || statusLine === "需设置整理规则"
-                    ? "text-[var(--ink-muted)]"
-                    : "text-[var(--accent)]"
-                }`}
-              >
-                {statusLine}
-              </span>
-            </>
+              {exportDone ? t("briefExported") : t("briefExportMd")}
+            </button>
           ) : null}
         </div>
+
+        <div className="brief-toolbar" role="group" aria-label={t("briefScope")}>
+          <div className="brief-toolbar-fields">
+            <label className="brief-toolbar-field">
+              <span>{t("briefGroup")}</span>
+              <select
+                value={selectedGroupId ?? ""}
+                onChange={(e) => setSelectedSummaryGroup(e.target.value)}
+                disabled={summaryGroupOptions.length === 0 || digestBusy}
+                className="ui-select min-w-0 truncate disabled:opacity-50"
+                aria-label={t("briefSelectGroup")}
+              >
+                {summaryGroupOptions.length === 0 ? (
+                  <option value="">{t("briefNoGroups")}</option>
+                ) : (
+                  summaryGroupOptions.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
+            <label className="brief-toolbar-field">
+              <span>{t("briefRange")}</span>
+              <DaysRangeSelect
+                value={days}
+                onChange={setDays}
+                disabled={digestBusy}
+                size="sm"
+                className="shrink-0"
+              />
+            </label>
+            {selectedGroupId && !isUngrouped ? (
+              <label className={`brief-toolbar-field ${hasRuleBound ? "" : "is-unset"}`}>
+                <span>{t("briefRule")}</span>
+                <select
+                  value={selectedGroup?.digestSkillId ?? ""}
+                  onChange={(e) => void bindRuleToSelectedGroup(e.target.value)}
+                  disabled={digestBusy || savingRule || digestSkills.length === 0}
+                  className="ui-select min-w-0 truncate disabled:opacity-50"
+                  aria-label={t("briefSelectRule")}
+                  title={hasRuleBound ? boundRuleName : t("briefRuleRequiredTitle")}
+                >
+                  <option value="">{t("briefUnset")}</option>
+                  {digestSkills.map((skill) => (
+                    <option key={skill.id} value={skill.id}>
+                      {skill.name || skill.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+
+          <div className="brief-toolbar-actions">
+            {generating || !hasOverview ? (
+              <button
+                type="button"
+                disabled={
+                  generating
+                    ? false
+                    : digestBusy ||
+                      !isLlmConfigured(settings) ||
+                      !selectedGroupId ||
+                      !hasRuleBound
+                }
+                onClick={() => {
+                  if (generating) {
+                    void stopSummarize();
+                    return;
+                  }
+                  void startSummarize();
+                }}
+                className={generating ? "ui-btn" : "ui-btn ui-btn-primary"}
+                title={
+                  generating
+                    ? t("briefStopTitle")
+                    : !hasRuleBound
+                      ? t("briefNeedRuleTitle")
+                      : t("briefGenerateTitle")
+                }
+              >
+                {generating ? t("briefStopGenerate") : t("briefGenerate")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={digestBusy || !isLlmConfigured(settings) || !selectedGroupId || !hasRuleBound}
+                onClick={() => setRegenConfirmOpen(true)}
+                className="ui-btn"
+                title={t("briefRegenTitle")}
+              >
+                {t("briefRegenerate")}
+              </button>
+            )}
+          </div>
+
+          {hasOverview && !generating ? (
+            <span className="brief-toolbar-status is-ok">{t("briefReady")}</span>
+          ) : statusLine ? (
+            <span
+              className={`brief-toolbar-status ${
+                statusLine === t("briefNoIndexStatus") || statusLine === t("briefNeedRuleStatus")
+                  ? ""
+                  : "is-warn"
+              }`}
+            >
+              {statusLine}
+            </span>
+          ) : null}
+        </div>
+
         {!hasOverview && !loadingSummary ? (
-          <p className="mt-2 text-xs leading-5 text-[var(--ink-muted)]">
-            添加源并更新列表后，须为每个板块手动设置整理规则，才能生成简报。
+          <p className="mt-2 text-[0.75rem] leading-5 text-[var(--ink-muted)]">{t("briefHint")}</p>
+        ) : null}
+        {summaryError ? (
+          <p className="mt-2 text-[0.75rem] text-[var(--danger-text)]" role="alert">
+            {summaryError}
           </p>
         ) : null}
-        {summaryError ? <p className="mt-2 text-xs text-red-700">{summaryError}</p> : null}
       </header>
+
+      <div className="app-brief-mobile-tabs" role="tablist" aria-label={t("briefLabel")}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobilePane === "brief"}
+          className={mobilePane === "brief" ? "is-active" : ""}
+          onClick={() => setMobilePane("brief")}
+        >
+          {t("briefShowDigest")}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobilePane === "ask"}
+          className={mobilePane === "ask" ? "is-active" : ""}
+          onClick={() => setMobilePane("ask")}
+        >
+          {t("briefShowAsk")}
+        </button>
+      </div>
 
       <div
         ref={containerRef}
-        className={`flex min-h-0 flex-1 ${dragging ? "cursor-col-resize select-none" : ""}`}
+        className={`app-brief-split flex min-h-0 flex-1 ${dragging ? "cursor-col-resize select-none" : ""}`}
       >
-        <section className="flex min-w-0 flex-1 flex-col overflow-hidden border-r border-[var(--rule)] bg-[var(--paper)]">
+        <section
+          className={`app-brief-overview-pane flex min-w-0 flex-1 flex-col overflow-hidden border-r border-[var(--rule)] bg-[var(--paper)] ${
+            mobilePane === "ask" ? "is-mobile-hidden" : ""
+          }`}
+        >
           <div ref={overviewScrollRef} className="flex-1 overflow-y-auto">
             {generating ? (
               <div className="px-5 pt-5 sm:px-8">
@@ -833,14 +930,23 @@ export default function ChatPage() {
               </div>
             ) : null}
             {loadingSummary && !generating && !displaySummary && !digestTree ? (
-              <p className="px-5 pt-5 text-sm text-[var(--ink-muted)] sm:px-8">加载简报…</p>
+              <div
+                className="flex flex-col gap-3 px-5 pt-5 sm:px-8"
+                aria-busy="true"
+                aria-label={t("briefLoading")}
+              >
+                <div className="h-4 w-2/3 max-w-sm animate-pulse rounded bg-[color-mix(in_srgb,var(--rule)_60%,white)]" />
+                <div className="h-4 w-full max-w-xl animate-pulse rounded bg-[color-mix(in_srgb,var(--rule)_50%,white)]" />
+                <div className="h-4 w-5/6 max-w-lg animate-pulse rounded bg-[color-mix(in_srgb,var(--rule)_50%,white)]" />
+                <p className="mt-2 text-sm text-[var(--ink-muted)]">{t("briefLoading")}</p>
+              </div>
             ) : displaySummary || digestTree || thinking ? (
               showTree && digestTree ? (
                 <>
                   {thinking && !generating ? (
-                    <details className="mx-auto max-w-[42rem] border-l-2 border-[var(--rule)] px-5 pt-4 pl-[calc(1.25rem+2px)] sm:px-8 sm:pl-[calc(2rem+2px)]">
+                    <details className="mx-auto max-w-[42rem] border-l border-[var(--rule)] px-5 pt-4 pl-[calc(1.25rem+1px)] sm:px-8 sm:pl-[calc(2rem+1px)]">
                       <summary className="cursor-pointer text-[11px] text-[var(--ink-muted)]">
-                        思考过程
+                        {t("briefThinking")}
                       </summary>
                       <p className="mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] leading-5 text-[var(--ink-muted)]">
                         {thinking}
@@ -852,33 +958,14 @@ export default function ChatPage() {
                     scrollParentRef={overviewScrollRef}
                     onAddArticle={addScopedArticle}
                     onAddArticles={addScopedArticles}
-                    exportAction={{
-                      done: exportDone,
-                      onClick: handleExportMarkdown,
-                    }}
                   />
                 </>
               ) : (
-                <div className="relative">
-                  <div className="relative z-[4] h-0">
-                    <button
-                      type="button"
-                      title={exportDone ? "已导出 Markdown" : "下载当前简报为 Markdown"}
-                      onClick={handleExportMarkdown}
-                      className={`absolute left-[0.85rem] top-[0.55rem] whitespace-nowrap rounded-[var(--radius-control)] border px-2.5 py-1 text-[0.8rem] transition-colors ${
-                        exportDone
-                          ? "border-[color-mix(in_srgb,var(--success)_40%,var(--rule))] bg-[var(--success-soft)] text-[var(--success)]"
-                          : "border-[var(--rule)] bg-[var(--paper-raised)] text-[var(--ink-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                      }`}
-                    >
-                      {exportDone ? "已导出" : "导出为 Markdown"}
-                    </button>
-                  </div>
                 <div className="mx-auto min-w-0 max-w-[42rem] px-5 py-5 sm:px-8">
                   {thinking && !generating ? (
-                    <details className="mb-3 border-l-2 border-[var(--rule)] pl-2">
+                    <details className="mb-3 border-l border-[var(--rule)] pl-2">
                       <summary className="cursor-pointer text-[11px] text-[var(--ink-muted)]">
-                        思考过程
+                        {t("briefThinking")}
                       </summary>
                       <p className="mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] leading-5 text-[var(--ink-muted)]">
                         {thinking}
@@ -900,13 +987,12 @@ export default function ChatPage() {
                     <span className="mt-1 inline-block animate-pulse text-[var(--ink-muted)]">▍</span>
                   ) : null}
                 </div>
-                </div>
               )
             ) : !generating ? (
               <div className="mx-auto max-w-[32rem] px-5 py-12 text-center sm:px-8">
-                <h3 className="text-lg font-medium text-[var(--ink)]">{GETTING_STARTED_TITLE}</h3>
+                <h3 className="text-lg font-medium text-[var(--ink)]">{gettingStarted.title}</h3>
                 <p className="mt-2 text-sm leading-6 text-[var(--ink-muted)]">
-                  {GETTING_STARTED_INTRO}
+                  {gettingStarted.intro}
                 </p>
                 <GettingStartedGuide onExplainRule={() => setRuleExplainOpen(true)} />
               </div>
@@ -917,7 +1003,7 @@ export default function ChatPage() {
         <div
           role="separator"
           aria-orientation="vertical"
-          aria-label="调节简报与提问区宽度"
+          aria-label={t("briefResizeLabel")}
           aria-valuemin={22}
           aria-valuemax={55}
           aria-valuenow={askPercent}
@@ -940,7 +1026,7 @@ export default function ChatPage() {
               e.preventDefault();
             }
           }}
-          className="group relative z-10 w-1.5 shrink-0 cursor-col-resize bg-transparent"
+          className="app-brief-resizer group relative z-10 w-1.5 shrink-0 cursor-col-resize bg-transparent"
         >
           <div
             className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-[width,background] ${
@@ -952,16 +1038,19 @@ export default function ChatPage() {
           <div className="absolute inset-y-0 -left-1 -right-1" />
           {dragging ? (
             <span className="pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-[var(--ink)] px-2 py-0.5 text-[11px] text-[var(--paper-raised)]">
-              简报 {briefPercent}% · 提问 {askPercent}%
+              {t("briefLabel")} {briefPercent}% · {t("briefAsk")} {askPercent}%
             </span>
           ) : null}
         </div>
 
         <aside
+          aria-label={t("briefAsk")}
           style={{ width: `${askPercent}%`, minWidth: 240, maxWidth: "55%" }}
-          className={`relative flex min-w-0 shrink-0 flex-col border-l border-[var(--rule)] bg-[var(--paper-raised)] ${
-            dropActive ? "bg-[color-mix(in_srgb,var(--accent-soft)_40%,transparent)]" : ""
-          } ${dragging ? "transition-none" : ""}`}
+          className={`app-brief-ask-pane relative flex min-w-0 shrink-0 flex-col border-l border-[var(--rule)] bg-[var(--paper-raised)] ${
+            mobilePane === "brief" ? "is-mobile-hidden" : ""
+          } ${dropActive ? "bg-[color-mix(in_srgb,var(--accent-soft)_40%,transparent)]" : ""} ${
+            dragging ? "transition-none" : ""
+          }`}
           onDragOver={handleArticleDragOver}
           onDragLeave={handleArticleDragLeave}
           onDrop={handleArticleDrop}
@@ -970,17 +1059,20 @@ export default function ChatPage() {
         {dropActive ? (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-[color-mix(in_srgb,var(--accent)_40%,var(--rule))] bg-[color-mix(in_srgb,var(--accent-soft)_50%,transparent)]">
             <p className="rounded-[var(--radius-control)] bg-[var(--paper-raised)]/90 px-4 py-2 text-sm text-[var(--accent)]">
-              松开以加入提问
+              {t("askDropHere")}
             </p>
           </div>
         ) : null}
 
         <header className="border-b border-[var(--rule)] px-4 py-3">
-          <h2 className="text-sm font-semibold tracking-tight text-[var(--ink)]">提问</h2>
+          <h2 className="text-sm font-semibold tracking-tight text-[var(--ink)]">{t("briefAsk")}</h2>
         </header>
 
         {error ? (
-          <div className="border-b border-[var(--rule)] bg-[var(--error-soft)] px-5 py-2 text-sm text-red-800">
+          <div
+            className="border-b border-[var(--rule)] bg-[var(--error-soft)] px-5 py-2 text-sm text-[var(--danger-text)]"
+            role="alert"
+          >
             {error}
           </div>
         ) : null}
@@ -993,7 +1085,7 @@ export default function ChatPage() {
 
         {showPromptPreview && promptPreview ? (
           <details open className="border-b border-[var(--rule)] bg-[var(--paper)] px-5 py-2">
-            <summary className="cursor-pointer text-xs text-[var(--ink-muted)]">本次 Prompt</summary>
+            <summary className="cursor-pointer text-xs text-[var(--ink-muted)]">{t("askPromptPreview")}</summary>
             <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-[var(--ink)]">
               {promptPreview}
             </pre>
@@ -1004,59 +1096,61 @@ export default function ChatPage() {
           {messages.length === 0 ? (
             emptyState?.kind === "generating" ? (
               <div className="flex h-full items-start justify-center pt-8">
-                <p className="text-sm text-[var(--ink-muted)]">简报生成中，完成后可拖标题到此处</p>
+                <p className="text-sm text-[var(--ink-muted)]">{t("askGeneratingHint")}</p>
               </div>
             ) : emptyState?.kind === "scoped" ? (
               <div className="mx-auto max-w-[40rem]">
                 <p className="text-sm font-medium tracking-tight text-[var(--ink)]">
-                  已加入 {scopedArticles.length} 篇
+                  {formatMessage(locale, "chatArticlesAdded", { count: scopedArticles.length })}
                 </p>
                 <ul className="mt-3 list-none space-y-2 text-xs leading-5 text-[var(--ink-muted)]">
                   <li>
-                    <span className="font-medium text-[var(--ink)]">摘要</span>
-                    {" — 空内容回车"}
+                    <span className="font-medium text-[var(--ink)]">{t("chatSummaryLabel")}</span>
+                    {t("chatSummaryEmptyEnter")}
                   </li>
                   <li>
-                    <span className="font-medium text-[var(--ink)]">问答</span>
+                    <span className="font-medium text-[var(--ink)]">{t("briefAsk")}</span>
                     {!effectiveRagReady ? (
                       <>
-                        {" — 需先 "}
+                        {" — "}
+                        {t("chatNeedIndexPrefix")}{" "}
                         <IndexBuildLink
                           onClick={openIndexBuild}
                           disabled={indexBuildBusy}
                         />
-                        {"，再输入问题回车"}
+                        {t("chatAskThenEnter")}
                       </>
                     ) : (
-                      " — 输入问题回车，限定已加入的文章"
+                      t("chatAskScopedEnter")
                     )}
                   </li>
                   <li className="pt-0.5 text-[11px] text-[var(--ink-muted)]/80">
-                    可继续「加入对话」或拖标题到这里
+                    {t("chatDragHint")}
                   </li>
                 </ul>
               </div>
             ) : (
               <div className="mx-auto max-w-[40rem]">
-                <p className="text-sm font-medium tracking-tight text-[var(--ink)]">可以这样用</p>
+                <p className="text-sm font-medium tracking-tight text-[var(--ink)]">{t("chatHowToUse")}</p>
                 <ul className="mt-3 list-none space-y-2 text-xs leading-5 text-[var(--ink-muted)]">
                   <li>
-                    <span className="font-medium text-[var(--ink)]">摘要</span>
-                    {" — 先「加入对话」或拖标题限定范围，空内容回车"}
+                    <span className="font-medium text-[var(--ink)]">{t("chatSummaryLabel")}</span>
+                    {t("chatSummaryGuide")}
                   </li>
                   <li>
-                    <span className="font-medium text-[var(--ink)]">问答</span>
+                    <span className="font-medium text-[var(--ink)]">{t("briefAsk")}</span>
                     {emptyState?.needIndex ? (
                       <>
-                        {" — 需先 "}
+                        {" — "}
+                        {t("chatNeedIndexPrefix")}{" "}
                         <IndexBuildLink
                           onClick={openIndexBuild}
                           disabled={indexBuildBusy}
                         />
-                        {"，再输入问题回车"}
+                        {t("chatAskThenEnter")}
                       </>
                     ) : (
-                      " — 输入问题回车（不选文章则检索整份简报）"
+                      t("chatAskEnterFull")
                     )}
                   </li>
                 </ul>
@@ -1080,7 +1174,9 @@ export default function ChatPage() {
                       <>
                         {message.citations && message.citations.length > 0 ? (
                           <p className="mb-2 text-[11px] text-[var(--ink-muted)]">
-                            引用 {message.citations.length} 个片段 ·{" "}
+                            {formatMessage(locale, "chatCitations", {
+                              count: message.citations.length,
+                            })}
                             <button
                               type="button"
                               className="text-[var(--accent)] hover:underline"
@@ -1094,13 +1190,13 @@ export default function ChatPage() {
                                 }
                               }}
                             >
-                              打开引用
+                              {t("chatOpenCitations")}
                             </button>
                           </p>
                         ) : null}
                         {message.thinking ? (
-                          <details className="mb-2 border-l-2 border-[var(--rule)] pl-2 text-[11px] text-[var(--ink-muted)]">
-                            <summary className="cursor-pointer">思考过程</summary>
+                          <details className="mb-2 border-l border-[var(--rule)] pl-2 text-[11px] text-[var(--ink-muted)]">
+                            <summary className="cursor-pointer">{t("briefThinking")}</summary>
                             <pre className="mt-1.5 whitespace-pre-wrap">{message.thinking}</pre>
                           </details>
                         ) : null}
@@ -1130,7 +1226,7 @@ export default function ChatPage() {
                             }
                           }}
                           rows={3}
-                          className="w-full resize-y rounded-[var(--radius-control)] border border-[color-mix(in_srgb,var(--paper-raised)_30%,var(--ink))] bg-[color-mix(in_srgb,var(--ink)_92%,white)] px-2 py-1.5 text-sm leading-6 text-[var(--paper-raised)] outline-none"
+                          className="w-full resize-y rounded-[var(--radius-control)] border border-[color-mix(in_srgb,var(--paper-raised)_30%,var(--ink))] bg-[color-mix(in_srgb,var(--ink)_92%,white)] px-2 py-1.5 text-sm leading-6 text-[var(--paper-raised)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[color-mix(in_srgb,var(--accent)_55%,transparent)]"
                         />
                         <div className="mt-2 flex justify-end gap-2">
                           <button
@@ -1138,7 +1234,7 @@ export default function ChatPage() {
                             onClick={cancelInlineEdit}
                             className="rounded px-2 py-1 text-xs text-[var(--ink-muted)] hover:text-[var(--paper-raised)]"
                           >
-                            取消
+                            {t("cancel")}
                           </button>
                           <button
                             type="button"
@@ -1146,7 +1242,7 @@ export default function ChatPage() {
                             onClick={submitInlineEdit}
                             className="rounded bg-[var(--paper-raised)] px-2 py-1 text-xs text-[var(--ink)] disabled:opacity-50"
                           >
-                            发送
+                            {t("commonSend")}
                           </button>
                         </div>
                       </div>
@@ -1161,7 +1257,7 @@ export default function ChatPage() {
                                 className="inline-flex max-w-full items-center rounded px-2 py-0.5 text-[11px] text-[color-mix(in_srgb,var(--paper-raised)_80%,transparent)]"
                                 title={article.title}
                               >
-                                {article.title || "未命名文章"}
+                                {article.title || t("chatUnnamedArticle")}
                               </span>
                             ))}
                           </div>
@@ -1169,9 +1265,9 @@ export default function ChatPage() {
                         <button
                           type="button"
                           onClick={() => startInlineEdit(index, message.content)}
-                          className="mt-1 block text-xs text-[var(--ink-muted)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--paper-raised)]"
+                          className="mt-1 block text-xs text-[var(--ink-muted)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--paper-raised)] focus-visible:opacity-100"
                         >
-                          重新编辑
+                          {t("chatResend")}
                         </button>
                       </>
                     )}
@@ -1220,19 +1316,21 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={() => setEnableDeepThinking(!enableDeepThinking)}
-                title={enableDeepThinking ? "关闭深度思考" : "开启深度思考"}
-                className={`rounded px-2 py-1 text-xs transition-colors ${
+                title={`${enableDeepThinking ? t("chatDeepThinkOn") : t("chatDeepThinkOff")} · ${t("chatThinkHint")}`}
+                aria-pressed={enableDeepThinking}
+                aria-label={t("chatThinkHint")}
+                className={`ui-btn px-2.5 text-xs ${
                   enableDeepThinking
-                    ? "bg-[var(--accent-subtle,color-mix(in_srgb,var(--accent)_12%,transparent))] text-[var(--accent)]"
-                    : "text-[var(--ink-muted)] hover:text-[var(--ink)]"
+                    ? "ui-btn-accent"
+                    : "ui-btn-ghost"
                 }`}
               >
-                思考
+                {t("chatThink")}
               </button>
               {composerMenuItems.length > 0 ? (
                 <OverflowMenu
                   items={composerMenuItems}
-                  label="对话选项"
+                  label={t("chatComposerMenu")}
                   placement="top"
                 />
               ) : null}
@@ -1242,7 +1340,7 @@ export default function ChatPage() {
                   onClick={stopGeneration}
                   className="ui-btn ui-btn-danger shrink-0"
                 >
-                  停止
+                  {t("stop")}
                 </button>
               ) : (
                 <button
@@ -1251,7 +1349,7 @@ export default function ChatPage() {
                   title={submitDisabledTitle}
                   className={`ui-btn ui-btn-primary shrink-0 ${!canSubmit ? "opacity-50" : ""}`}
                 >
-                  发送
+                  {t("commonSend")}
                 </button>
               )}
             </div>
@@ -1268,6 +1366,17 @@ export default function ChatPage() {
         </aside>
       </div>
       <IndexBuildConfirmModal />
+      <ConfirmModal
+        open={regenConfirmOpen}
+        title={t("briefRegenConfirmTitle")}
+        message={t("briefRegenConfirmMessage")}
+        confirmLabel={t("briefRegenerate")}
+        onConfirm={() => {
+          setRegenConfirmOpen(false);
+          void startSummarize();
+        }}
+        onCancel={() => setRegenConfirmOpen(false)}
+      />
       <RuleExplainModal
         open={ruleExplainOpen}
         onClose={() => setRuleExplainOpen(false)}

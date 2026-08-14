@@ -8,6 +8,7 @@ import {
   INDEX_RETENTION_DAYS,
   formatIndexBuildConfirmMessage,
 } from "../utils/indexBuild";
+import { useLocale } from "../i18n/LocaleContext";
 
 export interface IndexBuildRequest {
   feedIds?: string[];
@@ -21,6 +22,7 @@ interface IndexBuildLinkProps {
 }
 
 export function IndexBuildLink({ onClick, disabled, className }: IndexBuildLinkProps) {
+  const { t } = useLocale();
   return (
     <button
       type="button"
@@ -28,12 +30,13 @@ export function IndexBuildLink({ onClick, disabled, className }: IndexBuildLinkP
       disabled={disabled}
       className={`text-[var(--accent)] hover:underline disabled:cursor-not-allowed disabled:opacity-50 ${className ?? ""}`}
     >
-      建立索引
+      {t("indexBuildLink")}
     </button>
   );
 }
 
 export function useIndexBuildConfirm() {
+  const { t, locale } = useLocale();
   const navigate = useNavigate();
   const { settings } = useSettings();
   const { buildIndex, loadingIndex, digestBusy, clearErrors } = useDigest();
@@ -106,7 +109,7 @@ export function useIndexBuildConfirm() {
     }
   }, [pending, confirmLoading, previewLoading, buildIndex, clearErrors]);
 
-  const confirmMessage = formatIndexBuildConfirmMessage({
+  const confirmMessage = formatIndexBuildConfirmMessage(locale, {
     scopeLabel: pending?.scopeLabel ?? "",
     articleCount: previewFailed ? null : (preview?.articleCount ?? null),
     metaCount: preview?.metaCount,
@@ -117,14 +120,14 @@ export function useIndexBuildConfirm() {
     <>
       <ConfirmModal
         open={embedGuideOpen}
-        title="需要配置 Embedding"
+        title={t("indexEmbedTitle")}
         message={
           settings.embeddingModel.trim()
-            ? "建立索引需要 Embedding API Key。请在设置 → API Key 中填写；若与对话模型同 provider，可留空并复用对话模型 Key。"
-            : "建立索引需要 Embedding 模型与 API Key。请在设置 → API Key 中配置；若与对话模型同 provider，Embedding Key 可留空并复用对话模型 Key。"
+            ? t("indexEmbedMessageWithModel")
+            : t("indexEmbedMessageNoModel")
         }
-        confirmLabel="去配置"
-        cancelLabel="关闭"
+        confirmLabel={t("commonGoConfigure")}
+        cancelLabel={t("close")}
         onConfirm={() => {
           setEmbedGuideOpen(false);
           navigate("/settings?tab=model");
@@ -133,9 +136,9 @@ export function useIndexBuildConfirm() {
       />
       <ConfirmModal
         open={open}
-        title="建立索引"
-        message={previewLoading ? "正在统计可索引文章…" : confirmMessage}
-        confirmLabel="确认建立"
+        title={t("indexBuildTitle")}
+        message={previewLoading ? t("indexBuildPreviewLoading") : confirmMessage}
+        confirmLabel={t("indexBuildConfirm")}
         loading={previewLoading || confirmLoading}
         onConfirm={() => void confirm()}
         onCancel={cancel}

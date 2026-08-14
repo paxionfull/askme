@@ -1,40 +1,53 @@
 import type { Feed } from "../api";
+import type { Locale } from "../i18n/locale";
+import { formatMessage } from "../i18n/messages";
 
 export function isPlatformFeed(feed: Pick<Feed, "platform_account" | "id"> | null | undefined): boolean {
   if (!feed) return false;
   return Boolean(feed.platform_account);
 }
 
-export function platformLabel(platform?: string): string {
+export function platformLabel(locale: Locale, platform?: string): string {
   const key = (platform || "").trim();
-  return key || "平台";
+  return key || formatMessage(locale, "platformDefault", {});
 }
 
-export function deleteFeedMessage(feed: Feed): string {
+export function deleteFeedMessage(locale: Locale, feed: Feed): string {
   const name = feed.name || feed.id;
   if (isPlatformFeed(feed)) {
-    const label = platformLabel(feed.platform);
-    return (
-      `确定删除「${name}」？\n\n` +
-      `这是${label}平台账号，只会删除该账号登记，不会删除共享的${label}平台 skill，其它同平台账号不受影响。` +
-      `之后可通过相同链接重新接入。`
-    );
+    const platform = platformLabel(locale, feed.platform);
+    return formatMessage(locale, "deleteFeedPlatformMsg", { name, platform });
   }
-  return (
-    `确定删除「${name}」？\n\n` +
-    `默认保留本地 discovery skill，之后可通过相同链接重新接入。`
-  );
+  return formatMessage(locale, "deleteFeedDefaultMsg", { name });
 }
 
-export function deleteFeedSuccessMessage(result: {
-  skill_removed?: boolean;
-  platform_account?: boolean;
-}): string {
+export function deleteFeedSuccessMessage(
+  locale: Locale,
+  result: {
+    skill_removed?: boolean;
+    platform_account?: boolean;
+  },
+): string {
   if (result.platform_account) {
-    return "已删除该账号（平台 skill 保留，其它账号不受影响）";
+    return formatMessage(locale, "deleteFeedSuccessPlatform", {});
   }
   if (result.skill_removed) {
-    return "已删除数据源并删除本地 skill";
+    return formatMessage(locale, "deleteFeedSuccessWithSkill", {});
   }
-  return "已删除数据源（skill 已保留）";
+  return formatMessage(locale, "deleteFeedSuccessKeepSkill", {});
+}
+
+export function clearUngroupedMessage(locale: Locale, count: number): string {
+  return formatMessage(locale, "clearUngroupedMsg", { count });
+}
+
+export function deleteGroupMessage(
+  locale: Locale,
+  name: string,
+  feedCount: number,
+): string {
+  if (feedCount === 0) {
+    return formatMessage(locale, "deleteGroupEmptyMsg", { name });
+  }
+  return formatMessage(locale, "deleteGroupWithFeedsMsg", { name, count: feedCount });
 }

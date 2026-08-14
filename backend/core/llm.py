@@ -340,7 +340,7 @@ def _thinking_kwargs(config: LlmConfig, enable_thinking: bool) -> dict[str, Any]
 
 def ensure_configured(config: LlmConfig) -> None:
     if not config.api_key:
-        raise LLMError("LLM 未配置，请在设置页填写 API Key 或在 .env 中设置 LLM_API_KEY", status_code=503)
+        raise LLMError("LLM 未配置，请先在「设置 → API Key」页面填写对话模型的 API Key", status_code=503)
 
 
 def _delta_get(delta: Any, name: str) -> str | None:

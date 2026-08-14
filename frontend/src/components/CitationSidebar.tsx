@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
 import CitationPanel, { type CitationItem } from "./CitationPanel";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
+import { useModalA11y } from "../hooks/useModalA11y";
 
 interface CitationSidebarProps {
   items: CitationItem[];
@@ -16,17 +19,10 @@ export default function CitationSidebar({
   onOpenChange,
   onSelect,
 }: CitationSidebarProps) {
+  const { t, locale } = useLocale();
   const panelRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
-
-  useEffect(() => {
-    if (!open) return;
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onOpenChange(false);
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onOpenChange]);
+  useModalA11y(open, () => onOpenChange(false), panelRef);
 
   useEffect(() => {
     if (!open || activeIndex == null) return;
@@ -44,7 +40,7 @@ export default function CitationSidebar({
     <div className="absolute inset-0 z-30 flex justify-end">
       <button
         type="button"
-        aria-label="关闭引用来源"
+        aria-label={t("citationCloseAria")}
         className="absolute inset-0 bg-[color-mix(in_srgb,var(--ink)_18%,transparent)] transition-opacity"
         onClick={() => onOpenChange(false)}
       />
@@ -52,25 +48,27 @@ export default function CitationSidebar({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-label="引用来源"
-        className="relative flex h-full w-[min(22rem,92%)] flex-col border-l border-[var(--rule)] bg-[var(--paper-raised)] shadow-[-8px_0_24px_rgba(28,25,23,0.08)]"
+        aria-label={t("citationPanelAria")}
+        className="relative flex h-full w-[min(22rem,92%)] flex-col border-l border-[var(--rule)] bg-[var(--paper-raised)] shadow-[-8px_0_24px_color-mix(in_srgb,var(--ink)_12%,transparent)]"
       >
         <div className="flex items-center justify-between gap-2 border-b border-[var(--rule)] px-4 py-3">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold tracking-tight text-[var(--ink)]">引用来源</h2>
+            <h2 className="text-sm font-semibold tracking-tight text-[var(--ink)]">
+              {t("citationTitle")}
+            </h2>
             <p className="mt-0.5 text-[11px] text-[var(--ink-muted)]">
               {items.length > 0
-                ? `${items.length} 个片段 · 点回答中的 [n] 定位`
-                : "发送问题后显示检索片段"}
+                ? formatMessage(locale, "citationCountHint", { count: items.length })
+                : t("citationEmptyHint")}
             </p>
           </div>
           <button
             type="button"
             onClick={() => onOpenChange(false)}
             className="ui-btn shrink-0 px-2 py-1 text-xs"
-            aria-label="关闭"
+            aria-label={t("close")}
           >
-            关闭
+            {t("close")}
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">

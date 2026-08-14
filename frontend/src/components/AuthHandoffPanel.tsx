@@ -7,6 +7,8 @@ import {
   type AuthPrecheckItem,
   type LoginSessionStatus,
 } from "../api";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
 
 interface AuthHandoffPanelProps {
   item: AuthPrecheckItem;
@@ -14,13 +16,9 @@ interface AuthHandoffPanelProps {
   onCookieChange: (value: string) => void;
   onSaved: () => void;
   saving?: boolean;
-  /** 挂载后自动打开系统登录窗口（用于授权失效后立刻重登） */
   autoStart?: boolean;
-  /** 自动打开登录窗后回调（父级可据此避免切 tab 回来再次打开） */
   onAutoStarted?: () => void;
-  /** 覆盖默认标题 */
   title?: string;
-  /** 提供后显示「取消」：关闭登录会话并回调（如收起重新授权面板） */
   onCancel?: () => void;
 }
 
@@ -35,6 +33,7 @@ export default function AuthHandoffPanel({
   title,
   onCancel,
 }: AuthHandoffPanelProps) {
+  const { t, locale } = useLocale();
   const slot = item.slot || "";
   const [session, setSession] = useState<LoginSessionStatus | null>(null);
   const [starting, setStarting] = useState(false);
@@ -114,7 +113,6 @@ export default function AuthHandoffPanel({
       });
       sessionIdRef.current = started.session_id;
       if (userCancelledRef.current) {
-        // 启动过程中点了取消：关掉刚弹出的扫码窗
         void cancelCredentialLoginSession(started.session_id).catch(() => {});
         return;
       }
@@ -122,11 +120,7 @@ export default function AuthHandoffPanel({
       setSession(started);
     } catch (err) {
       if (!aliveRef.current || userCancelledRef.current) return;
-      setError(
-        err instanceof Error
-          ? err.message
-          : "无法打开登录窗口（可改用下方粘贴 Cookie）",
-      );
+      setError(err instanceof Error ? err.message : t("authOpenFailed"));
     } finally {
       if (aliveRef.current && !userCancelledRef.current) setStarting(false);
     }
@@ -162,7 +156,7 @@ export default function AuthHandoffPanel({
 
   async function handlePasteSave() {
     if (!slot || !cookieDraft.trim()) {
-      setError("请先粘贴 Cookie");
+      setError(t("authPasteFirst"));
       return;
     }
     setError("");
@@ -174,26 +168,28 @@ export default function AuthHandoffPanel({
       });
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
+      setError(err instanceof Error ? err.message : t("groupModalErrSave"));
     }
   }
 
   const loginUrl = item.login_url || item.entry_url;
+  const panelTitle =
+    title ||
+    formatMessage(locale, "authNeedTitle", {
+      label: item.slot_label || item.slot || "",
+    });
 
   return (
-    <div className="border-l-2 border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-3">
+    <div className="rounded-[var(--radius-control)] border border-[color-mix(in_srgb,var(--accent)_35%,var(--border))] bg-[var(--accent-soft)] px-3 py-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-[var(--accent)]">
-            {title || `需要登录授权：${item.slot_label || item.slot}`}
-          </p>
+          <p className="text-sm font-medium text-[var(--accent)]">{panelTitle}</p>
           <p className="mt-1 text-xs text-[var(--ink-muted)]">
-            {item.cookie_hint ||
-              "请点击下方按钮在弹出窗口中完成登录，系统会自动读取 Cookie；也可手动粘贴。"}
+            {item.cookie_hint || t("authNeedHint")}
           </p>
           {loginUrl ? (
             <p className="mt-1 truncate text-xs text-[var(--ink-muted)]">
-              登录页：{" "}
+              {t("authLoginPage")}{" "}
               <a href={loginUrl} target="_blank" rel="noreferrer" className="ui-link">
                 {loginUrl}
               </a>
@@ -206,7 +202,7 @@ export default function AuthHandoffPanel({
             onClick={() => void handleCancelAll()}
             className="ui-btn shrink-0 text-xs"
           >
-            取消
+            {t("cancel")}
           </button>
         ) : null}
       </div>
@@ -219,14 +215,14 @@ export default function AuthHandoffPanel({
           className="ui-btn ui-btn-primary text-xs"
         >
           {starting
-            ? "正在打开…"
+            ? t("authOpenLoading")
             : session && !session.done
-              ? "等待登录中…"
-              : "打开登录窗口（自动读 Cookie）"}
+              ? t("authWaiting")
+              : t("authOpenWindow")}
         </button>
         {session && !session.done ? (
           <button type="button" onClick={() => void handleCancelSession()} className="ui-btn text-xs">
-            取消窗口
+            {t("authCancelWindow")}
           </button>
         ) : null}
       </div>
@@ -237,7 +233,7 @@ export default function AuthHandoffPanel({
             session.status === "done"
               ? "text-[var(--success)]"
               : session.status === "error"
-                ? "text-red-700"
+                ? "text-[var(--danger-text)]"
                 : "text-[var(--accent)]"
           }`}
         >
@@ -246,12 +242,12 @@ export default function AuthHandoffPanel({
         </p>
       ) : null}
 
-      <p className="mt-3 text-xs font-medium text-[var(--ink-muted)]">或手动粘贴 Cookie</p>
+      <p className="mt-3 text-xs font-medium text-[var(--ink-muted)]">{t("authPasteLabel")}</p>
       <textarea
         value={cookieDraft}
         onChange={(e) => onCookieChange(e.target.value)}
         rows={3}
-        placeholder="粘贴完整 Cookie…"
+        placeholder={t("authPastePlaceholder")}
         className="ui-textarea mt-1 w-full"
       />
       <button
@@ -260,10 +256,14 @@ export default function AuthHandoffPanel({
         onClick={() => void handlePasteSave()}
         className="ui-btn ui-btn-accent mt-2 text-xs"
       >
-        {saving ? "保存中…" : "保存粘贴的 Cookie"}
+        {saving ? t("saving") : t("authSaveCookie")}
       </button>
 
-      {error ? <p className="mt-2 text-xs text-red-700">{error}</p> : null}
+      {error ? (
+        <p className="mt-2 text-xs text-[var(--danger-text)]" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

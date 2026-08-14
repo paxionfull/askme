@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useLocale } from "../i18n/LocaleContext";
 
 export type PrepStepState = "done" | "current" | "locked" | "running" | "idle";
 
@@ -25,7 +26,7 @@ function StepMark({ state }: { state: PrepStepState }) {
   if (state === "done") {
     return (
       <span
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--success-soft)] text-[10px] font-semibold text-[var(--success)]"
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--success-soft)] text-[11px] font-semibold text-[var(--success)]"
         aria-hidden
       >
         ✓
@@ -46,7 +47,7 @@ function StepMark({ state }: { state: PrepStepState }) {
   }
   return (
     <span
-      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--rule)] text-[10px] text-[var(--ink-muted)]"
+      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--rule)] text-[11px] text-[var(--ink-muted)]"
       aria-hidden
     >
       ○
@@ -60,10 +61,11 @@ export default function LibraryPrepStrip({
   primaryAction,
   doneLink,
 }: LibraryPrepStripProps) {
+  const { t } = useLocale();
   return (
     <div className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <nav aria-label="准备对话进度" className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1.5">
+        <nav aria-label={t("prepProgressAria")} className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1.5">
           {steps.map((step, index) => {
             const muted = step.state === "done" || step.state === "locked" || step.state === "idle";
             const emphasis = step.state === "current" || step.state === "running";
@@ -122,7 +124,7 @@ export default function LibraryPrepStrip({
             to="/"
             className="ui-btn ui-btn-primary shrink-0 px-3 py-1.5 text-sm no-underline"
           >
-            去简报 →
+            {t("prepGoBrief")}
           </Link>
         ) : null}
       </div>

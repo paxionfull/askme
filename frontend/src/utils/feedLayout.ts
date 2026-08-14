@@ -51,6 +51,16 @@ export function buildSections(
   return sections;
 }
 
+/** Display name for feed groups; maps built-in ungrouped id to localized label. */
+export function resolveGroupDisplayName(
+  groupId: string,
+  name: string,
+  ungroupedLabel: string,
+): string {
+  if (groupId === UNGROUPED_GROUP_ID) return ungroupedLabel;
+  return name;
+}
+
 export function sectionsToLayout(
   sections: FeedSection[],
   previousGroups: FeedGroup[] = [],

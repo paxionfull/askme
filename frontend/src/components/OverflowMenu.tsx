@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useLocale } from "../i18n/LocaleContext";
+import { useMenuKeyboard } from "../hooks/useMenuKeyboard";
 
 export type OverflowMenuItem = {
   label: string;
@@ -60,16 +62,26 @@ function computeCoords(
 
 export default function OverflowMenu({
   items,
-  label = "更多",
+  label,
   align = "right",
   placement = "bottom",
   disabled = false,
 }: OverflowMenuProps) {
+  const { t } = useLocale();
+  const menuLabel = label ?? t("more");
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState<MenuCoords | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  function closeMenu() {
+    setOpen(false);
+    previousFocusRef.current?.focus?.({ preventScroll: true });
+  }
+
+  useMenuKeyboard(open, menuRef, closeMenu);
 
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) return;
@@ -84,7 +96,6 @@ export default function OverflowMenu({
     }
 
     updatePosition();
-    // 菜单渲染后再量一次真实高度
     const frame = window.requestAnimationFrame(updatePosition);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
@@ -101,17 +112,10 @@ export default function OverflowMenu({
       const target = event.target as Node;
       if (rootRef.current?.contains(target)) return;
       if (menuRef.current?.contains(target)) return;
-      setOpen(false);
-    }
-    function handleKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
+      closeMenu();
     }
     document.addEventListener("mousedown", handleClick);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleKey);
-    };
+    return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
   useEffect(() => {
@@ -124,6 +128,7 @@ export default function OverflowMenu({
         <div
           ref={menuRef}
           role="menu"
+          aria-label={menuLabel}
           style={
             coords
               ? {
@@ -152,12 +157,12 @@ export default function OverflowMenu({
               disabled={item.disabled}
               title={item.hint}
               onClick={() => {
-                setOpen(false);
+                closeMenu();
                 item.onClick?.();
               }}
-              className={`flex w-full flex-col px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
+              className={`flex min-h-9 w-full flex-col px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
                 item.danger
-                  ? "text-red-800 hover:bg-[var(--error-soft)]"
+                  ? "text-[var(--danger-text)] hover:bg-[var(--error-soft)]"
                   : "text-[var(--ink)] hover:bg-[var(--paper)]"
               }`}
             >
@@ -175,11 +180,18 @@ export default function OverflowMenu({
         ref={buttonRef}
         type="button"
         disabled={disabled}
-        aria-label={label}
+        aria-label={menuLabel}
         aria-expanded={open}
         aria-haspopup="menu"
-        onClick={() => setOpen((value) => !value)}
-        className="ui-btn px-2 py-1.5 text-xs disabled:opacity-50"
+        onClick={() => {
+          if (open) {
+            closeMenu();
+            return;
+          }
+          previousFocusRef.current = document.activeElement as HTMLElement | null;
+          setOpen(true);
+        }}
+        className="ui-icon-btn border border-[var(--rule)] bg-[var(--paper-raised)] text-xs disabled:opacity-50"
       >
         ⋯
       </button>

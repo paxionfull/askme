@@ -336,13 +336,20 @@ async function collectFilesFromDirectoryHandle(
   prefix = "",
 ): Promise<RelativeFileEntry[]> {
   const entries: RelativeFileEntry[] = [];
-  for await (const [name, handle] of dirHandle.entries()) {
+  const iterable = (
+    dirHandle as FileSystemDirectoryHandle & {
+      entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+    }
+  ).entries();
+  for await (const [name, handle] of iterable) {
     const nextPrefix = prefix ? `${prefix}/${name}` : name;
     if (handle.kind === "directory") {
-      entries.push(...(await collectFilesFromDirectoryHandle(handle, nextPrefix)));
+      entries.push(
+        ...(await collectFilesFromDirectoryHandle(handle as FileSystemDirectoryHandle, nextPrefix)),
+      );
       continue;
     }
-    const file = await handle.getFile();
+    const file = await (handle as FileSystemFileHandle).getFile();
     entries.push({ relPath: nextPrefix, file });
   }
   return entries;

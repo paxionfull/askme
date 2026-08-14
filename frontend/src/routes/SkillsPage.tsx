@@ -30,7 +30,9 @@ import {
   type SkillsCatalog,
 } from "../api";
 import { defaultDigestProfile } from "../utils/digestProfile";
-import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
+import { UNGROUPED_GROUP_ID, resolveGroupDisplayName } from "../utils/feedLayout";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
 
 const DISCOVERY_ROW_HEIGHT = 44;
 const DISCOVERY_LIST_MAX_HEIGHT = 360;
@@ -105,13 +107,14 @@ function SkillMetaBadges({
   skill: SkillItem;
   usageLabel?: string;
 }) {
+  const { t } = useLocale();
   return (
     <span className="mt-1 flex flex-wrap gap-1.5">
       {skill.builtin ? (
-        <span className="text-[11px] text-[var(--ink-muted)]">内置</span>
+        <span className="text-[11px] text-[var(--ink-muted)]">{t("skillBuiltin")}</span>
       ) : null}
       {skill.has_profile ? (
-        <span className="text-[11px] text-[var(--success)]">结构化</span>
+        <span className="text-[11px] text-[var(--success)]">{t("skillStructured")}</span>
       ) : null}
       {usageLabel ? (
         <span className="text-[11px] text-[var(--ink-muted)]">{usageLabel}</span>
@@ -169,10 +172,10 @@ function SkillActionButton({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className={`inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius-control)] p-0 transition ${
+      className={`ui-icon-btn p-0 transition ${
         danger
-          ? "text-[var(--ink-muted)] hover:bg-[var(--error-soft)] hover:text-red-800"
-          : "text-[var(--ink-muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+          ? "hover:bg-[var(--error-soft)] hover:text-[var(--danger-text)]"
+          : "hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
       } disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-[var(--ink-muted)]`}
     >
       {children}
@@ -191,6 +194,7 @@ function DigestRuleRow({
   onDelete: () => void;
   onRestore: () => void;
 }) {
+  const { locale } = useLocale();
   const displayName = skill.name?.trim() || skill.id;
   return (
     <li className="flex items-start justify-between gap-3 border-b border-[var(--rule)] py-3 first:border-t first:border-[var(--rule)] last:border-b-0">
@@ -206,15 +210,25 @@ function DigestRuleRow({
       </div>
       <div className="shrink-0">
         <div className="flex items-center gap-0.5">
-          <SkillActionButton title={`查看 ${displayName}`} onClick={onEdit}>
+          <SkillActionButton
+            title={formatMessage(locale, "skillView", { name: displayName })}
+            onClick={onEdit}
+          >
             <EyeIcon />
           </SkillActionButton>
         {skill.builtin ? (
-            <SkillActionButton title={`还原 ${displayName}`} onClick={onRestore}>
+            <SkillActionButton
+              title={formatMessage(locale, "skillRestore", { name: displayName })}
+              onClick={onRestore}
+            >
               ↺
             </SkillActionButton>
         ) : (
-            <SkillActionButton title={`删除 ${displayName}`} danger onClick={onDelete}>
+            <SkillActionButton
+              title={formatMessage(locale, "skillDeleteAction", { name: displayName })}
+              danger
+              onClick={onDelete}
+            >
               <TrashIcon />
             </SkillActionButton>
         )}
@@ -239,6 +253,7 @@ function DiscoverySkillRow({
   exportChecked?: boolean;
   onToggleExport?: (checked: boolean) => void;
 }) {
+  const { t, locale } = useLocale();
   const displayName = skill.name?.trim() || skill.id;
   const exportable = isExportableDiscovery(skill);
   return (
@@ -250,7 +265,7 @@ function DiscoverySkillRow({
               type="checkbox"
               checked={exportChecked}
               onChange={(e) => onToggleExport?.(e.target.checked)}
-              aria-label={`选中 ${displayName}`}
+              aria-label={formatMessage(locale, "skillSelect", { name: displayName })}
             />
             <span className="truncate font-medium text-[var(--ink)]">{displayName}</span>
             {displayName !== skill.id ? (
@@ -260,7 +275,7 @@ function DiscoverySkillRow({
         ) : (
           <div className="min-w-0 flex-1 truncate text-[var(--ink-muted)]">
             <span className="font-medium">{displayName}</span>
-            <span className="ml-2 text-[11px]">内置平台 · 不可导出</span>
+            <span className="ml-2 text-[11px]">{t("skillBuiltinPlatform")}</span>
           </div>
         )
       ) : (
@@ -275,18 +290,21 @@ function DiscoverySkillRow({
             <span className="ml-2 text-[11px] font-normal text-[var(--ink-muted)]">{skill.id}</span>
           ) : null}
           {skill.builtin ? (
-            <span className="ml-2 text-[11px] text-[var(--ink-muted)]">内置</span>
+            <span className="ml-2 text-[11px] text-[var(--ink-muted)]">{t("skillBuiltin")}</span>
           ) : null}
         </button>
       )}
       {!exportMode ? (
         <div className="shrink-0">
           <div className="flex items-center gap-0.5">
-            <SkillActionButton title={`查看 ${displayName}`} onClick={onView}>
+            <SkillActionButton
+              title={formatMessage(locale, "skillView", { name: displayName })}
+              onClick={onView}
+            >
               <EyeIcon />
             </SkillActionButton>
             <SkillActionButton
-              title={`删除 ${displayName}`}
+              title={formatMessage(locale, "skillDeleteAction", { name: displayName })}
               danger
               disabled={Boolean(skill.builtin && PLATFORM_SKILL_IDS.has(skill.id))}
               onClick={onDelete}
@@ -397,6 +415,7 @@ function GenericSkillRow({
   onDelete?: () => void;
   deleteDisabled?: boolean;
 }) {
+  const { locale } = useLocale();
   return (
     <li className="flex items-start justify-between gap-3 border-b border-[var(--rule)] py-3 first:border-t first:border-[var(--rule)] last:border-b-0">
       <div className="min-w-0">
@@ -410,12 +429,12 @@ function GenericSkillRow({
       </div>
       <div className="shrink-0">
         <div className="flex items-center gap-0.5">
-          <SkillActionButton title={`查看 ${title}`} onClick={onView}>
+          <SkillActionButton title={formatMessage(locale, "skillView", { name: title })} onClick={onView}>
             <EyeIcon />
           </SkillActionButton>
           {onDelete ? (
             <SkillActionButton
-              title={`删除 ${title}`}
+              title={formatMessage(locale, "skillDeleteAction", { name: title })}
               danger
               disabled={deleteDisabled}
               onClick={onDelete}
@@ -430,12 +449,13 @@ function GenericSkillRow({
 }
 
 function SkillsCatalogSkeleton() {
+  const { t } = useLocale();
   return (
-    <div className="space-y-6" aria-busy="true" aria-label="加载 Skill 目录">
+    <div className="space-y-6" aria-busy="true" aria-label={t("skillLoadingAria")}>
       {[
-        { title: "简报生成规则", rows: 2 },
-        { title: "抓取", rows: 4 },
-        { title: "对话", rows: 1 },
+        { title: t("skillSkeletonDigest"), rows: 2 },
+        { title: t("skillSkeletonDiscovery"), rows: 4 },
+        { title: t("skillSkeletonChat"), rows: 1 },
       ].map(({ title, rows }) => (
         <section
           key={title}
@@ -462,7 +482,8 @@ function SkillsCatalogSkeleton() {
   );
 }
 
-export default function SkillsPanel({ embedded = false }: { embedded?: boolean }) {
+export default function SkillsPanel({ embedded: _embedded = false }: { embedded?: boolean }) {
+  const { t, locale } = useLocale();
   const { job: onboardJob, startSkillRepair } = useOnboarding();
   const [catalog, setCatalog] = useState<SkillsCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -571,7 +592,10 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
       seen.add(group.id);
       ordered.push({ id: group.id, name: group.name });
     }
-    ordered.push({ id: UNGROUPED_GROUP_ID, name: "未分组" });
+    ordered.push({
+      id: UNGROUPED_GROUP_ID,
+      name: resolveGroupDisplayName(UNGROUPED_GROUP_ID, "", t("addSourceUngrouped")),
+    });
     return ordered.filter((option) => {
       const skillCount = exportableSkillIdsForGroup(
         option.id,
@@ -583,7 +607,7 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
       const platformCount = platformFeedIdsForGroup(option.id, groups, exportLayout.feeds).length;
       return skillCount > 0 || platformCount > 0;
     });
-  }, [exportLayout, feedIdToDiscoverySkillId, exportableSkillIdSet]);
+  }, [exportLayout, feedIdToDiscoverySkillId, exportableSkillIdSet, t]);
 
   const loadCatalog = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -594,13 +618,13 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
       const data = await fetchSkillsCatalog();
       setCatalog(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败");
+      setError(err instanceof Error ? err.message : t("skillErrLoad"));
     } finally {
       if (!options?.silent) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void loadCatalog();
@@ -616,7 +640,10 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
 
   async function openSkillViewer(category: "discovery" | "other", skill: SkillItem) {
     const displayName = skill.name?.trim() || skill.id;
-    const title = category === "discovery" ? `Discovery · ${displayName}` : `其他 · ${displayName}`;
+    const title =
+      category === "discovery"
+        ? formatMessage(locale, "skillDetailDiscovery", { name: displayName })
+        : formatMessage(locale, "skillDetailOther", { name: displayName });
     setViewingSkill({ category, title });
     setSkillDetail(null);
     setSkillDetailError("");
@@ -628,7 +655,7 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
           : await fetchOtherSkillDetail(skill.id);
       setSkillDetail(detail);
     } catch (err) {
-      setSkillDetailError(err instanceof Error ? err.message : "加载失败");
+      setSkillDetailError(err instanceof Error ? err.message : t("skillErrLoad"));
     } finally {
       setSkillDetailLoading(false);
     }
@@ -644,7 +671,7 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
     if (!skill) {
       const id = newDigestSkillId();
       setProfileEditor({
-        title: "新建整理规则",
+        title: t("skillNewDigestRule"),
         skillId: id,
         isNew: true,
       });
@@ -675,7 +702,7 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
         setProfileName(detail.name || skill.id);
         setProfileDescription(detail.description || "");
       } catch (err) {
-        setProfileError(err instanceof Error ? err.message : "加载失败");
+        setProfileError(err instanceof Error ? err.message : t("skillErrLoad"));
       } finally {
         setProfileLoading(false);
       }
@@ -709,7 +736,7 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
       }
       setMarkdownDocument(detail.skill_md || "");
     } catch (err) {
-      setMarkdownError(err instanceof Error ? err.message : "加载失败");
+      setMarkdownError(err instanceof Error ? err.message : t("skillErrLoad"));
     } finally {
       setMarkdownLoading(false);
     }
@@ -738,7 +765,7 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
       const detail = await fetchChatSkill();
       setMarkdownDocument(detail.skill_md || "");
     } catch (err) {
-      setMarkdownError(err instanceof Error ? err.message : "加载失败");
+      setMarkdownError(err instanceof Error ? err.message : t("skillErrLoad"));
     } finally {
       setMarkdownLoading(false);
     }
@@ -775,11 +802,11 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
       if (profileEditor?.skillId === deleteTarget.id) {
         closeProfileEditor();
       }
-      setMessage(`已删除「${deleteTarget.name}」`);
+      setMessage(formatMessage(locale, "skillDeleted", { name: deleteTarget.name }));
       setDeleteTarget(null);
       await loadCatalog();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除失败");
+      setError(err instanceof Error ? err.message : t("skillErrDelete"));
     } finally {
       setDeleting(false);
     }
@@ -794,18 +821,18 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
       if (markdownEditor.category === "chat") {
         const skill_md = markdownDocument.trim();
         if (!skill_md) {
-          throw new Error("SKILL.md 内容不能为空");
+          throw new Error(t("skillErrEmptyMd"));
         }
         await saveChatSkill({ skill_md });
-        setMessage("对话 Skill 已保存");
+        setMessage(t("skillSavedChat"));
       } else {
         const skillId = markdownEditor.skillId.trim();
         const skill_md = markdownDocument.trim();
         if (!skillId.endsWith("-digest")) {
-          throw new Error("整理规则 id 需以 -digest 结尾");
+          throw new Error(t("skillErrDigestIdSuffix"));
         }
         if (!skill_md) {
-          throw new Error("SKILL.md 内容不能为空");
+          throw new Error(t("skillErrEmptyMd"));
         }
         const payload = { id: skillId, skill_md };
         if (markdownEditor.isNew) {
@@ -813,12 +840,12 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
         } else {
           await saveDigestSkill(payload);
         }
-        setMessage("整理规则已保存");
+        setMessage(t("skillSavedDigest"));
       }
       closeMarkdownEditor();
       await loadCatalog();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
+      setError(err instanceof Error ? err.message : t("skillErrSave"));
     } finally {
       setSaving(false);
     }
@@ -833,10 +860,10 @@ export default function SkillsPanel({ embedded = false }: { embedded?: boolean }
     try {
       const skillId = profileEditor.skillId.trim();
       if (!skillId.endsWith("-digest")) {
-        throw new Error("整理规则 id 需以 -digest 结尾");
+        throw new Error(t("skillErrDigestIdSuffix"));
       }
       const displayName = profileName.trim() || skillId;
-      const desc = profileDescription.trim() || "结构化整理规则";
+      const desc = profileDescription.trim() || t("skillDigestProfileDefault");
       const skill_md = `---
 name: ${displayName}
 description: ${desc}
@@ -852,11 +879,11 @@ description: ${desc}
       } else {
         await saveDigestSkill(payload);
       }
-      setMessage("整理规则已保存");
+      setMessage(t("skillSavedDigest"));
       closeProfileEditor();
       await loadCatalog();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "保存失败";
+      const msg = err instanceof Error ? err.message : t("skillErrSave");
       setProfileError(msg);
       setError(msg);
     } finally {
@@ -870,10 +897,10 @@ description: ${desc}
     setMessage("");
     try {
       await restoreDigestSkill(skill.id);
-      setMessage(`已还原「${skill.name || skill.id}」`);
+      setMessage(formatMessage(locale, "skillRestored", { name: skill.name || skill.id }));
       await loadCatalog({ silent: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "还原失败");
+      setError(err instanceof Error ? err.message : t("skillErrRestore"));
     } finally {
       setSaving(false);
     }
@@ -882,12 +909,12 @@ description: ${desc}
   function deleteConfirmMessage() {
     if (!deleteTarget) return "";
     if (deleteTarget.category === "digest") {
-      return `确定删除整理规则「${deleteTarget.name}」？\n\n删除后无法恢复。内置 Skill 需从仓库重新检出才能恢复。`;
+      return formatMessage(locale, "skillDeleteDigestConfirm", { name: deleteTarget.name });
     }
     if (deleteTarget.category === "discovery") {
-      return `确定删除 Discovery Skill「${deleteTarget.name}」？\n\n将删除 skill 目录并隐藏对应数据源。内置 Skill 需从仓库重新检出才能恢复。`;
+      return formatMessage(locale, "skillDeleteDiscoveryConfirm", { name: deleteTarget.name });
     }
-    return `确定删除 Skill「${deleteTarget.name}」？\n\n将删除 skill 目录，删除后无法恢复。`;
+    return formatMessage(locale, "skillDeleteConfirm", { name: deleteTarget.name });
   }
 
   function enterDiscoveryExportMode() {
@@ -989,12 +1016,21 @@ description: ${desc}
       const { blob, filename } = await exportDiscoverySkills(ids, platformFeedIds);
       downloadBlob(blob, filename);
       const parts: string[] = [];
-      if (ids.length > 0) parts.push(`${ids.length} 个 skill`);
-      if (platformFeedIds.length > 0) parts.push(`${platformFeedIds.length} 个平台账号`);
-      setMessage(`已导出 ${parts.join("、")}（${filename}），请查看浏览器下载`);
+      if (ids.length > 0) {
+        parts.push(formatMessage(locale, "skillExportPartSkills", { count: ids.length }));
+      }
+      if (platformFeedIds.length > 0) {
+        parts.push(formatMessage(locale, "skillExportPartPlatforms", { count: platformFeedIds.length }));
+      }
+      setMessage(
+        formatMessage(locale, "skillExportParts", {
+          parts: parts.join(locale === "zh" ? "、" : ", "),
+          filename,
+        }),
+      );
       exitDiscoveryExportMode();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "导出失败");
+      setError(err instanceof Error ? err.message : t("skillErrExport"));
     } finally {
       setExportingDiscovery(false);
     }
@@ -1007,38 +1043,37 @@ description: ${desc}
   const hasOnboardingSkill = catalog?.other.some((skill) => skill.id === "source-onboarding") ?? false;
 
   return (
-    <div className={embedded ? "space-y-6" : "h-full overflow-y-auto bg-[var(--paper)]"}>
-      {!embedded ? (
-        <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-6 py-4">
-          <h1 className="text-lg font-semibold tracking-tight text-[var(--ink)]">Skills</h1>
-        </header>
-      ) : null}
-
-      <div className={embedded ? "space-y-6" : "app-content-wide space-y-6 px-6 py-8"}>
+    <div className="space-y-6">
         {error ? (
           <div className="flex flex-wrap items-center gap-3">
-            <p className="text-sm text-red-800">{error}</p>
+            <p className="text-sm text-[var(--danger-text)]" role="alert">
+              {error}
+            </p>
             <button
               type="button"
               onClick={() => void loadCatalog()}
               className="ui-btn text-xs"
             >
-              重试
+              {t("skillRetry")}
             </button>
           </div>
         ) : null}
-        {message ? <p className="text-sm text-[var(--success)]">{message}</p> : null}
+        {message ? (
+          <p className="text-sm text-[var(--success)]" role="status">
+            {message}
+          </p>
+        ) : null}
 
         {loading && !catalog ? <SkillsCatalogSkeleton /> : null}
 
         {catalog ? (
           <>
             <Section
-              title="简报生成规则"
-              description="决定简报如何分类、关注什么、如何呈现；每个板块须手动绑定一套规则。"
+              title={t("skillSectionDigest")}
+              description={t("skillDigestDesc")}
               action={
                 <button type="button" onClick={() => void openDigestEditor()} className="ui-btn ui-btn-primary text-sm">
-                  新建
+                  {t("skillNew")}
                 </button>
               }
             >
@@ -1055,13 +1090,10 @@ description: ${desc}
               </ul>
             </Section>
 
-            <Section
-              title="抓取"
-              description="接入新网站时生成抓取 Skill，并管理已保存的抓取规则。"
-            >
+            <Section title={t("skillSectionDiscovery")} description={t("skillDiscoveryDesc")}>
               {hasOnboardingSkill ? (
                 <div>
-                  <p className="text-[11px] font-semibold text-[var(--ink-muted)]">Skill 生成</p>
+                  <p className="text-[11px] font-semibold text-[var(--ink-muted)]">{t("skillSkillGen")}</p>
                   <ul className="mt-1">
                     {catalog.other
                       .filter((skill) => skill.id === "source-onboarding")
@@ -1072,8 +1104,8 @@ description: ${desc}
                           subtitle={skill.name?.trim() ? skill.id : undefined}
                           badges={
                             <span className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-[var(--ink-muted)]">
-                              <span>工具</span>
-                              <span className="text-[var(--accent)]">生成器</span>
+                              <span>{t("skillTools")}</span>
+                              <span className="text-[var(--accent)]">{t("skillGenerator")}</span>
                             </span>
                           }
                           onView={() => void openSkillViewer("other", skill)}
@@ -1087,8 +1119,8 @@ description: ${desc}
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <p className="text-[11px] font-semibold text-[var(--ink-muted)]">
                     {filteredDiscovery.length > 0
-                      ? `抓取 Skill · ${filteredDiscovery.length}`
-                      : "抓取 Skill"}
+                      ? formatMessage(locale, "skillDiscoveryTitle", { count: filteredDiscovery.length })
+                      : t("skillDiscoveryTitleEmpty")}
                   </p>
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     {!discoveryExportMode ? (
@@ -1097,15 +1129,15 @@ description: ${desc}
                         className="ui-btn text-xs"
                         onClick={enterDiscoveryExportMode}
                       >
-                        导出 skill
+                        {t("skillExportSkills")}
                       </button>
                     ) : null}
                     <input
                       type="search"
                       value={discoveryQuery}
                       onChange={(e) => setDiscoveryQuery(e.target.value)}
-                      placeholder="搜索…"
-                      aria-label="搜索抓取 Skill"
+                      placeholder={t("skillSearchPh")}
+                      aria-label={t("skillSearchDiscoveryAria")}
                       className="ui-input w-52 text-sm sm:w-60"
                     />
                   </div>
@@ -1115,18 +1147,22 @@ description: ${desc}
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
                         <button type="button" className="ui-btn text-xs" onClick={toggleSelectAllExportableDiscovery}>
-                          {allExportableSelected ? "取消全选" : "全选"}
+                          {allExportableSelected ? t("skillDeselectAll") : t("skillSelectAll")}
                         </button>
                         <span className="text-[var(--ink-muted)] tabular-nums">
-                          已选 {discoveryExportSelected.size} skill
+                          {formatMessage(locale, "skillSelectedCount", {
+                            count: discoveryExportSelected.size,
+                          })}
                           {discoveryExportPlatformSelected.size > 0
-                            ? ` · ${discoveryExportPlatformSelected.size} 平台账号`
+                            ? formatMessage(locale, "skillPlatformSelected", {
+                                count: discoveryExportPlatformSelected.size,
+                              })
                             : ""}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
                         <button type="button" className="ui-btn text-xs" onClick={exitDiscoveryExportMode}>
-                          取消
+                          {t("cancel")}
                         </button>
                         <button
                           type="button"
@@ -1138,13 +1174,13 @@ description: ${desc}
                           }
                           onClick={() => void exportSelectedDiscoverySkills()}
                         >
-                          {exportingDiscovery ? "导出中…" : "导出所选"}
+                          {exportingDiscovery ? t("skillExporting") : t("skillExportSelected")}
                         </button>
                       </div>
                     </div>
                     {exportGroupOptions.length > 0 ? (
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[var(--ink-muted)]">按分组</span>
+                        <span className="text-[var(--ink-muted)]">{t("skillByGroup")}</span>
                         {exportGroupOptions.map((option) => {
                           const skillCount = exportableSkillIdsForGroup(
                             option.id,
@@ -1163,12 +1199,16 @@ description: ${desc}
                             <button
                               key={option.id}
                               type="button"
-                              className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                              className={`ui-chip-btn border transition-colors ${
                                 active
                                   ? "border-[var(--accent)] bg-[var(--accent-soft)] font-semibold text-[var(--accent)]"
                                   : "border-[var(--rule)] bg-[var(--paper-raised)] text-[var(--ink-muted)] hover:border-[var(--accent)] hover:text-[var(--ink)]"
                               }`}
-                              title={`切换「${option.name}」内 ${skillCount} 个 skill、${platformCount} 个平台账号`}
+                              title={formatMessage(locale, "skillToggleGroup", {
+                                name: option.name,
+                                skillCount,
+                                platformCount,
+                              })}
                               onClick={() => toggleDiscoveryExportGroup(option.id)}
                             >
                               {groupExportChipLabel(option.name, skillCount, platformCount)}
@@ -1181,7 +1221,9 @@ description: ${desc}
                 ) : null}
                 {filteredDiscovery.length === 0 ? (
                   <p className="border-t border-[var(--rule)] py-8 text-center text-sm text-[var(--ink-muted)]">
-                    {discoveryQuery.trim() ? `没有匹配「${discoveryQuery.trim()}」的 Skill` : "暂无抓取 Skill"}
+                    {discoveryQuery.trim()
+                      ? formatMessage(locale, "skillNoDiscoveryMatch", { query: discoveryQuery.trim() })
+                      : t("skillNoDiscovery")}
                   </p>
                 ) : (
                   <div className="border-t border-[var(--rule)]">
@@ -1198,7 +1240,7 @@ description: ${desc}
               </div>
             </Section>
 
-            <Section title="对话" description="提问时使用的对话 Skill。">
+            <Section title={t("skillSectionChat")} description={t("skillChatDesc")}>
               <ul>
                 <GenericSkillRow
                   title={catalog.chat.name?.trim() || catalog.chat.id}
@@ -1214,7 +1256,6 @@ description: ${desc}
             </Section>
           </>
         ) : null}
-      </div>
 
       <SkillDetailModal
         open={Boolean(viewingSkill)}
@@ -1295,7 +1336,7 @@ description: ${desc}
 
       <DigestProfileModal
         open={Boolean(profileEditor)}
-        title={profileEditor?.title ?? "整理规则"}
+        title={profileEditor?.title ?? t("skillProfileEditorTitle")}
         loading={profileLoading}
         error={profileError}
         path={profileEditor?.path}
@@ -1334,9 +1375,9 @@ description: ${desc}
 
       <ConfirmModal
         open={Boolean(deleteTarget)}
-        title="删除 Skill"
+        title={t("skillDeleteTitle")}
         message={deleteConfirmMessage()}
-        confirmLabel="确认删除"
+        confirmLabel={t("skillConfirmDelete")}
         danger
         loading={deleting}
         onCancel={() => setDeleteTarget(null)}

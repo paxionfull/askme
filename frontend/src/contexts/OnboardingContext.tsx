@@ -17,6 +17,8 @@ import {
   type OnboardBatchStatus,
   type OnboardSourceResult,
 } from "../api";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
 
 const LAST_ONBOARD_FEED_KEY = "askme.lastOnboardedFeedId";
 const ACTIVE_BATCH_KEY = "askme.activeOnboardBatchId";
@@ -112,6 +114,7 @@ interface OnboardingContextValue {
 const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
+  const { t, locale } = useLocale();
   const [job, setJob] = useState<OnboardingJob | null>(null);
   const [batch, setBatch] = useState<OnboardBatchStatus | null>(null);
   const [authRetryUrls, setAuthRetryUrls] = useState<string[]>([]);
@@ -177,7 +180,10 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
               if (current.status !== "running") return current;
               const next = {
                 ...current,
-                message: `进度同步中断，正在重试（${batchGoneMissesRef.current}/${BATCH_GONE_MAX_MISSES}）…`,
+                message: formatMessage(locale, "onboardBatchRetrySync", {
+                  current: batchGoneMissesRef.current,
+                  max: BATCH_GONE_MAX_MISSES,
+                }),
               };
               persistBatchSnapshot(next);
               return next;
@@ -194,7 +200,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
               return {
                 ...current,
                 status: "cancelled",
-                message: "进度同步中断（服务可能已重启）。可关闭后重新添加该源。",
+                message: t("onboardBatchSyncInterrupted"),
                 running: 0,
                 queued: 0,
               };
@@ -208,7 +214,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         batchPollInFlightRef.current = false;
       }
     },
-    [applyBatchStatus, clearBatchPoll, markFeedsNeedReload],
+    [applyBatchStatus, clearBatchPoll, locale, markFeedsNeedReload, t],
   );
 
   const startBatchPolling = useCallback(
@@ -275,7 +281,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         setBatch({
           ...snapshot,
           status: "cancelled",
-          message: "进度同步中断（服务可能已重启）。可关闭后重新添加该源。",
+          message: t("onboardBatchSyncInterrupted"),
           running: 0,
           queued: 0,
         });
@@ -288,7 +294,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [applyBatchStatus, markFeedsNeedReload, startBatchPolling]);
+  }, [applyBatchStatus, locale, markFeedsNeedReload, startBatchPolling, t]);
 
   const stopBatch = useCallback(() => {
     const batchId = batchIdRef.current ?? batch?.batch_id ?? readPersistedBatchId();
@@ -307,11 +313,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         ? {
             ...current,
             status: "cancelled",
-            message: "批量接入已停止",
+            message: t("onboardBatchStopped"),
           }
         : current,
     );
-  }, [applyBatchStatus, batch?.batch_id, clearBatchPoll]);
+  }, [applyBatchStatus, batch?.batch_id, clearBatchPoll, t]);
 
   const clearBatch = useCallback(() => {
     if (batchIdRef.current) return;
@@ -362,21 +368,21 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
             skipped: 0,
             running: 0,
             queued: 0,
-            message: err instanceof Error ? err.message : "批量接入启动失败",
+            message: err instanceof Error ? err.message : t("onboardBatchStartFailed"),
             items: urls.map((entry_url) => ({
               entry_url,
               slug: "",
               name: "",
               status: "failed",
               phase: "error",
-              message: err instanceof Error ? err.message : "批量接入启动失败",
-              error: err instanceof Error ? err.message : "批量接入启动失败",
+              message: err instanceof Error ? err.message : t("onboardBatchStartFailed"),
+              error: err instanceof Error ? err.message : t("onboardBatchStartFailed"),
             })),
           });
         }
       }
     },
-    [applyBatchStatus, markFeedsNeedReload, startBatchPolling],
+    [applyBatchStatus, markFeedsNeedReload, startBatchPolling, t],
   );
 
   const resetRepairInFlight = useCallback(() => {
@@ -398,12 +404,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
             ...current,
             running: false,
             phase: "cancelled",
-            message: "已停止修复",
+            message: t("onboardRepairStopped"),
             error: "",
           }
         : current,
     );
-  }, [resetRepairInFlight]);
+  }, [resetRepairInFlight, t]);
 
   const startSkillRepair = useCallback(
     async (
@@ -426,7 +432,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         slug: safeSlug,
         running: true,
         phase: "start",
-        message: "Cursor 修复启动中…",
+        message: t("onboardRepairStarting"),
         error: "",
         result: null,
       });
@@ -487,7 +493,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
             slug: safeSlug,
             running: false,
             phase: "done",
-            message: `已修复 ${result.feed_id || safeSlug}`,
+            message: formatMessage(locale, "onboardRepairDone", {
+              id: result.feed_id || safeSlug,
+            }),
             error: "",
             result,
           });
@@ -503,7 +511,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
               slug: safeSlug,
               running: false,
               phase: "cancelled",
-              message: detail || "已停止修复",
+              message: detail || t("onboardRepairStopped"),
               error: "",
               result: null,
             });
@@ -514,7 +522,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       resetRepairInFlight();
       setJob((current) => (current?.running ? { ...current, running: false } : current));
     },
-    [markFeedsNeedReload, resetRepairInFlight],
+    [locale, markFeedsNeedReload, resetRepairInFlight, t],
   );
 
   const clearJob = useCallback(() => {

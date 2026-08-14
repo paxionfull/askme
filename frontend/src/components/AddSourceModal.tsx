@@ -23,6 +23,9 @@ import {
 } from "../utils/skillDirectory";
 import { useOnboarding } from "../contexts/OnboardingContext";
 import AuthHandoffPanel from "./AuthHandoffPanel";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
+import { useModalA11y } from "../hooks/useModalA11y";
 
 interface AddSourceModalProps {
   open: boolean;
@@ -60,6 +63,7 @@ export default function AddSourceModal({
   initialUrls = "",
   onImported,
 }: AddSourceModalProps) {
+  const { t, locale } = useLocale();
   const { job, startBatchOnboarding } = useOnboarding();
   const [siteUrls, setSiteUrls] = useState("");
   const [groupId, setGroupId] = useState<string>(defaultGroupId);
@@ -79,6 +83,8 @@ export default function AddSourceModal({
   const [parsingImport, setParsingImport] = useState(false);
   const [knownDiscoverySkillIds, setKnownDiscoverySkillIds] = useState<Set<string>>(new Set());
   const [knownPlatformFeedIds, setKnownPlatformFeedIds] = useState<Set<string>>(new Set());
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useModalA11y(open, onClose, backdropRef);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const parsedUrls = useMemo(() => parseOnboardUrls(siteUrls), [siteUrls]);
@@ -136,14 +142,14 @@ export default function AddSourceModal({
       if (skills.length === 0 && platformAccounts.length === 0) {
         setImportSkills([]);
         setImportPlatformAccounts([]);
-        setImportError("未识别到有效的 skill 或平台账号，请拖入或选择 zip / *-discovery 目录");
+        setImportError(t("addSourceErrNoSkill"));
         return;
       }
       setImportSkills(skills);
       setImportPlatformAccounts(platformAccounts);
       setImportError("");
     },
-    [],
+    [t],
   );
 
   const loadImportFromZipFiles = useCallback(async (zipFiles: File[]) => {
@@ -233,7 +239,7 @@ export default function AddSourceModal({
       } catch (err) {
         setImportSkills([]);
         setImportPlatformAccounts([]);
-        setImportError(err instanceof Error ? err.message : "解析 skill 失败");
+        setImportError(err instanceof Error ? err.message : t("addSourceErrParse"));
       } finally {
         setParsingImport(false);
       }
@@ -322,7 +328,7 @@ export default function AddSourceModal({
         .catch((err) => {
           if (!cancelled) {
             setPrecheck(null);
-            setLocalError(err instanceof Error ? err.message : "授权预检失败");
+            setLocalError(err instanceof Error ? err.message : t("addSourceErrPrecheck"));
           }
         })
         .finally(() => {
@@ -349,7 +355,7 @@ export default function AddSourceModal({
       setAuthCookies((current) => ({ ...current, [slot]: "" }));
       await refreshPrecheck(parseOnboardUrls(siteUrls));
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : "刷新授权状态失败");
+      setLocalError(err instanceof Error ? err.message : t("addSourceErrRefreshAuth"));
     } finally {
       setSavingSlot(null);
     }
@@ -358,15 +364,15 @@ export default function AddSourceModal({
   async function handleStartUrl() {
     const urls = parseOnboardUrls(siteUrls);
     if (urls.length === 0) {
-      setLocalError("请填写至少一个网站链接");
+      setLocalError(t("addSourceErrNoUrl"));
       return;
     }
     if (urls.length > ONBOARD_BATCH_MAX_SIZE) {
-      setLocalError(`单次最多 ${ONBOARD_BATCH_MAX_SIZE} 个链接`);
+      setLocalError(formatMessage(locale, "addSourceErrMaxUrls", { max: ONBOARD_BATCH_MAX_SIZE }));
       return;
     }
     if (job?.running) {
-      setLocalError("已有修复任务在后台运行，请稍后再添加源");
+      setLocalError(t("addSourceErrRepairBusy"));
       return;
     }
 
@@ -375,11 +381,11 @@ export default function AddSourceModal({
       const latest = await precheckSourceAuth(urls);
       setPrecheck(latest);
       if (!latest.can_proceed) {
-        setLocalError("请先完成下方登录授权，再开始接入");
+        setLocalError(t("addSourceErrNeedAuth"));
         return;
       }
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : "授权预检失败");
+      setLocalError(err instanceof Error ? err.message : t("addSourceErrPrecheck"));
       return;
     }
 
@@ -409,7 +415,7 @@ export default function AddSourceModal({
       onImported?.(result);
       onClose();
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : "导入失败");
+      setLocalError(err instanceof Error ? err.message : t("addSourceErrImport"));
     } finally {
       setImporting(false);
     }
@@ -430,11 +436,17 @@ export default function AddSourceModal({
         (importConflict && !overwriteImport);
 
   return (
-    <div className="ui-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-source-title">
+    <div
+      ref={backdropRef}
+      className="ui-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="add-source-title"
+    >
       <div className="ui-modal ui-modal-md">
         <div className="ui-modal-header">
           <h2 id="add-source-title" className="ui-modal-title">
-            添加数据源
+            {t("addSourceTitle")}
           </h2>
           <div className="mt-3 inline-flex rounded border border-[var(--rule)] bg-[var(--paper)] p-0.5">
             <button
@@ -446,7 +458,7 @@ export default function AddSourceModal({
               }`}
               onClick={() => setMode("url")}
             >
-              链接接入
+              {t("addSourceTabUrl")}
             </button>
             <button
               type="button"
@@ -457,16 +469,16 @@ export default function AddSourceModal({
               }`}
               onClick={() => setMode("import")}
             >
-              导入 skill
+              {t("addSourceTabImport")}
             </button>
           </div>
         </div>
 
         <div className="ui-modal-body space-y-4">
           <label className="ui-field">
-            <span className="ui-field-label">添加到分组</span>
+            <span className="ui-field-label">{t("addSourceTargetGroup")}</span>
             <select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="ui-select w-full">
-              <option value={UNGROUPED_GROUP_ID}>未分组</option>
+              <option value={UNGROUPED_GROUP_ID}>{t("addSourceUngrouped")}</option>
               {groups.map((group) => (
                 <option key={group.id} value={group.id}>
                   {group.name}
@@ -478,7 +490,7 @@ export default function AddSourceModal({
           {mode === "url" ? (
             <>
               <label className="ui-field">
-                <span className="ui-field-label">网站链接</span>
+                <span className="ui-field-label">{t("addSourceUrlsLabel")}</span>
                 <textarea
                   value={siteUrls}
                   onChange={(e) => setSiteUrls(e.target.value)}
@@ -490,11 +502,14 @@ export default function AddSourceModal({
 
               {parsedUrls.length > 0 && (
                 <p className="text-xs text-[var(--ink-muted)]">
-                  将接入 {parsedUrls.length} 个数据源
+                  {formatMessage(locale, "addSourceWillConnect", { count: parsedUrls.length })}
                   {precheckLoading
-                    ? " · 正在检查授权…"
+                    ? t("addSourceCheckingAuth")
                     : authNeededCount > 0
-                      ? ` · ${authReadyCount}/${authNeededCount} 个需授权源已就绪`
+                      ? formatMessage(locale, "addSourceAuthReady", {
+                          ready: authReadyCount,
+                          total: authNeededCount,
+                        })
                       : ""}
                 </p>
               )}
@@ -517,13 +532,13 @@ export default function AddSourceModal({
 
               {!blockedByAuth &&
                 (precheck?.items ?? []).some((item) => item.requires_auth && item.configured) && (
-                  <div className="border-l-2 border-[var(--success)] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
-                    已使用已有授权：
+                  <div className="rounded-[var(--radius-control)] border border-[color-mix(in_srgb,var(--success)_35%,var(--border))] bg-[var(--success-soft)] px-3 py-2 text-xs text-[var(--success)]">
+                    {t("addSourceUsingAuth")}
                     {(precheck?.items ?? [])
                       .filter((item) => item.requires_auth && item.configured)
                       .map((item) => item.credential_label || item.slot_label || item.slot)
                       .filter((value, index, arr) => arr.indexOf(value) === index)
-                      .join("、")}
+                      .join(locale === "zh" ? "、" : ", ")}
                   </div>
                 )}
             </>
@@ -549,11 +564,8 @@ export default function AddSourceModal({
                   void handleImportDrop(e.dataTransfer);
                 }}
               >
-                <p className="text-sm text-[var(--ink)]">选择或拖入 <strong>zip / skill 目录</strong></p>
-                <p className="mt-1 text-xs text-[var(--ink-muted)]">
-                  推荐直接拖入 zip；也支持解压后的目录（含 <code>askme-skills/</code> 或单个{" "}
-                  <code>*-discovery</code> 文件夹）
-                </p>
+                <p className="text-sm text-[var(--ink)]">{t("addSourceDropHint")}</p>
+                <p className="mt-1 text-xs text-[var(--ink-muted)]">{t("addSourceDropDetail")}</p>
               </button>
               <input
                 ref={importInputRef}
@@ -567,16 +579,20 @@ export default function AddSourceModal({
                 }}
               />
               {parsingImport ? (
-                <p className="text-xs text-[var(--ink-muted)]">正在读取…</p>
+                <p className="text-xs text-[var(--ink-muted)]">{t("addSourceReading")}</p>
               ) : null}
               {validImportSkills.length > 0 || importPlatformAccounts.length > 0 ? (
                 !importError ? (
                 <div className="space-y-2">
                   <p className="text-xs text-[var(--ink-muted)]">
-                    将导入
-                    {validImportSkills.length > 0 ? ` ${validImportSkills.length} 个 skill` : ""}
-                    {validImportSkills.length > 0 && importPlatformAccounts.length > 0 ? "、" : ""}
-                    {importPlatformAccounts.length > 0 ? ` ${importPlatformAccounts.length} 个平台账号` : ""}
+                    {t("addSourceWillImport")}
+                    {validImportSkills.length > 0
+                      ? ` ${formatMessage(locale, "addSourceSkillCount", { count: validImportSkills.length })}`
+                      : ""}
+                    {validImportSkills.length > 0 && importPlatformAccounts.length > 0 ? ", " : ""}
+                    {importPlatformAccounts.length > 0
+                      ? ` ${formatMessage(locale, "addSourceAccountCount", { count: importPlatformAccounts.length })}`
+                      : ""}
                   </p>
                   {validImportSkills.map((skill) => (
                     <div
@@ -584,13 +600,13 @@ export default function AddSourceModal({
                       className="rounded border border-[var(--rule)] bg-[var(--paper)] px-3 py-2 text-xs"
                     >
                       <dl className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1">
-                        <dt className="text-[var(--ink-muted)]">类型</dt>
-                        <dd className="font-medium">站级 skill</dd>
-                        <dt className="text-[var(--ink-muted)]">名称</dt>
+                        <dt className="text-[var(--ink-muted)]">{t("commonType")}</dt>
+                        <dd className="font-medium">{t("addSourceTypeSiteSkill")}</dd>
+                        <dt className="text-[var(--ink-muted)]">{t("commonName")}</dt>
                         <dd className="font-medium">{skill.name}</dd>
-                        <dt className="text-[var(--ink-muted)]">Skill</dt>
+                        <dt className="text-[var(--ink-muted)]">{t("addSourceSkillLabel")}</dt>
                         <dd className="font-medium">{skill.skillId}</dd>
-                        <dt className="text-[var(--ink-muted)]">Feed ID</dt>
+                        <dt className="text-[var(--ink-muted)]">{t("addSourceFeedIdLabel")}</dt>
                         <dd className="font-medium">{skill.feedId}</dd>
                       </dl>
                     </div>
@@ -601,17 +617,17 @@ export default function AddSourceModal({
                       className="rounded border border-[var(--rule)] bg-[var(--paper)] px-3 py-2 text-xs"
                     >
                       <dl className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1">
-                        <dt className="text-[var(--ink-muted)]">类型</dt>
-                        <dd className="font-medium">平台账号</dd>
-                        <dt className="text-[var(--ink-muted)]">名称</dt>
+                        <dt className="text-[var(--ink-muted)]">{t("commonType")}</dt>
+                        <dd className="font-medium">{t("addSourceTypePlatform")}</dd>
+                        <dt className="text-[var(--ink-muted)]">{t("commonName")}</dt>
                         <dd className="font-medium">{account.display_name || account.account_key || account.feed_id}</dd>
-                        <dt className="text-[var(--ink-muted)]">平台</dt>
+                        <dt className="text-[var(--ink-muted)]">{t("commonPlatform")}</dt>
                         <dd className="font-medium">{account.platform || "—"}</dd>
-                        <dt className="text-[var(--ink-muted)]">Feed ID</dt>
+                        <dt className="text-[var(--ink-muted)]">{t("addSourceFeedIdLabel")}</dt>
                         <dd className="font-medium">{account.feed_id}</dd>
                       </dl>
                       <p className="mt-2 text-[11px] text-[var(--ink-muted)]">
-                        不含 Cookie；导入后若需登录请在设置中补授权
+                        {t("addSourceNoCookieHint")}
                       </p>
                     </div>
                   ))}
@@ -619,25 +635,28 @@ export default function AddSourceModal({
                 ) : null
               ) : null}
               {importError ? (
-                <div className="border-l-2 border-amber-700 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <div
+                  className="rounded-[var(--radius-control)] bg-[var(--warning-soft)] px-3 py-2 text-xs text-[var(--warning-text)]"
+                  role="alert"
+                >
                   {importError}
                 </div>
               ) : null}
               {importConflict ? (
-                <div className="border-l-2 border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2 text-xs">
+                <div className="rounded-[var(--radius-control)] border border-[color-mix(in_srgb,var(--accent)_35%,var(--border))] bg-[var(--accent-soft)] px-3 py-2 text-xs">
                   {conflictingSkills.length > 0 ? (
                     <p>
-                      本地已有同名 skill：
-                      {conflictingSkills.map((skill) => skill.skillId).join("、")}。
+                      {t("addSourceConflictSkill")}
+                      {conflictingSkills.map((skill) => skill.skillId).join(", ")}.
                     </p>
                   ) : null}
                   {conflictingPlatformAccounts.length > 0 ? (
                     <p className={conflictingSkills.length > 0 ? "mt-1" : ""}>
-                      本地已有平台账号：
+                      {t("addSourceConflictAccount")}
                       {conflictingPlatformAccounts
                         .map((account) => account.display_name || account.feed_id)
-                        .join("、")}
-                      。
+                        .join(", ")}
+                      .
                     </p>
                   ) : null}
                   <label className="mt-2 flex cursor-pointer items-center gap-2">
@@ -646,19 +665,23 @@ export default function AddSourceModal({
                       checked={overwriteImport}
                       onChange={(e) => setOverwriteImport(e.target.checked)}
                     />
-                    <span>覆盖现有项并移入选定分组</span>
+                    <span>{t("addSourceOverwrite")}</span>
                   </label>
                 </div>
               ) : null}
             </>
           )}
 
-          {localError && <p className="text-sm text-red-800">{localError}</p>}
+          {localError ? (
+            <p className="text-sm text-[var(--danger-text)]" role="alert">
+              {localError}
+            </p>
+          ) : null}
         </div>
 
         <div className="ui-modal-footer">
           <button type="button" onClick={onClose} className="ui-btn">
-            取消
+            {t("cancel")}
           </button>
           <button
             type="button"
@@ -668,13 +691,13 @@ export default function AddSourceModal({
           >
             {mode === "import"
               ? importing
-                ? "导入中…"
+                ? t("addSourceImporting")
                 : parsingImport
-                  ? "读取中…"
-                  : "确认导入"
+                  ? t("addSourceReading")
+                  : t("addSourceConfirmImport")
               : blockedByAuth
-                ? "请先完成授权"
-                : "开始接入"}
+                ? t("addSourceNeedAuth")
+                : t("addSourceStartConnect")}
           </button>
         </div>
       </div>

@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchDigestSkills, type DigestSkillDetail, type Feed, type FeedGroup } from "../api";
-import { isPlatformFeed } from "../utils/platformFeed";
+import { isPlatformFeed, deleteGroupMessage } from "../utils/platformFeed";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
+import { useModalA11y } from "../hooks/useModalA11y";
 
 interface FeedGroupModalProps {
   open: boolean;
@@ -29,6 +32,7 @@ function RulePicker({
   value: string;
   onChange: (id: string) => void;
 }) {
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const label = skillName(skills, value);
@@ -62,9 +66,9 @@ function RulePicker({
           aria-hidden
         />
         <span className="min-w-0 flex-1 truncate font-medium">
-          {label || "未设置整理规则"}
+          {label || t("groupModalRuleUnset")}
         </span>
-        <span className="shrink-0 text-[10px] text-[var(--ink-muted)]">{open ? "▴" : "▾"}</span>
+        <span className="shrink-0 text-[11px] text-[var(--ink-muted)]">{open ? "▴" : "▾"}</span>
       </button>
       {open ? (
         <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-48 overflow-y-auto rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper-raised)] py-1 shadow-md">
@@ -78,10 +82,10 @@ function RulePicker({
               !value ? "bg-[var(--accent-soft)] font-medium text-[var(--accent)]" : "text-[var(--ink-muted)]"
             }`}
           >
-            不绑定（无法生成简报）
+            {t("groupModalRuleNone")}
           </button>
           {skills.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-[var(--ink-muted)]">暂无可用整理规则</p>
+            <p className="px-3 py-2 text-xs text-[var(--ink-muted)]">{t("groupModalRuleEmpty")}</p>
           ) : (
             skills.map((skill) => {
               const active = skill.id === value;
@@ -130,6 +134,7 @@ export default function FeedGroupModal({
   onSave,
   onDeleteFeeds,
 }: FeedGroupModalProps) {
+  const { t, locale } = useLocale();
   const [draftGroups, setDraftGroups] = useState<FeedGroup[]>(groups);
   const [digestSkills, setDigestSkills] = useState<DigestSkillDetail[]>([]);
   const [saving, setSaving] = useState(false);
@@ -143,6 +148,8 @@ export default function FeedGroupModal({
   const focusNewRef = useRef(false);
   const lastInputRef = useRef<HTMLInputElement | null>(null);
   const wasOpenRef = useRef(false);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useModalA11y(open, onClose, backdropRef);
 
   useEffect(() => {
     if (!open) {
@@ -191,7 +198,7 @@ export default function FeedGroupModal({
       ...current,
       {
         id: newGroupId(),
-        name: "新分组",
+        name: t("groupModalNewDefaultName"),
         feed_ids: [],
         digest_skill_id: null,
         auto_refresh: false,
@@ -233,7 +240,7 @@ export default function FeedGroupModal({
     try {
       if (feedIds.length > 0) {
         if (!onDeleteFeeds) {
-          setError("无法删除组内数据源");
+          setError(t("groupModalErrDeleteFeeds"));
           return;
         }
         await onDeleteFeeds(feedIds, deleteGroupRemoveSkill);
@@ -253,7 +260,7 @@ export default function FeedGroupModal({
       setDeleteGroupRemoveSkill(false);
     } catch (err) {
       setDraftGroups(previousDraft);
-      setError(err instanceof Error ? err.message : "删除失败");
+      setError(err instanceof Error ? err.message : t("readErrDelete"));
     } finally {
       setDeletingGroupId(null);
     }
@@ -265,7 +272,7 @@ export default function FeedGroupModal({
       return;
     }
     if (!onDeleteFeeds) {
-      setError("无法清空未分组源");
+      setError(t("groupModalErrClearUngrouped"));
       return;
     }
     setClearingUngrouped(true);
@@ -275,7 +282,7 @@ export default function FeedGroupModal({
       setPendingClearUngrouped(false);
       setClearUngroupedRemoveSkill(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "清空未分组失败");
+      setError(err instanceof Error ? err.message : t("groupModalErrClearUngrouped"));
     } finally {
       setClearingUngrouped(false);
     }
@@ -297,7 +304,7 @@ export default function FeedGroupModal({
 
   async function handleSave() {
     if (draftGroups.some((group) => !group.name.trim())) {
-      setError("分组名称不能为空");
+      setError(t("groupModalErrEmptyName"));
       return;
     }
 
@@ -307,27 +314,33 @@ export default function FeedGroupModal({
       await persistGroups(draftGroups);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
+      setError(err instanceof Error ? err.message : t("groupModalErrSave"));
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="ui-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="feed-group-title">
+    <div
+      ref={backdropRef}
+      className="ui-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="feed-group-title"
+    >
       <div className="ui-modal ui-modal-md">
         <div className="ui-modal-header">
           <h2 id="feed-group-title" className="ui-modal-title">
-            管理分组
+            {t("groupModalTitle")}
           </h2>
         </div>
 
         <div className="ui-modal-body space-y-1">
           {draftGroups.length === 0 ? (
             <div className="flex flex-col items-center py-10 text-center">
-              <p className="text-sm text-[var(--ink-muted)]">还没有分组</p>
+              <p className="text-sm text-[var(--ink-muted)]">{t("groupModalEmpty")}</p>
               <button type="button" onClick={addGroup} className="ui-btn ui-btn-accent mt-4">
-                新建分组
+                {t("groupModalNew")}
               </button>
             </div>
           ) : (
@@ -351,27 +364,29 @@ export default function FeedGroupModal({
                         ref={isLast ? lastInputRef : undefined}
                         value={group.name}
                         onChange={(e) => updateGroupName(group.id, e.target.value)}
-                        placeholder="分组名称"
-                        aria-label="分组名称"
+                        placeholder={t("sidebarGroupName")}
+                        aria-label={t("sidebarGroupName")}
                         disabled={removing}
                         className="min-w-0 flex-1 border-0 border-b border-transparent bg-transparent px-0 py-0.5 text-sm font-semibold tracking-tight text-[var(--ink)] outline-none placeholder:font-normal placeholder:text-[var(--ink-muted)] focus:border-[var(--rule)] disabled:opacity-60"
                       />
                       <span className="shrink-0 text-[11px] tabular-nums text-[var(--ink-muted)]">
-                        {group.feed_ids.length} 源
+                        {formatMessage(locale, "groupModalFeedCount", { count: group.feed_ids.length })}
                       </span>
                       <button
                         type="button"
                         disabled={deletingGroup || Boolean(pendingDeleteGroup)}
                         onClick={() => requestRemoveGroup(group)}
-                        aria-label={`删除 ${group.name || "分组"}`}
-                        className="shrink-0 rounded px-1.5 py-0.5 text-sm leading-none text-[var(--ink-muted)] hover:bg-[var(--error-soft)] hover:text-red-800 disabled:opacity-50"
+                        aria-label={formatMessage(locale, "groupModalDeleteAria", {
+                          name: group.name || t("deleteGroupTitle"),
+                        })}
+                        className="ui-btn ui-btn-ghost shrink-0 px-1.5 text-sm leading-none hover:bg-[var(--error-soft)] hover:text-[var(--danger-text)] disabled:opacity-50"
                       >
                         {removing ? "…" : "×"}
                       </button>
                     </div>
                     <div className="mt-2 flex items-center gap-2 pl-5">
-                      <span className="shrink-0 text-[10px] font-medium tracking-wide text-[var(--ink-muted)]">
-                        整理规则
+                      <span className="shrink-0 text-[11px] font-medium tracking-wide text-[var(--ink-muted)]">
+                        {t("groupModalRuleLabel")}
                       </span>
                       <RulePicker
                         skills={digestSkills}
@@ -391,7 +406,7 @@ export default function FeedGroupModal({
               onClick={addGroup}
               className="mt-2 w-full rounded-[var(--radius-control)] border border-dashed border-[var(--rule)] py-2 text-xs text-[var(--ink-muted)] hover:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
             >
-              + 新建分组
+              + {t("groupModalNew")}
             </button>
           ) : null}
 
@@ -399,9 +414,11 @@ export default function FeedGroupModal({
             {pendingDeleteGroup ? (
               <div className="mb-3 space-y-2 rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[color-mix(in_srgb,var(--paper)_45%,var(--paper-raised))] px-3 py-2.5">
                 <p className="text-xs text-[var(--ink-muted)] whitespace-pre-line">
-                  {pendingDeleteGroup.feed_ids.length === 0
-                    ? `确定删除分组「${pendingDeleteGroup.name}」？该分组下没有数据源。`
-                    : `确定删除分组「${pendingDeleteGroup.name}」？将同时删除组内 ${pendingDeleteGroup.feed_ids.length} 个数据源（不会移到「未分组」）。默认保留本地 discovery skill。`}
+                  {deleteGroupMessage(
+                    locale,
+                    pendingDeleteGroup.name,
+                    pendingDeleteGroup.feed_ids.length,
+                  )}
                 </p>
                 {pendingDeleteGroup.feed_ids.length > 0 ? (
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--ink-muted)]">
@@ -414,8 +431,10 @@ export default function FeedGroupModal({
                     {pendingDeleteGroup.feed_ids.every((id) =>
                       isPlatformFeed(feeds.find((feed) => feed.id === id)),
                     )
-                      ? "同时移除平台账号登记（不删除共享平台 skill）"
-                      : `同时删除这 ${pendingDeleteGroup.feed_ids.length} 个源的本地 skill 目录（不可恢复）`}
+                      ? t("deleteGroupRemovePlatform")
+                      : formatMessage(locale, "deleteGroupRemoveSkills", {
+                          count: pendingDeleteGroup.feed_ids.length,
+                        })}
                   </label>
                 ) : null}
                 <div className="flex flex-wrap items-center gap-2 pt-0.5">
@@ -428,7 +447,7 @@ export default function FeedGroupModal({
                     }}
                     className="ui-btn px-2 py-1 text-xs"
                   >
-                    取消
+                    {t("cancel")}
                   </button>
                   <button
                     type="button"
@@ -436,7 +455,7 @@ export default function FeedGroupModal({
                     onClick={() => void confirmRemoveGroup()}
                     className="ui-btn ui-btn-danger-solid px-2 py-1 text-xs"
                   >
-                    {deletingGroup ? "删除中…" : "确认删除"}
+                    {deletingGroup ? t("groupModalDeleting") : t("deleteFeedConfirm")}
                   </button>
                 </div>
               </div>
@@ -444,7 +463,7 @@ export default function FeedGroupModal({
             {pendingClearUngrouped ? (
               <div className="space-y-2 rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[color-mix(in_srgb,var(--paper)_45%,var(--paper-raised))] px-3 py-2.5">
                 <p className="text-xs text-[var(--ink-muted)]">
-                  清空未分组的 {ungroupedCount} 个源？此操作不会删除任何已命名分组。
+                  {formatMessage(locale, "groupModalClearUngroupedHint", { count: ungroupedCount })}
                 </p>
                 <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--ink-muted)]">
                   <input
@@ -454,8 +473,8 @@ export default function FeedGroupModal({
                     onChange={(e) => setClearUngroupedRemoveSkill(e.target.checked)}
                   />
                   {ungroupedAllPlatform
-                    ? "同时移除平台账号登记（不删除共享平台 skill）"
-                    : "同时删除源的本地 skill 目录（不可恢复）"}
+                    ? t("deleteGroupRemovePlatform")
+                    : t("groupModalClearUngroupedSkills")}
                 </label>
                 <div className="flex flex-wrap items-center gap-2 pt-0.5">
                   <button
@@ -467,7 +486,7 @@ export default function FeedGroupModal({
                     }}
                     className="ui-btn px-2 py-1 text-xs"
                   >
-                    取消
+                    {t("cancel")}
                   </button>
                   <button
                     type="button"
@@ -475,15 +494,15 @@ export default function FeedGroupModal({
                     onClick={() => void confirmClearUngrouped()}
                     className="ui-btn ui-btn-danger-solid px-2 py-1 text-xs"
                   >
-                    {clearingUngrouped ? "清空中…" : "清空"}
+                    {clearingUngrouped ? t("groupModalClearing") : t("commonClear")}
                   </button>
                 </div>
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                <span className="shrink-0 text-xs text-[var(--ink-muted)]">未分组</span>
+                <span className="shrink-0 text-xs text-[var(--ink-muted)]">{t("addSourceUngrouped")}</span>
                 <span className="shrink-0 text-[11px] tabular-nums text-[var(--ink-muted)]">
-                  {ungroupedCount} 源
+                  {formatMessage(locale, "groupModalFeedCount", { count: ungroupedCount })}
                 </span>
                 <span className="h-px flex-1 bg-[var(--rule)]" />
                 {ungroupedCount > 0 ? (
@@ -494,21 +513,25 @@ export default function FeedGroupModal({
                       setPendingClearUngrouped(true);
                       setClearUngroupedRemoveSkill(false);
                     }}
-                    className="shrink-0 rounded px-1.5 py-0.5 text-xs text-[var(--ink-muted)] hover:bg-[var(--error-soft)] hover:text-red-800"
+                    className="ui-btn ui-btn-ghost shrink-0 px-1.5 text-xs hover:bg-[var(--error-soft)] hover:text-[var(--danger-text)]"
                   >
-                    清空
+                    {t("commonClear")}
                   </button>
                 ) : null}
               </div>
             )}
           </div>
 
-          {error ? <p className="pt-2 text-sm text-red-800">{error}</p> : null}
+          {error ? (
+            <p className="pt-2 text-sm text-[var(--danger-text)]" role="alert">
+              {error}
+            </p>
+          ) : null}
         </div>
 
         <div className="ui-modal-footer">
           <button type="button" onClick={onClose} className="ui-btn">
-            取消
+            {t("cancel")}
           </button>
           <button
             type="button"
@@ -516,7 +539,7 @@ export default function FeedGroupModal({
             onClick={() => void handleSave()}
             className="ui-btn ui-btn-primary"
           >
-            {saving ? "保存中…" : "保存"}
+            {saving ? t("saving") : t("save")}
           </button>
         </div>
       </div>

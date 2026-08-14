@@ -29,6 +29,8 @@ import {
   streamSummarize,
 } from "../api";
 import { getLlmConfigPayload, useSettings, type DefaultDays, normalizeDefaultDays } from "../hooks/useSettings";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
 import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
 import { INDEX_RETENTION_DAYS } from "../utils/indexBuild";
 
@@ -86,7 +88,11 @@ function notifySummarizeJobSync() {
   }
 }
 
-function buildSummaryGroupOptions(feeds: Feed[], groups: FeedGroup[]): SummaryGroupOption[] {
+function buildSummaryGroupOptions(
+  feeds: Feed[],
+  groups: FeedGroup[],
+  ungroupedLabel: string,
+): SummaryGroupOption[] {
   const assigned = new Set(groups.flatMap((group) => group.feed_ids));
   const ungroupedFeedIds = feeds.filter((feed) => !assigned.has(feed.id)).map((feed) => feed.id);
   // 空分组也展示：新建后即可在简报页绑定整理规则；有源后再生成
@@ -101,7 +107,7 @@ function buildSummaryGroupOptions(feeds: Feed[], groups: FeedGroup[]): SummaryGr
   if (ungroupedFeedIds.length > 0) {
     options.push({
       id: UNGROUPED_GROUP_ID,
-      name: "未分组",
+      name: ungroupedLabel,
       feedCount: ungroupedFeedIds.length,
       feedIds: ungroupedFeedIds,
     });
@@ -199,6 +205,7 @@ const DigestContext = createContext<DigestContextValue | null>(null);
 
 export function DigestProvider({ children }: { children: ReactNode }) {
   const { settings } = useSettings();
+  const { t, locale } = useLocale();
   const [days, setDaysState] = useState<DefaultDays>(() =>
     loadStoredDays(normalizeDefaultDays(settings.defaultDays)),
   );
@@ -254,7 +261,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
   const reloadSummaryGroups = useCallback(async () => {
     try {
       const data = await fetchFeeds();
-      const options = buildSummaryGroupOptions(data.feeds, data.groups);
+      const options = buildSummaryGroupOptions(data.feeds, data.groups, t("addSourceUngrouped"));
       setSummaryGroupOptions(options);
       setSelectedGroupIds((current) => {
         const next = reconcileSelectedIds(
@@ -271,7 +278,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       setSummaryGroupOptions([]);
       setSelectedGroupIds([]);
     }
-  }, []);
+  }, [t]);
 
   // 设置页修改「默认时间范围」时同步；首屏不覆盖已持久化的当前选择
   useEffect(() => {
@@ -424,7 +431,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
           setBodiesLoadedForDays(null);
           setBodyCount(0);
         }
-        setLoadError(status.error || status.message || "拉取正文失败");
+        setLoadError(status.error || status.message || t("digestFetchBodiesFailed"));
         return null;
       }
       const data = (status.result || null) as RecentArticlesResponse | null;
@@ -433,7 +440,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
           setBodiesLoadedForDays(null);
           setBodyCount(0);
         }
-        setLoadError(status.error || "拉取正文失败");
+        setLoadError(status.error || t("digestFetchBodiesFailed"));
         return null;
       }
       if (!scoped) {
@@ -447,16 +454,14 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         } else {
           setBodiesLoadedForDays(null);
           setLoadError(
-            data.meta_count
-              ? "未能拉取到含正文的文章，请先刷新数据源订阅"
-              : "所选时间范围内暂无文章",
+            data.meta_count ? t("digestNoBodiesFetched") : t("digestNoArticlesInRange"),
           );
         }
         await loadCachedSummary();
       }
       return data;
     },
-    [days, loadCachedSummary],
+    [days, loadCachedSummary, t],
   );
 
   const watchBodiesJob = useCallback(
@@ -466,7 +471,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         setBodyProgress({
           current: status.current ?? 0,
           total: status.total ?? 0,
-          message: status.message || "正在拉取正文…",
+          message: status.message || t("digestFetchingBodies"),
         });
         if (!scoped) {
           if (typeof status.cached_count === "number") {
@@ -486,7 +491,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       bodiesInFlightRef.current = false;
       return data;
     },
-    [applyBodiesDone],
+    [applyBodiesDone, t],
   );
 
   const loadBodies = useCallback(
@@ -505,8 +510,8 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       const groupName = options?.groupName?.trim() || "";
       const listLimit = options?.listLimit;
       const progressLabel = groupName
-        ? `正在拉取分组「${groupName}」列表内文章正文…`
-        : "正在拉取正文…";
+        ? formatMessage(locale, "digestFetchingGroupBodies", { name: groupName })
+        : t("digestFetchingBodies");
 
       setLoadingBodies(true);
       setLoadingBodiesGroupId(groupId);
@@ -534,7 +539,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
           setBodiesLoadedForDays(null);
           setBodyCount(0);
         }
-        setLoadError(err instanceof Error ? err.message : "拉取正文失败");
+        setLoadError(err instanceof Error ? err.message : t("digestFetchBodiesFailed"));
         setBodyProgress({ current: 0, total: 0, message: "" });
         setLoadingBodies(false);
         setLoadingBodiesGroupId(null);
@@ -542,7 +547,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         return null;
       }
     },
-    [applyBodiesDone, days, resetIndexState, watchBodiesJob],
+    [applyBodiesDone, days, locale, resetIndexState, t, watchBodiesJob],
   );
 
   const watchIndexJob = useCallback(async () => {
@@ -553,14 +558,14 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       setIndexProgress({
         current: status.current ?? 0,
         total: status.total ?? 0,
-        message: status.message || "正在建立向量索引…",
+        message: status.message || t("digestBuildingIndex"),
       });
-      setIndexStatusMessage(status.message || "正在建立向量索引，可切换页面…");
+      setIndexStatusMessage(status.message || t("digestBuildingIndexBg"));
     });
     if (generation !== indexBuildGenerationRef.current) return;
     if (finalStatus.status === "error") {
       // 失败时保留已有索引（近 3 天历史不因本次失败被清掉）
-      setLoadError(finalStatus.error || finalStatus.message || "建立索引失败");
+      setLoadError(finalStatus.error || finalStatus.message || t("digestIndexFailed"));
     } else {
       try {
         const rag = await fetchRagStatus(days);
@@ -577,7 +582,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     setIndexProgress({ current: 0, total: 0, message: "" });
     indexBuildInFlightRef.current = false;
     setLoadingIndex(false);
-  }, [days]);
+  }, [days, t]);
 
   const buildIndex = useCallback(async (feedIds?: string[]) => {
     if (indexBuildInFlightRef.current) return;
@@ -586,17 +591,17 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     indexBuildInFlightRef.current = true;
     setLoadingIndex(true);
     setLoadError("");
-    setIndexProgress({ current: 0, total: 0, message: "正在建立向量索引…" });
-    setIndexStatusMessage("正在建立向量索引，可切换页面…");
+    setIndexProgress({ current: 0, total: 0, message: t("digestBuildingIndex") });
+    setIndexStatusMessage(t("digestBuildingIndexBg"));
     try {
       const llmConfig = getLlmConfigPayload();
       if (!llmConfig.embedding_model?.trim()) {
-        throw new Error("请先在设置配置 Embedding 模型与 API Key");
+        throw new Error(t("sourcesNeedEmbedding"));
       }
       const hasEmbeddingKey =
         llmConfig.embedding_api_key?.trim() || llmConfig.api_key?.trim();
       if (!hasEmbeddingKey) {
-        throw new Error("请先在设置配置 Embedding API Key（或配置对话模型 Key 以复用）");
+        throw new Error(t("indexEmbedMessageWithModel"));
       }
       const scopedIds = (feedIds ?? []).map((id) => id.trim()).filter(Boolean);
       await startIndexJob(
@@ -606,13 +611,13 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       );
       await watchIndexJob();
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "建立索引失败");
+      setLoadError(err instanceof Error ? err.message : t("digestIndexFailed"));
       setIndexStatusMessage("");
       setIndexProgress({ current: 0, total: 0, message: "" });
       indexBuildInFlightRef.current = false;
       setLoadingIndex(false);
     }
-  }, [watchIndexJob]);
+  }, [t, watchIndexJob]);
 
   // 刷新后恢复正文 / 索引进度条
   useEffect(() => {
@@ -703,7 +708,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       }
       if (finalStatus.status === "error") {
         resetSummarizeUi({ restoreSnapshot: true });
-        setSummaryError(finalStatus.error || finalStatus.message || "概览生成失败");
+        setSummaryError(finalStatus.error || finalStatus.message || t("digestSummaryFailed"));
         await loadCachedSummary();
         return;
       }
@@ -711,7 +716,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       resetSummarizeUi();
       await loadCachedSummary();
     },
-    [applySummarizeJobProgress, loadCachedSummary, resetSummarizeUi],
+    [applySummarizeJobProgress, loadCachedSummary, resetSummarizeUi, t],
   );
 
   const tryAttachSummarizeJob = useCallback(
@@ -767,16 +772,16 @@ export function DigestProvider({ children }: { children: ReactNode }) {
 
   const startSummarize = useCallback(async () => {
     if (selectedGroupIds.length === 0) {
-      setSummaryError("请先选择一个分组");
+      setSummaryError(t("digestSelectGroupFirst"));
       return;
     }
     const selected = summaryGroupOptions.find((group) => group.id === selectedGroupIds[0]);
     if (!selected?.digestSkillId) {
-      setSummaryError("当前板块尚未设置整理规则，无法生成简报");
+      setSummaryError(t("digestNoRuleBound"));
       return;
     }
     if (scopeArticleCount === 0) {
-      setSummaryError("所选时间范围内没有文章");
+      setSummaryError(t("digestNoArticlesForBrief"));
       return;
     }
     if (summarizeInFlightRef.current) {
@@ -804,7 +809,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     generatingRef.current = true;
     setPhase("generating");
     setSummaryPhase("start");
-    setStatusMessage("正在准备生成概览…");
+    setStatusMessage(t("digestPreparingOverview"));
     setSummaryError("");
     setThinking("");
     thinkingRef.current = "";
@@ -896,6 +901,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     scopeArticleCount,
     selectedGroupIds,
     summaryGroupOptions,
+    t,
     watchSummarizeJob,
   ]);
 
@@ -979,7 +985,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         generating,
         summaryPhase,
         statusMessage: generating
-          ? statusMessage || (phase === "generating" ? "正在生成概览…" : "")
+          ? statusMessage || (phase === "generating" ? t("digestGeneratingOverview") : "")
           : "",
         summaryError,
         digestBusy,

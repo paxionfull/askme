@@ -1,22 +1,26 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import HelpModal from "../../components/HelpModal";
 import OnboardingBatchPanel from "../../components/OnboardingBatchPanel";
 import TopJobBanner from "../../components/TopJobBanner";
+import { IconBrief, IconHelp, IconSettings, IconSources } from "../../components/icons/NavIcons";
 import { DigestProvider, useDigest } from "../../contexts/DigestContext";
 import { ChatProvider } from "../../contexts/ChatContext";
 import { FeedRefreshProvider, useFeedRefresh } from "../../contexts/FeedRefreshContext";
 import { OnboardingProvider, useOnboarding } from "../../contexts/OnboardingContext";
+import { useLocale } from "../../i18n/LocaleContext";
+import { formatMessage } from "../../i18n/messages";
 import { isLlmConfigured, useSettings } from "../../hooks/useSettings";
 import { settingsAuthPath } from "../../utils/authSlot";
 
 const navItems = [
-  { to: "/", label: "简报", end: true },
-  { to: "/sources", label: "源", end: false },
-  { to: "/settings", label: "设置", end: false },
+  { to: "/", labelKey: "navBrief" as const, end: true, Icon: IconBrief },
+  { to: "/sources", labelKey: "navSources" as const, end: false, Icon: IconSources },
+  { to: "/settings", labelKey: "navSettings" as const, end: false, Icon: IconSettings },
 ];
 
 function FeedRefreshBanner() {
+  const { t } = useLocale();
   const {
     refreshBusy,
     statusMessage,
@@ -42,12 +46,8 @@ function FeedRefreshBanner() {
         total={progress?.total}
         indeterminate={!progress || progress.total <= 0}
         actions={
-          <button
-            type="button"
-            onClick={stopRefresh}
-            className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
-          >
-            停止
+          <button type="button" onClick={stopRefresh} className="ui-btn text-xs">
+            {t("stop")}
           </button>
         }
       />
@@ -69,12 +69,8 @@ function FeedRefreshBanner() {
         actions={
           showAuth ? (
             authSlot ? (
-              <NavLink
-                to={settingsAuthPath(authSlot)}
-                onClick={clearResult}
-                className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
-              >
-                去授权
+              <NavLink to={settingsAuthPath(authSlot)} onClick={clearResult} className="ui-btn text-xs">
+                {t("goAuthorize")}
               </NavLink>
             ) : authFailureUrls.length > 0 ? (
               <button
@@ -84,17 +80,13 @@ function FeedRefreshBanner() {
                   clearResult();
                   requestAuthRetry(urls);
                 }}
-                className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+                className="ui-btn text-xs"
               >
-                去授权并重试
+                {t("goAuthorizeRetry")}
               </button>
             ) : (
-              <NavLink
-                to={settingsAuthPath()}
-                onClick={clearResult}
-                className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
-              >
-                去 Cookie
+              <NavLink to={settingsAuthPath()} onClick={clearResult} className="ui-btn text-xs">
+                {t("goCookie")}
               </NavLink>
             )
           ) : null
@@ -107,6 +99,7 @@ function FeedRefreshBanner() {
 }
 
 function DigestJobBanner() {
+  const { t } = useLocale();
   const {
     loadingBodies,
     loadingIndex,
@@ -124,21 +117,19 @@ function DigestJobBanner() {
     return (
       <TopJobBanner
         tone="progress"
-        title="生成简报"
-        message={statusMessage || "正在生成简报…"}
+        title={t("generatingDigest")}
+        message={statusMessage || t("generatingDigestMessage")}
         indeterminate
         detail={
           summaryPhase && summaryPhase !== "idle" && summaryPhase !== "start" ? (
-            <div className="mt-1 text-xs opacity-80">阶段：{summaryPhase}</div>
+            <div className="mt-1 text-xs opacity-80">
+              {t("phaseLabel")}: {summaryPhase}
+            </div>
           ) : null
         }
         actions={
-          <button
-            type="button"
-            onClick={stopSummarize}
-            className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
-          >
-            停止
+          <button type="button" onClick={stopSummarize} className="ui-btn text-xs">
+            {t("stop")}
           </button>
         }
       />
@@ -149,18 +140,14 @@ function DigestJobBanner() {
     return (
       <TopJobBanner
         tone="progress"
-        title="拉取正文"
-        message={bodyProgress.message || "正在拉取正文…"}
+        title={t("fetchingBodies")}
+        message={bodyProgress.message || t("fetchingBodiesMessage")}
         current={bodyProgress.current}
         total={bodyProgress.total}
         indeterminate={bodyProgress.total <= 0}
         actions={
-          <button
-            type="button"
-            onClick={stopBodies}
-            className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
-          >
-            停止
+          <button type="button" onClick={stopBodies} className="ui-btn text-xs">
+            {t("stop")}
           </button>
         }
       />
@@ -171,10 +158,8 @@ function DigestJobBanner() {
     return (
       <TopJobBanner
         tone="progress"
-        title="建立索引"
-        message={
-          indexProgress.message || indexStatusMessage || "正在建立向量索引…"
-        }
+        title={t("buildingIndex")}
+        message={indexProgress.message || indexStatusMessage || t("buildingIndexMessage")}
         current={indexProgress.current}
         total={indexProgress.total}
         indeterminate={indexProgress.total <= 0}
@@ -186,6 +171,7 @@ function DigestJobBanner() {
 }
 
 function OnboardingBanner() {
+  const { t, locale } = useLocale();
   const {
     job,
     batch,
@@ -219,9 +205,9 @@ function OnboardingBanner() {
       <TopJobBanner
         tone="progress"
         title={
-          isRepair ? "Cursor 修复中" : autoRepairing ? "接入后自动修复中" : "接入数据源"
+          isRepair ? t("onboardingRepair") : autoRepairing ? t("onboardingAutoRepair") : t("onboardingSource")
         }
-        message={job.message || "处理中…"}
+        message={job.message || t("loading")}
         indeterminate
         detail={
           <div className="mt-1 truncate text-xs opacity-80">
@@ -230,12 +216,8 @@ function OnboardingBanner() {
           </div>
         }
         actions={
-          <button
-            type="button"
-            onClick={stopOnboarding}
-            className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
-          >
-            停止
+          <button type="button" onClick={stopOnboarding} className="ui-btn text-xs">
+            {t("stop")}
           </button>
         }
       />
@@ -246,8 +228,8 @@ function OnboardingBanner() {
     return (
       <TopJobBanner
         tone="neutral"
-        title={job.kind === "repair" ? "修复已停止" : "接入已停止"}
-        message={job.message || (job.jobId ? `日志 #${job.jobId}` : "已取消")}
+        title={job.kind === "repair" ? t("repairStopped") : t("onboardingStopped")}
+        message={job.message || (job.jobId ? `${t("logLabel")} #${job.jobId}` : t("cancel"))}
         onClose={clearJob}
       />
     );
@@ -259,12 +241,13 @@ function OnboardingBanner() {
       !isRepair &&
       (job.error.includes("授权") ||
         job.error.toLowerCase().includes("cookie") ||
-        job.error.includes("登录"));
+        job.error.includes("登录") ||
+        job.error.toLowerCase().includes("auth"));
     return (
       <TopJobBanner
         tone="error"
-        title={isRepair ? "修复失败" : "接入失败"}
-        message={`${job.error}${job.jobId ? ` · 日志 #${job.jobId}` : ""}`}
+        title={isRepair ? t("repairFailed") : t("onboardingFailed")}
+        message={`${job.error}${job.jobId ? ` · ${t("logLabel")} #${job.jobId}` : ""}`}
         onClose={clearJob}
         actions={
           needsAuth && job.entryUrl ? (
@@ -274,9 +257,9 @@ function OnboardingBanner() {
                 clearJob();
                 requestAuthRetry([job.entryUrl]);
               }}
-              className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+              className="ui-btn text-xs"
             >
-              去授权并重试
+              {t("goAuthorizeRetry")}
             </button>
           ) : undefined
         }
@@ -289,8 +272,11 @@ function OnboardingBanner() {
     return (
       <TopJobBanner
         tone="success"
-        title={isRepair ? "已修复" : "已接入"}
-        message={`${job.result.feed_id}（${job.result.skill_dir}）`}
+        title={isRepair ? t("repairSuccess") : t("onboardingSuccess")}
+        message={formatMessage(locale, "onboardingResultDetail", {
+          feedId: job.result.feed_id,
+          skillDir: job.result.skill_dir,
+        })}
         onClose={clearJob}
       />
     );
@@ -299,7 +285,32 @@ function OnboardingBanner() {
   return null;
 }
 
+function LanguageToggle() {
+  const { locale, setLocale, t } = useLocale();
+  return (
+    <div className="app-lang-toggle" role="group" aria-label={t("langSwitchLabel")}>
+      <button
+        type="button"
+        className={locale === "en" ? "is-active" : ""}
+        onClick={() => setLocale("en")}
+        aria-pressed={locale === "en"}
+      >
+        {t("langEn")}
+      </button>
+      <button
+        type="button"
+        className={locale === "zh" ? "is-active" : ""}
+        onClick={() => setLocale("zh")}
+        aria-pressed={locale === "zh"}
+      >
+        {t("langZh")}
+      </button>
+    </div>
+  );
+}
+
 function AppShellContent() {
+  const { t } = useLocale();
   const { settings } = useSettings();
   const { generating, loadingBodies, loadingIndex } = useDigest();
   const { job, batch } = useOnboarding();
@@ -314,13 +325,22 @@ function AppShellContent() {
     batch?.status === "running";
   const chatInProgress = generating;
 
+  useEffect(() => {
+    const openHelp = () => setHelpOpen(true);
+    window.addEventListener("askme:open-help", openHelp);
+    return () => window.removeEventListener("askme:open-help", openHelp);
+  }, []);
+
   return (
     <div className="flex h-screen flex-col">
+      <a href="#main-content" className="app-skip-link">
+        {t("skipToMain")}
+      </a>
       {!llmConfigured && (
         <TopJobBanner
           tone="warning"
-          title="LLM 未配置"
-          message="请在「设置」页填写 API Key 和模型名称。"
+          title={t("llmNotConfiguredTitle")}
+          message={t("llmNotConfiguredMessage")}
         />
       )}
 
@@ -328,51 +348,75 @@ function AppShellContent() {
       <FeedRefreshBanner />
       <DigestJobBanner />
 
-      <div className="flex min-h-0 flex-1 bg-[var(--paper)]">
-        <aside className="flex w-[4.5rem] shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--paper-raised)]">
-          <div className="border-b border-[var(--rule)] px-2 py-4 text-center">
-            <span className="text-[13px] font-semibold tracking-[0.04em] text-[var(--ink)]">
-              Askme
-            </span>
+      <div className="flex min-h-0 flex-1 bg-[var(--surface)]">
+        <aside className="app-sidebar" aria-label={t("appName")}>
+          <div className="app-sidebar-brand">
+            <img src="/logo.svg" alt={t("appName")} width={28} height={28} />
           </div>
-          <nav className="flex flex-1 flex-col gap-0.5 p-2">
-            {navItems.map((item) => (
+          <nav className="flex flex-1 flex-col py-2" aria-label={t("navMainLabel")}>
+            {navItems.map(({ to, labelKey, end, Icon }) => (
               <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) =>
-                  `relative rounded-md px-2 py-2.5 text-center text-[11px] leading-tight transition-colors ${
-                    isActive
-                      ? "bg-[var(--paper)] font-semibold text-[var(--ink)] shadow-[inset_3px_0_0_0_var(--accent)]"
-                      : "font-medium text-[var(--ink-muted)] hover:bg-[var(--paper)] hover:text-[var(--ink)]"
-                  }`
-                }
+                key={to}
+                to={to}
+                end={end}
+                title={t(labelKey)}
+                aria-label={t(labelKey)}
+                className={({ isActive }) => `app-nav-link${isActive ? " is-active" : ""}`}
               >
-                {item.label}
-                {item.to === "/" && chatInProgress && (
-                  <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
-                )}
-                {item.to === "/sources" && sourcesInProgress && (
-                  <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
-                )}
+                <Icon className="h-5 w-5 shrink-0" />
+                <span className="app-nav-label">{t(labelKey)}</span>
+                {to === "/" && chatInProgress && <span className="app-nav-dot" aria-hidden="true" />}
+                {to === "/sources" && sourcesInProgress && <span className="app-nav-dot" aria-hidden="true" />}
               </NavLink>
             ))}
             <div className="min-h-2 flex-1" aria-hidden="true" />
             <button
               type="button"
               onClick={() => setHelpOpen(true)}
-              className="rounded-md px-2 py-2.5 text-center text-[11px] font-medium leading-tight text-[var(--ink-muted)] transition-colors hover:bg-[var(--paper)] hover:text-[var(--ink)]"
+              className="app-nav-link mx-auto"
+              title={t("navHelp")}
+              aria-label={t("navHelp")}
             >
-              帮助
+              <IconHelp className="h-5 w-5 shrink-0" />
+              <span className="app-nav-label">{t("navHelp")}</span>
             </button>
+            <LanguageToggle />
           </nav>
         </aside>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--paper)]">
+        <main id="main-content" className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--surface)]">
           <Outlet />
-        </div>
+        </main>
       </div>
+
+      <nav className="app-bottom-nav" aria-label={t("navMainLabel")}>
+        {navItems.map(({ to, labelKey, end, Icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            title={t(labelKey)}
+            aria-label={t(labelKey)}
+            className={({ isActive }) => `app-nav-link${isActive ? " is-active" : ""}`}
+          >
+            <Icon className="h-5 w-5 shrink-0" />
+            <span className="app-nav-label">{t(labelKey)}</span>
+            {to === "/" && chatInProgress && <span className="app-nav-dot" aria-hidden="true" />}
+            {to === "/sources" && sourcesInProgress && <span className="app-nav-dot" aria-hidden="true" />}
+          </NavLink>
+        ))}
+        <button
+          type="button"
+          onClick={() => setHelpOpen(true)}
+          className="app-nav-link"
+          title={t("navHelp")}
+          aria-label={t("navHelp")}
+        >
+          <IconHelp className="h-5 w-5 shrink-0" />
+          <span className="app-nav-label">{t("navHelp")}</span>
+        </button>
+        <LanguageToggle />
+      </nav>
 
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>

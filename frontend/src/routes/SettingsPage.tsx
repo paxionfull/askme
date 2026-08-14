@@ -26,6 +26,9 @@ import {
   formatDaysLabel,
 } from "../hooks/useSettings";
 import { THINKING_STYLES } from "../constants/llmProviders";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
+import type { MessageKey } from "../i18n/messages";
 
 interface LlmDraft {
   llmModel: string;
@@ -40,16 +43,16 @@ interface LlmDraft {
 
 type SettingsTab = "model" | "skill" | "sync" | "auth";
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "skill", label: "Skills" },
-  { id: "sync", label: "定时" },
-  { id: "model", label: "API Key" },
-  { id: "auth", label: "Cookie" },
+const SETTINGS_TAB_KEYS: Array<{ id: SettingsTab; labelKey: MessageKey }> = [
+  { id: "skill", labelKey: "settingsTabSkill" },
+  { id: "sync", labelKey: "settingsTabSync" },
+  { id: "model", labelKey: "settingsTabModel" },
+  { id: "auth", labelKey: "settingsTabAuth" },
 ];
 
 function parseSettingsTab(value: string | null): SettingsTab | null {
   if (!value) return null;
-  return SETTINGS_TABS.some((tab) => tab.id === value) ? (value as SettingsTab) : null;
+  return SETTINGS_TAB_KEYS.some((tab) => tab.id === value) ? (value as SettingsTab) : null;
 }
 
 const PENDING_AUTH_SLOT_KEY = "askme.settings.pendingAuthSlot";
@@ -120,6 +123,7 @@ function buildReauthItemForSlotFrom(
 }
 
 export default function SettingsPage() {
+  const { t, locale } = useLocale();
   const { settings, setSettings, saveLlmToServer, clearLlmFromServer } = useSettings();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<SettingsTab>(
@@ -254,7 +258,7 @@ export default function SettingsPage() {
 
   async function handleLoadModels() {
     if (!draft.llmApiKey.trim()) {
-      setLlmError("请先填写 API Key");
+      setLlmError(t("settingsErrNeedApiKey"));
       return;
     }
 
@@ -273,7 +277,7 @@ export default function SettingsPage() {
       }));
     } catch (err) {
       setAvailableModels([]);
-      setLlmError(err instanceof Error ? err.message : "加载模型列表失败");
+      setLlmError(err instanceof Error ? err.message : t("settingsErrLoadModels"));
     } finally {
       setModelsLoading(false);
     }
@@ -282,7 +286,7 @@ export default function SettingsPage() {
   async function handleLoadEmbedModels() {
     const key = draft.embeddingApiKey.trim() || draft.llmApiKey.trim();
     if (!key) {
-      setEmbedError("请先填写 API Key");
+      setEmbedError(t("settingsErrNeedApiKey"));
       return;
     }
     const base = draft.embeddingApiBase.trim() || draft.llmApiBase.trim();
@@ -303,7 +307,7 @@ export default function SettingsPage() {
       }));
     } catch (err) {
       setEmbedModels([]);
-      setEmbedError(err instanceof Error ? err.message : "加载模型列表失败");
+      setEmbedError(err instanceof Error ? err.message : t("settingsErrLoadModels"));
     } finally {
       setEmbedModelsLoading(false);
     }
@@ -314,11 +318,11 @@ export default function SettingsPage() {
     setLlmSaved(false);
 
     if (!draft.llmApiKey.trim()) {
-      setLlmError("请填写 API Key");
+      setLlmError(t("settingsErrNeedApiKeyFill"));
       return;
     }
     if (!draft.llmModel.trim()) {
-      setLlmError("请选择对话模型");
+      setLlmError(t("settingsErrSelectChatModel"));
       return;
     }
 
@@ -328,11 +332,11 @@ export default function SettingsPage() {
       !modelsReady && draft.llmModel === settings.llmModel && Boolean(settings.llmModel.trim());
 
     if (!modelsReady && !reusingSavedModel) {
-      setLlmError("请先加载模型列表");
+      setLlmError(t("settingsErrLoadModelsFirst"));
       return;
     }
     if (modelsReady && !availableModels.includes(draft.llmModel)) {
-      setLlmError("请从模型列表中选择有效的对话模型");
+      setLlmError(t("settingsErrInvalidChatModel"));
       return;
     }
 
@@ -352,7 +356,7 @@ export default function SettingsPage() {
       setLlmSaved(true);
       setEditing(false);
     } catch (err) {
-      setLlmError(err instanceof Error ? err.message : "保存失败");
+      setLlmError(err instanceof Error ? err.message : t("settingsErrSave"));
     }
   }
 
@@ -360,7 +364,7 @@ export default function SettingsPage() {
     setEmbedError("");
     setEmbedSaved(false);
     if (!draft.embeddingModel.trim()) {
-      setEmbedError("请选择 Embedding 模型");
+      setEmbedError(t("settingsErrSelectEmbedModel"));
       return;
     }
     try {
@@ -373,7 +377,7 @@ export default function SettingsPage() {
       setEmbedSaved(true);
       setEditingEmbed(false);
     } catch (err) {
-      setEmbedError(err instanceof Error ? err.message : "保存失败");
+      setEmbedError(err instanceof Error ? err.message : t("settingsErrSave"));
     }
   }
 
@@ -401,7 +405,7 @@ export default function SettingsPage() {
       setEditingEmbed(true);
       setResetConfirmOpen(false);
     } catch (err) {
-      setLlmError(err instanceof Error ? err.message : "重置失败");
+      setLlmError(err instanceof Error ? err.message : t("settingsErrReset"));
       setResetConfirmOpen(false);
     } finally {
       setResettingLlm(false);
@@ -429,7 +433,7 @@ export default function SettingsPage() {
       setEditingEmbed(true);
       setResetEmbedConfirmOpen(false);
     } catch (err) {
-      setEmbedError(err instanceof Error ? err.message : "重置失败");
+      setEmbedError(err instanceof Error ? err.message : t("settingsErrReset"));
       setResetEmbedConfirmOpen(false);
     } finally {
       setResettingEmbed(false);
@@ -466,7 +470,7 @@ export default function SettingsPage() {
   function openReauthForSlot(slotId: string, reason?: string) {
     const item = buildReauthItemForSlot(slotId);
     if (!item?.slot) {
-      setCredError(`未找到授权项「${slotId}」，请确认该站点需要登录`);
+      setCredError(formatMessage(locale, "settingsErrSlotNotFound", { slot: slotId }));
       return false;
     }
     const slot = item.slot;
@@ -530,12 +534,12 @@ export default function SettingsPage() {
     const cred = credentials.find((item) => item.id === credId) ?? null;
     try {
       const result = await verifyCredential(credId);
-      setCredMessage(result.message || "校验成功");
+      setCredMessage(result.message || t("settingsCredVerified"));
       setReauthItem(null);
       setPendingAuthSlot(null);
       clearAuthSlotParam();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "校验失败";
+      const message = err instanceof Error ? err.message : t("settingsCredVerifyFailed");
       setCredError(message);
       if (cred && isRefreshAuthError(message)) {
         openReauthForCredential(cred, message);
@@ -555,7 +559,9 @@ export default function SettingsPage() {
     clearAuthSlotParam();
     await reloadCredentials();
     setCredMessage(
-      slotLabel ? `已授权并保存「${slotLabel}」凭证` : "已授权并保存凭证",
+      slotLabel
+        ? formatMessage(locale, "settingsCredSaved", { label: slotLabel })
+        : t("settingsCredSavedGeneric"),
     );
     setCredError("");
   }
@@ -566,15 +572,15 @@ export default function SettingsPage() {
     try {
       await deleteCredential(credId);
       await reloadCredentials();
-      setCredMessage("已删除凭证");
+      setCredMessage(t("settingsCredDeleted"));
     } catch (err) {
-      setCredError(err instanceof Error ? err.message : "删除失败");
+      setCredError(err instanceof Error ? err.message : t("settingsCredDeleteFailed"));
     }
   }
 
   async function handleSaveCursorApiKey() {
     if (!cursorApiKey.trim()) {
-      setCursorError("请先填写 Cursor API Key");
+      setCursorError(t("settingsCursorNeedKey"));
       return;
     }
     setCursorSaving(true);
@@ -585,10 +591,10 @@ export default function SettingsPage() {
       setCursorConfigured(result.configured);
       setCursorMasked(result.masked);
       setCursorApiKey("");
-      setCursorMessage("已保存 Cursor API Key");
+      setCursorMessage(t("settingsCursorSaved"));
       setEditingCursor(false);
     } catch (err) {
-      setCursorError(err instanceof Error ? err.message : "保存失败");
+      setCursorError(err instanceof Error ? err.message : t("settingsErrSave"));
     } finally {
       setCursorSaving(false);
     }
@@ -596,16 +602,16 @@ export default function SettingsPage() {
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--paper)]">
-      <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-6 py-4">
-        <h1 className="text-lg font-semibold">设置</h1>
+      <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-5 pb-3 pt-4">
+        <h1 className="app-page-title text-[var(--ink)]">{t("settingsTitle")}</h1>
       </header>
 
-      <div className="app-content-narrow space-y-6 p-6">
+      <div className="app-content-narrow space-y-6 px-5 py-5 sm:px-6">
         <nav
-          aria-label="设置分区"
+          aria-label={t("settingsSectionsLabel")}
           className="flex flex-wrap gap-1 rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-1"
         >
-          {SETTINGS_TABS.map((tab) => {
+          {SETTINGS_TAB_KEYS.map((tab) => {
             const active = activeTab === tab.id;
             return (
               <button
@@ -614,11 +620,11 @@ export default function SettingsPage() {
                 onClick={() => switchTab(tab.id)}
                 className={`rounded-[var(--radius-control)] px-3.5 py-2 text-sm font-medium transition-colors ${
                   active
-                    ? "bg-[var(--ink)] text-[var(--paper-raised)]"
+                    ? "bg-[var(--accent)] text-[var(--paper-raised)]"
                     : "text-[var(--ink-muted)] hover:bg-[var(--paper)] hover:text-[var(--ink)]"
                 }`}
               >
-                {tab.label}
+                {t(tab.labelKey)}
               </button>
             );
           })}
@@ -629,7 +635,7 @@ export default function SettingsPage() {
             <FeedSchedulerSection />
             <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
               <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold">默认时间范围</h2>
+                <h2 className="text-base font-semibold">{t("settingsDefaultRange")}</h2>
               </div>
               <div className="mt-3 flex gap-4 text-sm">
                 {([1, 3] as DefaultDays[]).map((value) => (
@@ -651,14 +657,15 @@ export default function SettingsPage() {
         {activeTab === "auth" ? (
           <>
         <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
-          <h2 className="text-base font-semibold">数据源 Cookie</h2>
+          <h2 className="text-base font-semibold">{t("settingsCookieTitle")}</h2>
+          <p className="mt-1 text-xs leading-5 text-[var(--ink-muted)]">{t("settingsAuthHint")}</p>
 
           {visibleCredentials.length > 0 ? (
             <ul className="mt-3 space-y-2">
               {visibleCredentials.map((item) => (
                 <li
                   key={item.id}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-[var(--rule)] px-3 py-2 text-sm"
+                  className="flex items-center justify-between gap-3 border-b border-[var(--rule)] px-1 py-3 text-sm last:border-b-0"
                 >
                   <div className="min-w-0">
                     <p className="font-medium text-[var(--ink)]">
@@ -669,36 +676,36 @@ export default function SettingsPage() {
                     </p>
                     <p className="mt-0.5 truncate text-xs text-[var(--ink-muted)]">{item.masked}</p>
                   </div>
-                  <div className="flex shrink-0 gap-2">
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
                     <button
                       type="button"
                       disabled={credVerifyingId === item.id}
                       onClick={() => void handleVerifyCredential(item.id)}
-                      className="text-xs text-[var(--ink-muted)] underline disabled:opacity-50"
+                      className="ui-btn ui-btn-ghost px-2.5 text-xs disabled:opacity-50"
                     >
-                      {credVerifyingId === item.id ? "校验中…" : "测试"}
+                      {credVerifyingId === item.id ? t("settingsCookieTesting") : t("settingsCookieTest")}
                     </button>
                     <button
                       type="button"
                       onClick={() => openReauthForCredential(item)}
-                      className="text-xs text-[var(--accent)] underline"
+                      className="ui-btn ui-btn-accent px-2.5 text-xs"
                     >
-                      重新登录
+                      {t("settingsCookieRelogin")}
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleDeleteCredential(item.id)}
-                      className="text-xs text-red-800 underline"
+                      className="ui-btn ui-btn-danger px-2.5 text-xs"
                     >
-                      删除
+                      {t("delete")}
                     </button>
                   </div>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="mt-3 text-xs text-[var(--accent)]">
-              尚未配置任何 Cookie 凭证。
+            <p className="mt-3 text-xs text-[var(--ink-muted)]">
+              {t("settingsCookieEmpty")}
             </p>
           )}
 
@@ -715,14 +722,22 @@ export default function SettingsPage() {
                 onAutoStarted={markHandoffAutoStarted}
                 title={
                   credentials.some((c) => c.slot === activeHandoffItem.slot)
-                    ? `请重新登录：${activeHandoffItem.slot_label || activeHandoffItem.slot}`
-                    : `请完成登录：${activeHandoffItem.slot_label || activeHandoffItem.slot}`
+                    ? formatMessage(locale, "settingsAuthRelogin", {
+                        label: activeHandoffItem.slot_label || activeHandoffItem.slot || "",
+                      })
+                    : formatMessage(locale, "settingsAuthCompleteLogin", {
+                        label: activeHandoffItem.slot_label || activeHandoffItem.slot || "",
+                      })
                 }
               />
             </div>
           ) : null}
 
-          {credError && <p className="mt-3 text-sm text-red-800">{credError}</p>}
+          {credError ? (
+            <p className="mt-3 text-sm text-[var(--danger-text)]" role="alert">
+              {credError}
+            </p>
+          ) : null}
           {credMessage && <p className="mt-3 text-sm text-[var(--success)]">{credMessage}</p>}
         </section>
           </>
@@ -734,14 +749,14 @@ export default function SettingsPage() {
         <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h2 className="text-base font-semibold">Cursor API Key</h2>
+              <h2 className="text-base font-semibold">{t("settingsCursorApiKeyTitle")}</h2>
               {cursorConfigured && !editingCursor ? (
                 <p className="mt-1 text-sm text-[var(--ink-muted)]">
-                  <span className="font-medium text-[var(--ink)]">{cursorMasked}</span> · 已配置
+                  <span className="font-medium text-[var(--ink)]">{cursorMasked}</span> · {t("configured")}
                 </p>
               ) : null}
               <p className="mt-1 text-sm text-[var(--ink-muted)]">
-                接入未知网站、需自动编写抓取 Skill 时使用。已知网站无需配置。
+                {t("settingsCursorHint")}
               </p>
             </div>
             <span
@@ -749,14 +764,14 @@ export default function SettingsPage() {
                 cursorConfigured ? "text-[var(--success)]" : "text-[var(--accent)]"
               }`}
             >
-              {cursorConfigured ? "已配置" : "未配置"}
+              {cursorConfigured ? t("configured") : t("notConfigured")}
             </span>
           </div>
 
           {!cursorConfigured && !editingCursor ? (
             <>
               <p className="mt-3 text-sm text-[var(--ink-muted)]">
-                尚未配置 Cursor API Key，接入未知网站时需要。
+                {t("settingsCursorEmpty")}
               </p>
               <div className="mt-3">
                 <button
@@ -766,9 +781,9 @@ export default function SettingsPage() {
                     setCursorError("");
                     setCursorMessage("");
                   }}
-                  className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)]"
+                  className="ui-btn ui-btn-primary text-sm"
                 >
-                  去配置
+                  {t("settingsConfigure")}
                 </button>
               </div>
             </>
@@ -776,39 +791,46 @@ export default function SettingsPage() {
 
           {cursorConfigured || editingCursor ? (
             <>
-              <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">API Key</label>
-              <input
-                type="password"
-                readOnly={!editingCursor && cursorConfigured}
-                value={cursorApiKey}
-                onChange={(e) => {
-                  setCursorApiKey(e.target.value);
-                  setCursorMessage("");
-                }}
-                placeholder={cursorConfigured && !editingCursor ? cursorMasked : "cur_..."}
-                autoComplete="off"
-                className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none ${
-                  !editingCursor && cursorConfigured
-                    ? "border-[var(--rule)] bg-[var(--paper)] text-[var(--ink-muted)] cursor-default"
-                    : "border-[var(--rule)] bg-white focus:border-[var(--accent)]"
-                }`}
-              />
+              <label className="ui-field mt-4">
+                <span className="ui-field-label">{t("settingsApiKeyLabel")}</span>
+                <input
+                  type="password"
+                  readOnly={!editingCursor && cursorConfigured}
+                  value={cursorApiKey}
+                  onChange={(e) => {
+                    setCursorApiKey(e.target.value);
+                    setCursorMessage("");
+                  }}
+                  placeholder={cursorConfigured && !editingCursor ? cursorMasked : "cur_..."}
+                  autoComplete="off"
+                  className={`ui-input w-full ${
+                    !editingCursor && cursorConfigured
+                      ? "cursor-default bg-[var(--paper)] text-[var(--ink-muted)]"
+                      : ""
+                  }`}
+                />
+              </label>
               {!editingCursor && cursorConfigured ? (
                 <p className="mt-2 text-xs text-[var(--ink-muted)]">
-                  请在{" "}
+                  {t("settingsCursorCreatePrefix")}{" "}
                   <a
                     href="https://cursor.com/settings"
                     target="_blank"
                     rel="noreferrer"
                     className="text-[var(--ink)] underline"
                   >
-                    Cursor 设置
-                  </a>{" "}
-                  创建 API Key。
+                    {t("settingsCursorSettingsLink")}
+                  </a>
+                  {locale === "zh" ? "" : " "}
+                  {t("settingsCursorCreateSuffix")}
                 </p>
               ) : null}
 
-              {cursorError && <p className="mt-3 text-sm text-red-800">{cursorError}</p>}
+              {cursorError ? (
+                <p className="mt-3 text-sm text-[var(--danger-text)]" role="alert">
+                  {cursorError}
+                </p>
+              ) : null}
               {cursorMessage && <p className="mt-3 text-sm text-[var(--success)]">{cursorMessage}</p>}
 
               <div className="mt-5 flex justify-end gap-2">
@@ -822,17 +844,17 @@ export default function SettingsPage() {
                         setCursorApiKey("");
                         setCursorError("");
                       }}
-                      className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)] disabled:opacity-50"
+                      className="ui-btn text-sm disabled:opacity-50"
                     >
-                      取消
+                      {t("cancel")}
                     </button>
                     <button
                       type="button"
                       disabled={cursorSaving}
                       onClick={() => void handleSaveCursorApiKey()}
-                      className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)] disabled:opacity-50"
+                      className="ui-btn ui-btn-primary text-sm disabled:opacity-50"
                     >
-                      {cursorSaving ? "保存中…" : "保存"}
+                      {cursorSaving ? t("saving") : t("save")}
                     </button>
                   </>
                 ) : (
@@ -844,9 +866,9 @@ export default function SettingsPage() {
                       setCursorError("");
                       setCursorMessage("");
                     }}
-                    className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]"
+                    className="ui-btn text-sm"
                   >
-                    修改
+                    {t("edit")}
                   </button>
                 )}
               </div>
@@ -857,70 +879,104 @@ export default function SettingsPage() {
         {/* ── 对话模型卡片 ── */}
         <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold">对话模型</h2>
+            <h2 className="text-base font-semibold">{t("settingsChatModel")}</h2>
             <span className={`text-xs font-medium ${configured ? "text-[var(--success)]" : "text-[var(--accent)]"}`}>
-              {configured ? "已配置" : "未配置"}
+              {configured ? t("configured") : t("notConfigured")}
             </span>
           </div>
 
           {(() => {
             const ro = !editing;
-            const fieldCls = `mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none ${
-              ro
-                ? "border-[var(--rule)] bg-[var(--paper)] text-[var(--ink-muted)] cursor-default"
-                : "border-[var(--rule)] bg-white focus:border-[var(--accent)]"
-            }`;
-            const selectCls = fieldCls;
+            const fieldCls = `ui-input w-full ${ro ? "cursor-default bg-[var(--paper)] text-[var(--ink-muted)]" : ""}`;
+            const selectCls = `ui-select w-full ${ro ? "cursor-default bg-[var(--paper)] text-[var(--ink-muted)]" : ""}`;
             return (
               <>
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">Base URL</label>
-                <input type="url" readOnly={ro} value={draft.llmApiBase}
-                  onChange={(e) => { setDraft((c) => ({ ...c, llmApiBase: e.target.value })); setLlmSaved(false); invalidateModels(); }}
-                  placeholder="https://api.openai.com/v1" className={fieldCls} />
+                <label className="ui-field mt-4">
+                  <span className="ui-field-label">{t("settingsBaseUrlLabel")}</span>
+                  <input type="url" readOnly={ro} value={draft.llmApiBase}
+                    onChange={(e) => { setDraft((c) => ({ ...c, llmApiBase: e.target.value })); setLlmSaved(false); invalidateModels(); }}
+                    placeholder="https://api.openai.com/v1" className={fieldCls} />
+                </label>
 
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">API Key</label>
-                <input type="password" readOnly={ro} value={draft.llmApiKey}
-                  onChange={(e) => { setDraft((c) => ({ ...c, llmApiKey: e.target.value })); setLlmSaved(false); invalidateModels(); }}
-                  placeholder="sk-..." autoComplete="off" className={fieldCls} />
+                <label className="ui-field mt-4">
+                  <span className="ui-field-label">{t("settingsApiKeyLabel")}</span>
+                  <input type="password" readOnly={ro} value={draft.llmApiKey}
+                    onChange={(e) => { setDraft((c) => ({ ...c, llmApiKey: e.target.value })); setLlmSaved(false); invalidateModels(); }}
+                    placeholder="sk-..." autoComplete="off" className={fieldCls} />
+                </label>
 
                 {!ro && (
                   <div className="mt-4 flex items-center gap-2">
                     <button type="button" disabled={modelsLoading || !draft.llmApiKey.trim()}
                       onClick={() => void handleLoadModels()}
-                      className="rounded-md border border-[var(--rule)] px-3 py-1.5 text-sm hover:bg-[var(--paper)] disabled:opacity-50">
-                      {modelsLoading ? "加载中..." : "加载模型列表"}
+                      className="ui-btn text-sm disabled:opacity-50">
+                      {modelsLoading ? t("loading") : t("settingsLoadModels")}
                     </button>
-                    {availableModels.length > 0 && <span className="text-xs text-[var(--ink-muted)]">共 {availableModels.length} 个</span>}
+                    {availableModels.length > 0 && <span className="text-xs text-[var(--ink-muted)]">{availableModels.length} {t("settingsModelsCount")}</span>}
                   </div>
                 )}
 
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">对话 Model</label>
-                <select disabled={ro || availableModels.length === 0} value={draft.llmModel}
-                  onChange={(e) => { setDraft((c) => ({ ...c, llmModel: e.target.value })); setLlmSaved(false); }}
-                  className={selectCls}>
-                  {draft.llmModel && !availableModels.includes(draft.llmModel) && <option value={draft.llmModel}>{draft.llmModel}</option>}
-                  {availableModels.length === 0 && !draft.llmModel && <option value="">请先加载模型列表</option>}
-                  {availableModels.length > 0 && !draft.llmModel && <option value="">请选择对话模型</option>}
-                  {availableModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
+                <label className="ui-field mt-4">
+                  <span className="ui-field-label">{t("settingsChatModelLabel")}</span>
+                  <select disabled={ro || availableModels.length === 0} value={draft.llmModel}
+                    onChange={(e) => { setDraft((c) => ({ ...c, llmModel: e.target.value })); setLlmSaved(false); }}
+                    className={selectCls}>
+                    {draft.llmModel && !availableModels.includes(draft.llmModel) && <option value={draft.llmModel}>{draft.llmModel}</option>}
+                    {availableModels.length === 0 && !draft.llmModel && (
+                      <option value="">{t("settingsOptLoadModelsFirst")}</option>
+                    )}
+                    {availableModels.length > 0 && !draft.llmModel && (
+                      <option value="">{t("settingsOptSelectChatModel")}</option>
+                    )}
+                    {availableModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </label>
 
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">深度思考参数风格</label>
-                <select disabled={ro} value={draft.thinkingStyle}
-                  onChange={(e) => { setDraft((c) => ({ ...c, thinkingStyle: e.target.value })); setLlmSaved(false); }}
-                  className={selectCls}>
-                  {THINKING_STYLES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-                </select>
+                <details className="mt-4" open={draft.thinkingStyle !== ""}>
+                  <summary className="cursor-pointer text-xs font-medium text-[var(--ink-muted)]">
+                    {t("settingsThinkingAdvanced")}
+                    {draft.thinkingStyle === "" ? (
+                      <span className="ml-1.5 font-normal text-[var(--ink-muted)]">· {t("thinkingAuto")}</span>
+                    ) : null}
+                  </summary>
+                  <p className="mt-1 text-[11px] leading-4 text-[var(--ink-muted)]">{t("settingsThinkingAdvancedHint")}</p>
+                  <label className="ui-field mt-2">
+                    <span className="ui-field-label">{t("settingsThinkingStyle")}</span>
+                    <select
+                      disabled={ro}
+                      value={draft.thinkingStyle}
+                      onChange={(e) => {
+                        setDraft((c) => ({ ...c, thinkingStyle: e.target.value }));
+                        setLlmSaved(false);
+                      }}
+                      className={selectCls}
+                    >
+                      {THINKING_STYLES.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {t(s.labelKey)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="mt-1 text-[11px] leading-4 text-[var(--ink-muted)]">{t("settingsThinkingStyleHint")}</p>
+                </details>
 
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">最大输出 Tokens</label>
-                <input type="text" inputMode="numeric" readOnly={ro} value={draft.llmMaxTokens}
-                  onChange={(e) => { setDraft((c) => ({ ...c, llmMaxTokens: e.target.value === "" ? 32768 : Number(e.target.value) })); setLlmSaved(false); }}
-                  placeholder="32768" className={fieldCls} />
+                <label className="ui-field mt-4">
+                  <span className="ui-field-label">{t("settingsMaxTokens")}</span>
+                  <input type="text" inputMode="numeric" readOnly={ro} value={draft.llmMaxTokens}
+                    onChange={(e) => { setDraft((c) => ({ ...c, llmMaxTokens: e.target.value === "" ? 32768 : Number(e.target.value) })); setLlmSaved(false); }}
+                    placeholder="32768" className={fieldCls} />
+                </label>
               </>
             );
           })()}
 
-          {llmError && <p className="mt-3 text-sm text-red-800">{llmError}</p>}
-          {llmSaved && !editing && <p className="mt-3 text-sm text-[var(--success)]">对话模型配置已保存</p>}
+          {llmError ? (
+            <p className="mt-3 text-sm text-[var(--danger-text)]" role="alert">
+              {llmError}
+            </p>
+          ) : null}
+          {llmSaved && !editing && <p className="mt-3 text-sm text-[var(--success)]">{t("settingsChatSaved")}</p>}
 
           <div className="mt-5 flex justify-end gap-2">
             {editing ? (
@@ -928,9 +984,9 @@ export default function SettingsPage() {
                 <button type="button"
                   onClick={() => { setEditing(false); setLlmError(""); setAvailableModels([]);
                     setDraft((c) => ({ ...c, llmModel: settings.llmModel, llmApiKey: settings.llmApiKey, llmApiBase: settings.llmApiBase, llmMaxTokens: settings.llmMaxTokens, thinkingStyle: settings.thinkingStyle })); }}
-                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]">取消</button>
+                  className="ui-btn text-sm">{t("cancel")}</button>
                 <button type="button" onClick={() => void handleSaveLlm()}
-                  className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)]">保存</button>
+                  className="ui-btn ui-btn-primary text-sm">{t("save")}</button>
               </>
             ) : (
               <>
@@ -938,12 +994,12 @@ export default function SettingsPage() {
                   type="button"
                   disabled={resettingLlm}
                   onClick={() => setResetConfirmOpen(true)}
-                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm text-red-800 hover:bg-[var(--error-soft)] disabled:opacity-50"
+                  className="ui-btn ui-btn-danger text-sm disabled:opacity-50"
                 >
-                  重置
+                  {t("reset")}
                 </button>
                 <button type="button" onClick={() => { setEditing(true); setLlmSaved(false); setLlmError(""); }}
-                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]">修改</button>
+                  className="ui-btn text-sm">{t("edit")}</button>
               </>
             )}
           </div>
@@ -953,63 +1009,73 @@ export default function SettingsPage() {
         <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold">Embedding 模型（可选）</h2>
+              <h2 className="text-base font-semibold">{t("settingsEmbedModel")}</h2>
               <p className="mt-1 text-sm text-[var(--ink-muted)]">
-                用于检索提问，生成简报可不配。留空 Key / Base URL 则复用对话模型配置。
+                {t("settingsEmbedHint")}
               </p>
             </div>
             <span className={`shrink-0 text-xs font-medium ${settings.embeddingModel ? "text-[var(--success)]" : "text-[var(--ink-muted)]"}`}>
-              {settings.embeddingModel || "未配置"}
+              {settings.embeddingModel || t("notConfigured")}
             </span>
           </div>
 
           {(() => {
             const ro = !editingEmbed;
-            const fieldCls = `mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none ${
-              ro
-                ? "border-[var(--rule)] bg-[var(--paper)] text-[var(--ink-muted)] cursor-default"
-                : "border-[var(--rule)] bg-white focus:border-[var(--accent)]"
-            }`;
-            const selectCls = fieldCls;
+            const fieldCls = `ui-input w-full ${ro ? "cursor-default bg-[var(--paper)] text-[var(--ink-muted)]" : ""}`;
+            const selectCls = `ui-select w-full ${ro ? "cursor-default bg-[var(--paper)] text-[var(--ink-muted)]" : ""}`;
             return (
               <>
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">Base URL</label>
-                <input type="url" readOnly={ro} value={draft.embeddingApiBase}
-                  onChange={(e) => { setDraft((c) => ({ ...c, embeddingApiBase: e.target.value })); setEmbedSaved(false); invalidateEmbedModels(); }}
-                  placeholder="留空则使用对话模型的 Base URL" className={fieldCls} />
+                <label className="ui-field mt-4">
+                  <span className="ui-field-label">{t("settingsBaseUrlLabel")}</span>
+                  <input type="url" readOnly={ro} value={draft.embeddingApiBase}
+                    onChange={(e) => { setDraft((c) => ({ ...c, embeddingApiBase: e.target.value })); setEmbedSaved(false); invalidateEmbedModels(); }}
+                    placeholder={t("settingsEmbedBasePh")} className={fieldCls} />
+                </label>
 
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">API Key</label>
-                <input type="password" readOnly={ro} value={draft.embeddingApiKey}
-                  onChange={(e) => { setDraft((c) => ({ ...c, embeddingApiKey: e.target.value })); setEmbedSaved(false); invalidateEmbedModels(); }}
-                  placeholder="留空则使用对话模型的 API Key" autoComplete="off" className={fieldCls} />
+                <label className="ui-field mt-4">
+                  <span className="ui-field-label">{t("settingsApiKeyLabel")}</span>
+                  <input type="password" readOnly={ro} value={draft.embeddingApiKey}
+                    onChange={(e) => { setDraft((c) => ({ ...c, embeddingApiKey: e.target.value })); setEmbedSaved(false); invalidateEmbedModels(); }}
+                    placeholder={t("settingsEmbedKeyPh")} autoComplete="off" className={fieldCls} />
+                </label>
 
                 {!ro && (
                   <div className="mt-4 flex items-center gap-2">
                     <button type="button"
                       disabled={embedModelsLoading || (!draft.embeddingApiKey.trim() && !draft.llmApiKey.trim())}
                       onClick={() => void handleLoadEmbedModels()}
-                      className="rounded-md border border-[var(--rule)] px-3 py-1.5 text-sm hover:bg-[var(--paper)] disabled:opacity-50">
-                      {embedModelsLoading ? "加载中..." : "加载模型列表"}
+                      className="ui-btn text-sm disabled:opacity-50">
+                      {embedModelsLoading ? t("loading") : t("settingsLoadModels")}
                     </button>
-                    {embedModels.length > 0 && <span className="text-xs text-[var(--ink-muted)]">共 {embedModels.length} 个</span>}
+                    {embedModels.length > 0 && <span className="text-xs text-[var(--ink-muted)]">{embedModels.length} {t("settingsModelsCount")}</span>}
                   </div>
                 )}
 
-                <label className="mt-4 block text-xs font-medium text-[var(--ink-muted)]">Embedding Model</label>
-                <select disabled={ro || (embedModels.length === 0 && !draft.embeddingModel)} value={draft.embeddingModel}
-                  onChange={(e) => { setDraft((c) => ({ ...c, embeddingModel: e.target.value })); setEmbedSaved(false); }}
-                  className={selectCls}>
-                  {draft.embeddingModel && !embedModels.includes(draft.embeddingModel) && <option value={draft.embeddingModel}>{draft.embeddingModel}</option>}
-                  {embedModels.length === 0 && !draft.embeddingModel && <option value="">请先加载模型列表</option>}
-                  {embedModels.length > 0 && !draft.embeddingModel && <option value="">请选择 Embedding 模型</option>}
-                  {embedModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
+                <label className="ui-field mt-4">
+                  <span className="ui-field-label">{t("settingsEmbedModelLabel")}</span>
+                  <select disabled={ro || (embedModels.length === 0 && !draft.embeddingModel)} value={draft.embeddingModel}
+                    onChange={(e) => { setDraft((c) => ({ ...c, embeddingModel: e.target.value })); setEmbedSaved(false); }}
+                    className={selectCls}>
+                    {draft.embeddingModel && !embedModels.includes(draft.embeddingModel) && <option value={draft.embeddingModel}>{draft.embeddingModel}</option>}
+                    {embedModels.length === 0 && !draft.embeddingModel && (
+                      <option value="">{t("settingsOptLoadModelsFirst")}</option>
+                    )}
+                    {embedModels.length > 0 && !draft.embeddingModel && (
+                      <option value="">{t("settingsOptSelectEmbedModel")}</option>
+                    )}
+                    {embedModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </label>
               </>
             );
           })()}
 
-          {embedError && <p className="mt-3 text-sm text-red-800">{embedError}</p>}
-          {embedSaved && !editingEmbed && <p className="mt-3 text-sm text-[var(--success)]">Embedding 配置已保存</p>}
+          {embedError ? (
+            <p className="mt-3 text-sm text-[var(--danger-text)]" role="alert">
+              {embedError}
+            </p>
+          ) : null}
+          {embedSaved && !editingEmbed && <p className="mt-3 text-sm text-[var(--success)]">{t("settingsEmbedSaved")}</p>}
 
           <div className="mt-5 flex justify-end gap-2">
             {editingEmbed ? (
@@ -1017,9 +1083,9 @@ export default function SettingsPage() {
                 <button type="button"
                   onClick={() => { setEditingEmbed(false); setEmbedError(""); setEmbedModels([]);
                     setDraft((c) => ({ ...c, embeddingModel: settings.embeddingModel, embeddingApiKey: settings.embeddingApiKey, embeddingApiBase: settings.embeddingApiBase })); }}
-                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]">取消</button>
+                  className="ui-btn text-sm">{t("cancel")}</button>
                 <button type="button" onClick={() => void handleSaveEmbed()}
-                  className="rounded-md bg-[var(--ink)] px-4 py-2 text-sm text-[var(--paper-raised)] hover:bg-[color-mix(in_srgb,var(--ink)_88%,white)]">保存</button>
+                  className="ui-btn ui-btn-primary text-sm">{t("save")}</button>
               </>
             ) : (
               <>
@@ -1027,12 +1093,12 @@ export default function SettingsPage() {
                   type="button"
                   disabled={resettingEmbed}
                   onClick={() => setResetEmbedConfirmOpen(true)}
-                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm text-red-800 hover:bg-[var(--error-soft)] disabled:opacity-50"
+                  className="ui-btn ui-btn-danger text-sm disabled:opacity-50"
                 >
-                  重置
+                  {t("reset")}
                 </button>
                 <button type="button" onClick={() => { setEditingEmbed(true); setEmbedSaved(false); setEmbedError(""); }}
-                  className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm hover:bg-[var(--paper)]">修改</button>
+                  className="ui-btn text-sm">{t("edit")}</button>
               </>
             )}
           </div>
@@ -1044,9 +1110,9 @@ export default function SettingsPage() {
 
       <ConfirmModal
         open={resetConfirmOpen}
-        title="重置模型配置"
-        message="将清空对话模型与 Embedding 模型的全部已保存配置（含 API Key、Base URL 等），此操作不可撤销。"
-        confirmLabel="确认重置"
+        title={t("settingsResetLlmTitle")}
+        message={t("settingsResetLlmMessage")}
+        confirmLabel={t("settingsResetConfirm")}
         danger
         loading={resettingLlm}
         onCancel={() => {
@@ -1059,9 +1125,9 @@ export default function SettingsPage() {
 
       <ConfirmModal
         open={resetEmbedConfirmOpen}
-        title="重置 Embedding 配置"
-        message="将清空 Embedding 模型、API Key、Base URL 等已保存配置，不影响对话模型。此操作不可撤销。"
-        confirmLabel="确认重置"
+        title={t("settingsResetEmbedTitle")}
+        message={t("settingsResetEmbedMessage")}
+        confirmLabel={t("settingsResetConfirm")}
         danger
         loading={resettingEmbed}
         onCancel={() => {

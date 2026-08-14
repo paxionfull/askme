@@ -1,4 +1,7 @@
 import type { DigestTree, DigestTreeSection } from "../api";
+import type { Locale } from "../i18n/locale";
+import { readStoredLocale } from "../i18n/locale";
+import { formatMessage } from "../i18n/messages";
 
 export type DigestExportMeta = {
   groupName: string;
@@ -17,8 +20,8 @@ function escapeMdLinkText(text: string): string {
   return text.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
 }
 
-function articleLine(title: string, url: string): string {
-  const label = escapeMdLinkText(title.trim() || "无标题");
+function articleLine(title: string, url: string, locale: Locale): string {
+  const label = escapeMdLinkText(title.trim() || formatMessage(locale, "digestExportNoTitle", {}));
   const href = (url || "").trim() || "#";
   return `- [${label}](${href})`;
 }
@@ -41,39 +44,48 @@ export function formatDigestDayRange(days: number): string {
   return `${formatYmd(start)}～${formatYmd(end)}`;
 }
 
-function sanitizeFilenamePart(value: string): string {
+function sanitizeFilenamePart(value: string, locale: Locale): string {
   const cleaned = value
     .trim()
     .replace(/[\\/:*?"<>|]+/g, "_")
     .replace(/\s+/g, "_")
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "");
-  return cleaned || "简报";
+  return cleaned || formatMessage(locale, "digestExportBrief", {});
 }
 
-export function buildDigestExportFilename(groupName: string, dayRange: string): string {
-  const group = sanitizeFilenamePart(groupName);
-  const range = sanitizeFilenamePart(dayRange.replace(/～/g, "_"));
+export function buildDigestExportFilename(
+  groupName: string,
+  dayRange: string,
+  locale?: Locale,
+): string {
+  const loc = locale ?? readStoredLocale();
+  const group = sanitizeFilenamePart(groupName, loc);
+  const range = sanitizeFilenamePart(dayRange.replace(/～/g, "_"), loc);
   return `${group}_${range}.md`;
 }
 
-function headingLine(meta: DigestExportMeta): string {
-  const group = meta.groupName.trim() || "简报";
+function headingLine(meta: DigestExportMeta, locale: Locale): string {
+  const group = meta.groupName.trim() || formatMessage(locale, "digestExportBrief", {});
   const dayRange = meta.dayRange.trim();
   if (!dayRange) return `# ${group} · ${meta.rangeLabel}`;
   return `# ${group} · ${meta.rangeLabel}（${dayRange}）`;
+}
+
+function ruleLine(meta: DigestExportMeta, locale: Locale): string {
+  return formatMessage(locale, "digestExportRuleLine", {
+    rule: meta.ruleName.trim() || formatMessage(locale, "digestExportRuleUnbound", {}),
+  });
 }
 
 /** 从结构化简报树生成 Markdown（对齐原型导出格式） */
 export function buildDigestMarkdownFromTree(
   tree: DigestTree,
   meta: DigestExportMeta,
+  locale?: Locale,
 ): string {
-  const lines: string[] = [
-    headingLine(meta),
-    `> 规则：${meta.ruleName || "未绑定"} · Askme`,
-    "",
-  ];
+  const loc = locale ?? readStoredLocale();
+  const lines: string[] = [headingLine(meta, loc), ruleLine(meta, loc), ""];
 
   const partitions =
     tree.partitions && tree.partitions.length > 0
@@ -102,7 +114,7 @@ export function buildDigestMarkdownFromTree(
         }
         for (const article of articles) {
           lines.push(
-            articleLine(article.title || article.article_id, article.url || ""),
+            articleLine(article.title || article.article_id, article.url || "", loc),
           );
         }
         lines.push("");
@@ -117,15 +129,11 @@ export function buildDigestMarkdownFromTree(
 export function buildDigestMarkdownFromText(
   summary: string,
   meta: DigestExportMeta,
+  locale?: Locale,
 ): string {
+  const loc = locale ?? readStoredLocale();
   const body = summary.trim();
-  const lines = [
-    headingLine(meta),
-    `> 规则：${meta.ruleName || "未绑定"} · Askme`,
-    "",
-    body,
-    "",
-  ];
+  const lines = [headingLine(meta, loc), ruleLine(meta, loc), "", body, ""];
   return lines.join("\n");
 }
 

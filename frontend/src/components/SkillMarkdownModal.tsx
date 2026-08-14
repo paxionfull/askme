@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import MarkdownContent from "./MarkdownContent";
 import { stripFrontmatter } from "../utils/skillDocument";
+import { useLocale } from "../i18n/LocaleContext";
+import { useModalA11y } from "../hooks/useModalA11y";
 
 interface SkillMarkdownModalProps {
   open: boolean;
@@ -39,11 +41,23 @@ export default function SkillMarkdownModal({
   onDelete,
   deleting = false,
 }: SkillMarkdownModalProps) {
+  const { t } = useLocale();
   const [tab, setTab] = useState<"preview" | "edit">("preview");
   const rendered = useMemo(
     () => (previewMode === "full" ? document : stripFrontmatter(document)),
     [document, previewMode],
   );
+  const tabs = useMemo(
+    () =>
+      [
+        ["preview", t("skillMdPreview")] as const,
+        ["edit", t("skillMdEdit")] as const,
+      ],
+    [t],
+  );
+
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useModalA11y(open, onClose, backdropRef);
 
   useEffect(() => {
     if (open) {
@@ -54,7 +68,13 @@ export default function SkillMarkdownModal({
   if (!open) return null;
 
   return (
-    <div className="ui-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="skill-md-title">
+    <div
+      ref={backdropRef}
+      className="ui-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="skill-md-title"
+    >
       <div className="ui-modal ui-modal-lg">
         <div className="ui-modal-header">
           <h2 id="skill-md-title" className="ui-modal-title">
@@ -66,7 +86,7 @@ export default function SkillMarkdownModal({
         {onSkillIdChange ? (
           <div className="border-b border-[var(--rule)] px-5 py-3">
             <label className="ui-field">
-              <span className="ui-field-label">Skill ID</span>
+              <span className="ui-field-label">{t("settingsSkillIdLabel")}</span>
               <input
                 value={skillId ?? ""}
                 disabled={idReadonly}
@@ -78,18 +98,17 @@ export default function SkillMarkdownModal({
         ) : null}
 
         <div className="ui-modal-body !p-0">
-          {loading ? <p className="px-5 py-6 text-sm text-[var(--ink-muted)]">加载中…</p> : null}
-          {error ? <p className="px-5 py-6 text-sm text-red-800">{error}</p> : null}
+          {loading ? <p className="px-5 py-6 text-sm text-[var(--ink-muted)]">{t("loading")}</p> : null}
+          {error ? (
+            <p className="px-5 py-6 text-sm text-[var(--danger-text)]" role="alert">
+              {error}
+            </p>
+          ) : null}
 
           {!loading && !error ? (
             <>
               <div className="flex gap-0 border-b border-[var(--rule)] px-5">
-                {(
-                  [
-                    ["preview", "预览"],
-                    ["edit", "编辑"],
-                  ] as const
-                ).map(([id, label]) => (
+                {tabs.map(([id, tabLabel]) => (
                   <button
                     key={id}
                     type="button"
@@ -100,7 +119,7 @@ export default function SkillMarkdownModal({
                         : "border-transparent text-[var(--ink-muted)] hover:text-[var(--ink)]"
                     }`}
                   >
-                    {label}
+                    {tabLabel}
                   </button>
                 ))}
               </div>
@@ -129,13 +148,13 @@ export default function SkillMarkdownModal({
                 onClick={onDelete}
                 className="ui-btn ui-btn-danger text-xs disabled:opacity-50"
               >
-                {deleting ? "删除中…" : "删除"}
+                {deleting ? t("skillDetailDeleting") : t("delete")}
               </button>
             ) : null}
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="ui-btn text-xs">
-              关闭
+              {t("close")}
             </button>
             {onSave ? (
               <button
@@ -144,7 +163,7 @@ export default function SkillMarkdownModal({
                 onClick={onSave}
                 className="ui-btn ui-btn-primary text-xs disabled:opacity-50"
               >
-                {saving ? "保存中…" : "保存"}
+                {saving ? t("saving") : t("save")}
               </button>
             ) : null}
           </div>

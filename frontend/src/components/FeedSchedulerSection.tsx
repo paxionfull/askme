@@ -7,7 +7,7 @@ import {
   type FeedSchedulerConfig,
   type ScheduleTime,
 } from "../api";
-import { UNGROUPED_GROUP_ID, countUngroupedFeeds } from "../utils/feedLayout";
+import { UNGROUPED_GROUP_ID, countUngroupedFeeds, resolveGroupDisplayName } from "../utils/feedLayout";
 import { useFeedRefresh } from "../contexts/FeedRefreshContext";
 import {
   SCHEDULES_UPDATED_EVENT,
@@ -21,22 +21,26 @@ import {
   validateSchedules,
   type ScheduleDraft,
 } from "../utils/feedScheduler";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
+import { useModalA11y } from "../hooks/useModalA11y";
 
-function formatLastRun(timestamp: number | null | undefined): string {
+function formatLastRun(timestamp: number | null | undefined, locale: import("../i18n/locale").Locale): string {
   if (!timestamp) return "—";
   const date = new Date(timestamp * 1000);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("zh-CN");
+  return date.toLocaleString(locale === "zh" ? "zh-CN" : "en-US");
 }
 
-function formatNextRun(iso: string | null | undefined): string {
+function formatNextRun(iso: string | null | undefined, locale: import("../i18n/locale").Locale): string {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString("zh-CN");
+  return date.toLocaleString(locale === "zh" ? "zh-CN" : "en-US");
 }
 
 export default function FeedSchedulerSection() {
+  const { t, locale } = useLocale();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -46,6 +50,8 @@ export default function FeedSchedulerSection() {
   const [openPopId, setOpenPopId] = useState<string | null>(null);
   const [draftGroupIds, setDraftGroupIds] = useState<string[]>([]);
   const popRef = useRef<HTMLDivElement>(null);
+  const groupsDialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y(!!openPopId, () => setOpenPopId(null), groupsDialogRef);
   const {
     refreshBusy,
     progress: liveProgress,
@@ -75,11 +81,11 @@ export default function FeedSchedulerSection() {
       setGroups(feedsData.groups ?? []);
       setUngroupedCount(countUngroupedFeeds(feedsData.feeds ?? [], feedsData.groups ?? []));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载定时设置失败");
+      setError(err instanceof Error ? err.message : t("scheduleErrLoad"));
     } finally {
       setLoading(false);
     }
-  }, [applyServerConfig]);
+  }, [applyServerConfig, t]);
 
   useEffect(() => {
     void loadConfig();
@@ -141,11 +147,11 @@ export default function FeedSchedulerSection() {
       ...named,
       {
         id: UNGROUPED_GROUP_ID,
-        name: "未分组",
+        name: resolveGroupDisplayName(UNGROUPED_GROUP_ID, "", t("addSourceUngrouped")),
         feedCount: ungroupedCount,
       },
     ];
-  }, [groups, ungroupedCount]);
+  }, [groups, ungroupedCount, t]);
 
   const persistSchedules = useCallback(async (schedules: ScheduleTime[]) => {
     setSaving(true);
@@ -157,15 +163,15 @@ export default function FeedSchedulerSection() {
       notifySchedulesUpdated(result.schedules ?? []);
       setSaved(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
+      setError(err instanceof Error ? err.message : t("scheduleErrSave"));
     } finally {
       setSaving(false);
     }
-  }, [applyServerConfig]);
+  }, [applyServerConfig, t]);
 
   useEffect(() => {
     if (loading || !status || !isDirty) return;
-    const validationError = validateSchedules(draftSchedules);
+    const validationError = validateSchedules(locale, draftSchedules);
     if (validationError) {
       setError(validationError);
       return;
@@ -219,7 +225,7 @@ export default function FeedSchedulerSection() {
 
   function confirmGroupsPop(id: string) {
     if (draftGroupIds.length === 0) {
-      setError("请至少选择一个分组");
+      setError(t("scheduleValidateGroups"));
       return;
     }
     updateDraft(id, { group_ids: [...draftGroupIds] });
@@ -229,43 +235,69 @@ export default function FeedSchedulerSection() {
 
   const nextHint = (() => {
     if (!status) return "";
-    if (drafts.length === 0) return "尚未添加定时。";
-    const summaries = draftSchedules.map(formatScheduleSummary).join(" · ");
+    if (drafts.length === 0) return t("scheduleEmpty");
+    const summaries = draftSchedules
+      .map((schedule) => formatScheduleSummary(locale, schedule))
+      .join(locale === "zh" ? " · " : " · ");
     const next =
       status.next_runs?.[0]?.next_run != null
-        ? `下次：${formatNextRun(status.next_runs[0].next_run)}`
+        ? formatMessage(locale, "scheduleNextRun", {
+            time: formatNextRun(status.next_runs[0].next_run, locale),
+          })
         : "";
     const last = status.last_run_at
-      ? `上次：${formatLastRun(status.last_run_at)}${
-          (status.last_feed_count ?? 0) > 0 ? ` · 成功 ${status.last_feed_count} 个源` : ""
-        }`
+      ? formatMessage(locale, "scheduleLastRun", {
+          time: formatLastRun(status.last_run_at, locale),
+        }) +
+        ((status.last_feed_count ?? 0) > 0
+          ? formatMessage(locale, "scheduleLastRunFeeds", { count: status.last_feed_count ?? 0 })
+          : "")
       : "";
-    return [`已设 ${drafts.length} 条：${summaries}`, next, last].filter(Boolean).join("　　");
+    return formatMessage(locale, "scheduleCountSummary", {
+      count: drafts.length,
+      summaries: [summaries, next, last].filter(Boolean).join(locale === "zh" ? "　　" : "  "),
+    });
   })();
 
   return (
     <section className="rounded-[var(--radius-panel)] border border-[var(--rule)] bg-[var(--paper-raised)] p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h2 className="text-sm font-semibold">定时更新</h2>
+        <h2 className="text-sm font-semibold">{t("scheduleTitle")}</h2>
         <button type="button" onClick={handleAddSchedule} className="ui-btn text-sm">
-          添加定时
+          {t("scheduleAdd")}
         </button>
       </div>
 
       {showProgressBar && refreshProgress ? (
-        <div className="mt-3">
+        <div className="mt-3" role="status" aria-live="polite">
           <div className="mb-1 flex items-center justify-between text-xs text-[var(--ink-muted)]">
             <span>
               {statusMessage ||
                 (refreshProgress.feed_name
-                  ? `正在更新：${refreshProgress.feed_name}`
-                  : "更新中…")}
+                  ? formatMessage(locale, "scheduleUpdatingFeed", {
+                      name: refreshProgress.feed_name,
+                    })
+                  : t("scheduleUpdating"))}
             </span>
-            <span>
+            <span aria-hidden="true">
               {refreshProgress.current}/{refreshProgress.total}
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--rule)]">
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent}
+            aria-label={
+              statusMessage ||
+              (refreshProgress.feed_name
+                ? formatMessage(locale, "scheduleUpdatingFeed", {
+                    name: refreshProgress.feed_name,
+                  })
+                : t("scheduleUpdating"))
+            }
+            className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--rule)]"
+          >
             <div
               className="h-full rounded-full bg-[var(--ink)] transition-all duration-300"
               style={{ width: `${progressPercent}%` }}
@@ -273,23 +305,26 @@ export default function FeedSchedulerSection() {
           </div>
           {refreshBusy ? (
             <button type="button" onClick={stopRefresh} className="ui-btn mt-2 text-xs">
-              停止更新
+              {t("scheduleStopRefresh")}
             </button>
           ) : null}
         </div>
       ) : null}
 
       {loading ? (
-        <p className="mt-4 text-sm text-[var(--ink-muted)]">加载中...</p>
+        <p className="mt-4 text-sm text-[var(--ink-muted)]">{t("loading")}</p>
       ) : (
         <>
           {drafts.length === 0 ? (
-            <p className="mt-4 text-sm text-[var(--ink-muted)]">还没有定时，点右上角「添加定时」。</p>
+            <p className="mt-4 text-sm text-[var(--ink-muted)]">{t("scheduleEmpty")}</p>
           ) : (
             <ul className="mt-4 space-y-2">
               {drafts.map((item) => {
                 const n = (item.group_ids ?? []).length;
-                const groupsLabel = n > 0 ? `已选 ${n} 组` : "选择分组";
+                const groupsLabel =
+                  n > 0
+                    ? formatMessage(locale, "scheduleGroupsSelected", { count: n })
+                    : t("scheduleSelectGroups");
                 const popOpen = openPopId === item.id;
                 return (
                   <li
@@ -297,7 +332,7 @@ export default function FeedSchedulerSection() {
                     className="relative flex flex-nowrap items-center gap-2 rounded-[var(--radius-control)] border border-[var(--rule)] bg-[color-mix(in_srgb,var(--paper)_55%,var(--paper-raised))] px-2.5 py-2 text-sm"
                   >
                     <select
-                      aria-label="定时类型"
+                      aria-label={t("scheduleTypeLabel")}
                       value={item.kind === "interval" ? "interval" : "daily"}
                       onChange={(e) =>
                         updateDraft(item.id, {
@@ -306,8 +341,8 @@ export default function FeedSchedulerSection() {
                       }
                       className="ui-input max-w-[4.6rem] shrink-0 px-2 py-1 text-xs"
                     >
-                      <option value="daily">每天</option>
-                      <option value="interval">每隔</option>
+                      <option value="daily">{t("scheduleKindDaily")}</option>
+                      <option value="interval">{t("scheduleKindInterval")}</option>
                     </select>
 
                     <div className="flex min-w-0 shrink items-center gap-1">
@@ -318,7 +353,7 @@ export default function FeedSchedulerSection() {
                             min={1}
                             max={24}
                             step={1}
-                            aria-label="间隔小时"
+                            aria-label={t("scheduleIntervalHoursLabel")}
                             value={item.every_hours ?? 6}
                             onChange={(e) =>
                               updateDraft(item.id, {
@@ -327,12 +362,14 @@ export default function FeedSchedulerSection() {
                             }
                             className="ui-input w-14 px-2 py-1 text-xs"
                           />
-                          <span className="shrink-0 text-xs text-[var(--ink-muted)]">小时</span>
+                          <span className="shrink-0 text-xs text-[var(--ink-muted)]">
+                            {t("scheduleHoursUnit")}
+                          </span>
                         </>
                       ) : (
                         <input
                           type="time"
-                          aria-label="每天时刻"
+                          aria-label={t("scheduleDailyTimeLabel")}
                           value={timeValue(item.hour, item.minute)}
                           onChange={(e) => {
                             const [h, m] = e.target.value.split(":").map(Number);
@@ -359,13 +396,19 @@ export default function FeedSchedulerSection() {
                       </button>
                       {popOpen ? (
                         <div
+                          ref={groupsDialogRef}
                           role="dialog"
+                          aria-modal="true"
+                          aria-labelledby="schedule-groups-dialog-title"
+                          tabIndex={-1}
                           className="absolute right-0 top-full z-30 mt-1 w-56 rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper-raised)] p-2.5 shadow-md"
                         >
-                          <p className="mb-2 text-xs text-[var(--ink-muted)]">选择要更新的分组</p>
+                          <p id="schedule-groups-dialog-title" className="mb-2 text-xs text-[var(--ink-muted)]">
+                            {t("schedulePickGroups")}
+                          </p>
                           <div className="max-h-44 space-y-1 overflow-y-auto">
                             {groupOptions.length === 0 ? (
-                              <p className="text-xs text-[var(--ink-muted)]">暂无分组</p>
+                              <p className="text-xs text-[var(--ink-muted)]">{t("scheduleNoGroups")}</p>
                             ) : (
                               groupOptions.map((opt) => {
                                 const checked = draftGroupIds.includes(opt.id);
@@ -386,7 +429,7 @@ export default function FeedSchedulerSection() {
                                       }}
                                     />
                                     <span className="min-w-0 flex-1 truncate">{opt.name}</span>
-                                    <span className="shrink-0 text-[10px] text-[var(--ink-muted)]">
+                                    <span className="shrink-0 text-[11px] text-[var(--ink-muted)]">
                                       {opt.feedCount}
                                     </span>
                                   </label>
@@ -400,14 +443,14 @@ export default function FeedSchedulerSection() {
                               onClick={() => setOpenPopId(null)}
                               className="ui-btn px-2 py-1 text-xs"
                             >
-                              取消
+                              {t("cancel")}
                             </button>
                             <button
                               type="button"
                               onClick={() => confirmGroupsPop(item.id)}
                               className="ui-btn ui-btn-primary px-2 py-1 text-xs"
                             >
-                              完成
+                              {t("scheduleDone")}
                             </button>
                           </div>
                         </div>
@@ -417,9 +460,9 @@ export default function FeedSchedulerSection() {
                     <button
                       type="button"
                       onClick={() => handleRemoveSchedule(item.id)}
-                      className="shrink-0 rounded border border-transparent px-2 py-0.5 text-xs text-[var(--ink-muted)] hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+                      className="ui-btn ui-btn-ghost shrink-0 px-2 text-xs hover:border-[color-mix(in_srgb,var(--danger)_35%,var(--rule))] hover:bg-[var(--error-soft)] hover:text-[var(--danger-text)]"
                     >
-                      删除
+                      {t("delete")}
                     </button>
                   </li>
                 );
@@ -431,17 +474,19 @@ export default function FeedSchedulerSection() {
             <p className="mt-3 text-xs text-[var(--ink-muted)]">
               {nextHint}
               {saving ? (
-                <span className="ml-2 text-[var(--ink-muted)]">保存中…</span>
+                <span className="ml-2 text-[var(--ink-muted)]">{t("saving")}</span>
               ) : saved && !isDirty ? (
-                <span className="ml-2 text-[var(--success)]">已保存</span>
+                <span className="ml-2 text-[var(--success)]">{t("scheduleSaved")}</span>
               ) : null}
             </p>
           ) : null}
 
           {(error || refreshError || resultMessage) && (
             <p
+              role={error || refreshError ? "alert" : "status"}
+              aria-live={error || refreshError ? "assertive" : "polite"}
               className={`mt-3 text-sm ${
-                error || refreshError ? "text-red-800" : "text-[var(--ink-muted)]"
+                error || refreshError ? "text-[var(--danger-text)]" : "text-[var(--ink-muted)]"
               }`}
             >
               {error || refreshError || resultMessage}

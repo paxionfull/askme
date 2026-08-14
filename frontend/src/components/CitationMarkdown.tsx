@@ -29,7 +29,7 @@ function renderTextWithCitations(
         key={`${match.index}-${index}`}
         type="button"
         onClick={() => onCitationClick?.(index)}
-        className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-100 px-1 text-xs font-semibold text-amber-800 hover:bg-amber-200"
+        className="ui-chip-btn mx-0.5 bg-[var(--warning-soft)] text-[var(--warning-text)] hover:bg-[color-mix(in_srgb,var(--warning-soft)_70%,var(--warning))]"
       >
         [{index}]
       </button>,

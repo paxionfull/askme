@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchDigestSkills, type DigestSkillDetail } from "../api";
+import { useLocale } from "../i18n/LocaleContext";
+import { useModalA11y } from "../hooks/useModalA11y";
 
 interface RuleExplainModalProps {
   open: boolean;
@@ -10,7 +12,10 @@ interface RuleExplainModalProps {
 }
 
 export default function RuleExplainModal({ open, onClose, skills }: RuleExplainModalProps) {
+  const { t } = useLocale();
   const [loaded, setLoaded] = useState<DigestSkillDetail[]>(skills ?? []);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useModalA11y(open, onClose, backdropRef);
 
   useEffect(() => {
     if (skills) {
@@ -35,6 +40,7 @@ export default function RuleExplainModal({ open, onClose, skills }: RuleExplainM
 
   return (
     <div
+      ref={backdropRef}
       className="ui-modal-backdrop"
       role="dialog"
       aria-modal="true"
@@ -46,17 +52,13 @@ export default function RuleExplainModal({ open, onClose, skills }: RuleExplainM
       <div className="ui-modal ui-modal-md">
         <div className="ui-modal-header">
           <h2 id="rule-explain-title" className="ui-modal-title">
-            整理规则是什么？
+            {t("ruleExplainTitle")}
           </h2>
-          <p className="ui-modal-desc">
-            规则决定简报如何分类、关注什么、如何呈现。每个板块必须手动指定一套规则；没有规则就不能生成简报。
-          </p>
+          <p className="ui-modal-desc">{t("ruleExplainDesc")}</p>
         </div>
         <div className="ui-modal-body space-y-2">
           {loaded.length === 0 ? (
-            <p className="text-sm text-[var(--ink-muted)]">
-              暂无可用规则。可在设置 → Skills 中新建整理规则。
-            </p>
+            <p className="text-sm text-[var(--ink-muted)]">{t("ruleExplainEmpty")}</p>
           ) : (
             <ul className="space-y-2">
               {loaded.map((skill) => (
@@ -77,10 +79,10 @@ export default function RuleExplainModal({ open, onClose, skills }: RuleExplainM
         </div>
         <div className="ui-modal-footer">
           <Link to="/settings?tab=skill" onClick={onClose} className="ui-btn text-sm">
-            去 Skills
+            {t("ruleExplainGoSkills")}
           </Link>
           <button type="button" onClick={onClose} className="ui-btn ui-btn-primary text-sm">
-            关闭
+            {t("close")}
           </button>
         </div>
       </div>

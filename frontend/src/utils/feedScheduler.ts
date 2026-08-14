@@ -1,4 +1,6 @@
 import type { ScheduleTime } from "../api";
+import type { Locale } from "../i18n/locale";
+import { formatMessage } from "../i18n/messages";
 
 export const SCHEDULES_UPDATED_EVENT = "askme:schedules-updated";
 
@@ -10,11 +12,15 @@ export function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
 
-export function formatScheduleSummary(schedule: ScheduleTime): string {
+export function formatScheduleSummary(locale: Locale, schedule: ScheduleTime): string {
   if (schedule.kind === "interval") {
-    return `每隔 ${schedule.every_hours ?? 6} 小时（自 0:00）`;
+    return formatMessage(locale, "scheduleEveryHours", {
+      hours: schedule.every_hours ?? 6,
+    });
   }
-  return `每天 ${pad2(schedule.hour)}:${pad2(schedule.minute)}`;
+  return formatMessage(locale, "scheduleDailyAt", {
+    time: `${pad2(schedule.hour)}:${pad2(schedule.minute)}`,
+  });
 }
 
 function clampTimePart(value: number, max: number): number {
@@ -79,9 +85,9 @@ export function timeValue(hour: number, minute: number): string {
   return `${pad2(clampTimePart(hour, 23))}:${pad2(clampTimePart(minute, 59))}`;
 }
 
-export function validateSchedules(schedules: ScheduleTime[]): string | null {
+export function validateSchedules(locale: Locale, schedules: ScheduleTime[]): string | null {
   const bad = schedules.filter((item) => !(item.group_ids ?? []).length);
-  if (bad.length > 0) return "每条定时都必须至少选择一个分组";
+  if (bad.length > 0) return formatMessage(locale, "scheduleValidateGroups", {});
   return null;
 }
 

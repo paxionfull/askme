@@ -10,12 +10,12 @@ export interface LlmProvider {
 }
 
 export const THINKING_STYLES = [
-  { id: "", label: "自动推断（根据模型名）" },
-  { id: "thinking_type", label: "thinking.type（GLM / Kimi / DeepSeek / MiMo）" },
-  { id: "enable_thinking", label: "enable_thinking 布尔值（通义 Qwen）" },
-  { id: "claude", label: "thinking.budget_tokens（Anthropic Claude）" },
-  { id: "reasoning_effort", label: "reasoning_effort（OpenAI o 系列）" },
-  { id: "none", label: "不支持深度思考" },
+  { id: "", labelKey: "thinkingAuto" as const },
+  { id: "thinking_type", labelKey: "thinkingType" as const },
+  { id: "enable_thinking", labelKey: "thinkingEnable" as const },
+  { id: "claude", labelKey: "thinkingClaude" as const },
+  { id: "reasoning_effort", labelKey: "thinkingReasoning" as const },
+  { id: "none", labelKey: "thinkingNone" as const },
 ] as const;
 
 export const LLM_PROVIDERS: LlmProvider[] = [

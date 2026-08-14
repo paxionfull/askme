@@ -1,0 +1,54 @@
+{
+  "title": "Askme 整体翻修 — 选择视觉世界",
+  "question": "Roll 指定 Swiss Brief Index。保留、换方向、或走品类标准？",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Swiss Brief Index",
+      "kicker": "THE ROLL",
+      "lineage": "International Typographic Style · editorial index systems",
+      "thesis": "把海量更新当成可扫读的索引页，网格与字重承担全部层级。",
+      "palette": ["#f4f4f0", "#0a0a0a", "#e11d48", "#737373"],
+      "materials": ["hairline rules", "cold-press paper", "Neue Haas Grotesk"],
+      "viewport": "简报页首屏：左栏 digest 树按严格网格对齐，右栏问答区与全局顶栏共用 8px 基线栅格；Logo + EN/ZH 切换固定在顶栏。",
+      "risk": "若间距与对齐不够狠，会像普通 Bootstrap 表格而非编辑索引。",
+      "sketch": ".impeccable/sketches/assigned.webp"
+    },
+    {
+      "id": "challenger-command-rail",
+      "label": "Command Rail",
+      "lineage": "Raycast · command palette tools",
+      "thesis": "本地优先的情报工具应像命令面板：暗色壳、亮内容、元数据用等宽字。",
+      "case": "最贴近你选的 Linear/Raycast 气质；任务态与快捷键友好。",
+      "palette": ["#18181b", "#fafafa", "#3b82f6", "#71717a"],
+      "materials": ["matte zinc", "mono metadata", "soft panel lift"],
+      "viewport": "窄侧栏图标导航 + 中央 digest + 可唤起 Ask 面板；顶栏集成语言切换。",
+      "risk": "暗色若对比度不足会伤无障碍；需严格 focus ring。",
+      "sketch": ".impeccable/sketches/challenger-command-rail.webp"
+    },
+    {
+      "id": "challenger-linear-craft",
+      "label": "Linear Craft",
+      "lineage": "Linear · modern issue trackers",
+      "thesis": "冷静的效率工具：细边框分区、单一 accent、状态色语义化。",
+      "case": "品类成熟、用户预期清晰；全应用翻修风险最低。",
+      "palette": ["#ffffff", "#111827", "#5e6ad2", "#6b7280"],
+      "materials": ["1px borders", "subtle gray fills", "compact type scale"],
+      "viewport": "顶栏 + 可折叠侧栏；简报双栏保留但视觉更紧凑；Banner 改为 inline status chips。",
+      "risk": "做得太像 Linear 会失去 Askme 的「阅读/简报」个性。",
+      "sketch": ".impeccable/sketches/challenger-linear.webp"
+    }
+  ],
+  "reroll": true,
+  "canon": true,
+  "canonCard": {
+    "label": "品类标准（效率工具）",
+    "thesis": "侧栏导航 + 内容区 + 设置页，按 Linear/Raycast 工艺水准直做。",
+    "palette": ["#fafafa", "#18181b", "#2563eb", "#64748b"],
+    "materials": ["system sans", "familiar patterns", "Restrained accent"],
+    "viewport": "你熟悉的 SaaS 工具布局，工艺拉满但不冒险。",
+    "risk": "最稳，但视觉惊喜最少。",
+    "sketch": ".impeccable/sketches/canon.webp"
+  },
+  "steer": true
+}

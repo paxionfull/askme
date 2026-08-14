@@ -1,5 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { DigestCategory, DigestProfile } from "../utils/digestProfile";
+import { useLocale } from "../i18n/LocaleContext";
+import { useModalA11y } from "../hooks/useModalA11y";
 
 interface DigestProfileModalProps {
   open: boolean;
@@ -22,16 +24,6 @@ interface DigestProfileModalProps {
   onDelete?: () => void;
   deleting?: boolean;
 }
-
-const PLACEHOLDERS = {
-  description: "介绍这个规则用于处理什么类型的信息源，例如科技长文、财经快讯、行业动态等",
-  focusCriteria:
-    "描述哪些内容应进入「重点关注」：例如重大发布、政策变动、融资并购等会影响决策的关键事件。系统会据此挑选少量高优先级条目，单独展示在简报顶部；未写明的文章会按下方分类继续整理。",
-  categoryName: "分类标题名",
-  categoryCriteria: "说明这一分类下应收录哪些主题、事件或类型的文章",
-  ignoreCriteria:
-    "描述你不想在简报中看到的内容，例如广告软文、重复转载、人事变动、与主题无关的日常资讯；匹配到的文章会被过滤掉，不会出现在简报中。",
-} as const;
 
 function updateCategory(
   categories: DigestCategory[],
@@ -89,13 +81,32 @@ export default function DigestProfileModal({
   onDelete,
   deleting = false,
 }: DigestProfileModalProps) {
+  const { t } = useLocale();
+  const placeholders = useMemo(
+    () => ({
+      description: t("profileDescPh"),
+      focusCriteria: t("profileFocusCriteriaPh"),
+      categoryName: t("profileCategoryNamePh"),
+      categoryCriteria: t("profileCategoryCriteriaPh"),
+      ignoreCriteria: t("profileIgnoreCriteriaPh"),
+    }),
+    [t],
+  );
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useModalA11y(open, onClose, backdropRef);
 
   if (!open) return null;
 
   return (
-    <div className="ui-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="digest-profile-title">
+    <div
+      ref={backdropRef}
+      className="ui-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="digest-profile-title"
+    >
       <div className="ui-modal ui-modal-lg">
         <div className="ui-modal-header">
           <h2 id="digest-profile-title" className="ui-modal-title">
@@ -104,14 +115,18 @@ export default function DigestProfileModal({
         </div>
 
         <div className="ui-modal-body space-y-5">
-          {loading ? <p className="text-sm text-[var(--ink-muted)]">加载中…</p> : null}
-          {error ? <p className="text-sm text-red-800">{error}</p> : null}
+          {loading ? <p className="text-sm text-[var(--ink-muted)]">{t("loading")}</p> : null}
+          {error ? (
+            <p className="text-sm text-[var(--danger-text)]" role="alert">
+              {error}
+            </p>
+          ) : null}
 
           {!loading ? (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="ui-field">
-                  <span className="ui-field-label">Skill ID</span>
+                  <span className="ui-field-label">{t("settingsSkillIdLabel")}</span>
                   <input
                     value={skillId}
                     disabled={idReadonly}
@@ -120,7 +135,7 @@ export default function DigestProfileModal({
                   />
                 </label>
                 <label className="ui-field">
-                  <span className="ui-field-label">名称</span>
+                  <span className="ui-field-label">{t("profileNameLabel")}</span>
                   <input
                     value={name}
                     onChange={(e) => onNameChange(e.target.value)}
@@ -129,17 +144,17 @@ export default function DigestProfileModal({
                 </label>
               </div>
               <label className="ui-field">
-                <span className="ui-field-label">规则描述</span>
+                <span className="ui-field-label">{t("profileDescLabel")}</span>
                 <input
                   value={description}
                   onChange={(e) => onDescriptionChange(e.target.value)}
-                  placeholder={PLACEHOLDERS.description}
+                  placeholder={placeholders.description}
                   className="ui-input w-full"
                 />
               </label>
 
               <FieldBlock
-                title="重点关注"
+                title={t("profileFocusTitle")}
                 action={
                   <label className="flex items-center gap-1.5 text-xs text-[var(--ink-muted)]">
                     <input
@@ -152,7 +167,7 @@ export default function DigestProfileModal({
                         })
                       }
                     />
-                    启用
+                    {t("profileEnable")}
                   </label>
                 }
               >
@@ -166,12 +181,12 @@ export default function DigestProfileModal({
                     })
                   }
                   rows={4}
-                  placeholder={PLACEHOLDERS.focusCriteria}
+                  placeholder={placeholders.focusCriteria}
                   className="ui-textarea w-full disabled:opacity-60"
                 />
                 <div className="flex flex-wrap items-center gap-4">
                   <label className="flex items-center gap-2 text-xs text-[var(--ink-muted)]">
-                    最多事件数
+                    {t("profileMaxEvents")}
                     <input
                       type="number"
                       min={1}
@@ -202,13 +217,13 @@ export default function DigestProfileModal({
                         })
                       }
                     />
-                    重点文章不在分类中重复（按事件整组移除，默认开启）
+                    {t("profileFocusDedupe")}
                   </label>
                 </div>
               </FieldBlock>
 
               <FieldBlock
-                title="分类"
+                title={t("profileCategoriesTitle")}
                 action={
                   <button
                     type="button"
@@ -227,19 +242,21 @@ export default function DigestProfileModal({
                       })
                     }
                   >
-                    添加
+                    {t("profileAdd")}
                   </button>
                 }
               >
                 {profile.categories.length === 0 ? (
-                  <p className="text-xs text-[var(--ink-muted)]">暂无分类</p>
+                  <p className="text-xs text-[var(--ink-muted)]">{t("profileNoCategories")}</p>
                 ) : null}
                 <ul className="space-y-3">
                   {profile.categories.map((cat, index) => (
                     <li
                       key={`${cat.id}-${index}`}
-                      className={`space-y-2 border-l-2 pl-3 transition-colors ${
-                        dragOverIndex === index ? "border-[var(--accent)]" : "border-[var(--rule)]"
+                      className={`space-y-2 rounded-[var(--radius-control)] border px-3 py-2 transition-colors ${
+                        dragOverIndex === index
+                          ? "border-[color-mix(in_srgb,var(--accent)_40%,var(--border))] bg-[var(--accent-soft)]"
+                          : "border-transparent"
                       } ${draggingIndex === index ? "opacity-45" : ""}`}
                       onDragOver={(e) => {
                         e.preventDefault();
@@ -279,8 +296,8 @@ export default function DigestProfileModal({
                             setDragOverIndex(null);
                           }}
                           className="flex h-6 w-6 shrink-0 cursor-grab items-center justify-center rounded-[var(--radius-control)] border-0 bg-transparent text-sm leading-none text-[var(--ink-muted)] active:cursor-grabbing hover:bg-[var(--paper)] hover:text-[var(--ink)]"
-                          aria-label="拖动调整顺序"
-                          title="拖动调整顺序"
+                          aria-label={t("profileDragReorder")}
+                          title={t("profileDragReorder")}
                         >
                           ⋮⋮
                         </button>
@@ -294,7 +311,7 @@ export default function DigestProfileModal({
                               }),
                             })
                           }
-                          placeholder={PLACEHOLDERS.categoryName}
+                          placeholder={placeholders.categoryName}
                           className="ui-input min-w-0 flex-1"
                         />
                         <button
@@ -307,7 +324,7 @@ export default function DigestProfileModal({
                             })
                           }
                         >
-                          删除
+                          {t("delete")}
                         </button>
                       </div>
                       <textarea
@@ -321,7 +338,7 @@ export default function DigestProfileModal({
                           })
                         }
                         rows={2}
-                        placeholder={PLACEHOLDERS.categoryCriteria}
+                        placeholder={placeholders.categoryCriteria}
                         className="ui-textarea w-full"
                       />
                     </li>
@@ -329,7 +346,7 @@ export default function DigestProfileModal({
                 </ul>
               </FieldBlock>
 
-              <FieldBlock title="不重要">
+              <FieldBlock title={t("profileIgnoreTitle")}>
                 <textarea
                   value={profile.ignore.criteria}
                   onChange={(e) =>
@@ -339,7 +356,7 @@ export default function DigestProfileModal({
                     })
                   }
                   rows={3}
-                  placeholder={PLACEHOLDERS.ignoreCriteria}
+                  placeholder={placeholders.ignoreCriteria}
                   className="ui-textarea w-full"
                 />
               </FieldBlock>
@@ -355,7 +372,7 @@ export default function DigestProfileModal({
                     })
                   }
                 />
-                启用类内事件聚类
+                {t("profileClusterEvents")}
               </label>
             </>
           ) : null}
@@ -370,13 +387,13 @@ export default function DigestProfileModal({
                 onClick={onDelete}
                 className="ui-btn ui-btn-danger text-xs disabled:opacity-50"
               >
-                {deleting ? "删除中…" : "删除"}
+                {deleting ? t("skillDetailDeleting") : t("delete")}
               </button>
             ) : null}
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="ui-btn text-xs">
-              取消
+              {t("cancel")}
             </button>
             {onSave ? (
               <button
@@ -385,7 +402,7 @@ export default function DigestProfileModal({
                 onClick={onSave}
                 className="ui-btn ui-btn-primary text-xs disabled:opacity-50"
               >
-                {saving ? "保存中…" : "保存"}
+                {saving ? t("saving") : t("save")}
               </button>
             ) : null}
           </div>

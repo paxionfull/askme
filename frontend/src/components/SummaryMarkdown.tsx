@@ -10,6 +10,9 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import CodeViewer from "./CodeViewer";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
+import { readStoredLocale } from "../i18n/locale";
 
 export interface ArticleRef {
   feed_id: string;
@@ -58,7 +61,7 @@ export function readArticleGroupDragData(dataTransfer: DataTransfer): ArticleGro
     ) as ArticleRef[];
     if (articles.length === 0) return null;
     return {
-      label: String(parsed.label ?? "").trim() || "事件组",
+      label: String(parsed.label ?? "").trim() || formatMessage(readStoredLocale(), "summaryEventGroup", {}),
       articles,
     };
   } catch {
@@ -472,6 +475,7 @@ function AddToChatButton({
   label: string;
   onClick: () => void;
 }) {
+  const { t } = useLocale();
   return (
     <button
       type="button"
@@ -481,9 +485,9 @@ function AddToChatButton({
         event.stopPropagation();
         onClick();
       }}
-      className="ml-1.5 inline-flex shrink-0 items-center rounded border border-[color-mix(in_srgb,var(--accent)_30%,var(--rule))] bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent)] opacity-0 transition-opacity hover:bg-[color-mix(in_srgb,var(--accent-soft)_80%,white)] group-hover/item:opacity-100"
+      className="digest-add-btn ui-chip-btn ml-1.5 shrink-0 border border-transparent bg-transparent font-medium text-[var(--accent)] hover:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] hover:bg-[var(--accent-soft)] focus-visible:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] focus-visible:bg-[var(--accent-soft)]"
     >
-      加入对话
+      {t("digestAddToChat")}
     </button>
   );
 }
@@ -497,11 +501,14 @@ function DraggableAggregateHeading({
   articles: ArticleRef[];
   onAddArticles?: (articles: ArticleRef[]) => void;
 }) {
+  const { locale } = useLocale();
+  const dragTitle = formatMessage(locale, "summaryDragBatch", { count: articles.length });
+  const addLabel = formatMessage(locale, "digestAddArticlesToChat", { count: articles.length });
   return (
     <span className="group/item inline-flex max-w-full items-center gap-0.5">
       <strong
         draggable
-        title={`拖动到右侧对话区，一次性添加 ${articles.length} 篇文章`}
+        title={dragTitle}
         className="cursor-grab rounded px-0.5 text-[var(--ink)] hover:bg-[var(--accent-soft)] active:cursor-grabbing"
         onDragStart={(event) => {
           writeArticleGroupDragData(event.dataTransfer, { label, articles });
@@ -510,10 +517,7 @@ function DraggableAggregateHeading({
         {label}
       </strong>
       {onAddArticles ? (
-        <AddToChatButton
-          label={`将 ${articles.length} 篇文章加入对话`}
-          onClick={() => onAddArticles(articles)}
-        />
+        <AddToChatButton label={addLabel} onClick={() => onAddArticles(articles)} />
       ) : null}
     </span>
   );
@@ -530,6 +534,15 @@ function DraggableSectionHeading({
   articles: ArticleRef[];
   onAddArticles?: (articles: ArticleRef[]) => void;
 }) {
+  const { locale } = useLocale();
+  const dragTitle = formatMessage(locale, "summaryDragUnderLabel", {
+    label,
+    count: articles.length,
+  });
+  const addLabel = formatMessage(locale, "summaryAddUnderLabel", {
+    label,
+    count: articles.length,
+  });
   const Tag = level === 2 ? "h2" : "h3";
   const baseClass =
     level === 2
@@ -539,7 +552,7 @@ function DraggableSectionHeading({
     <Tag className={`${baseClass} group/item flex max-w-full flex-wrap items-center gap-1`}>
       <span
         draggable
-        title={`拖动到右侧对话区，一次性添加「${label}」下 ${articles.length} 篇文章`}
+        title={dragTitle}
         className="cursor-grab rounded px-0.5 hover:bg-[var(--accent-soft)] active:cursor-grabbing"
         onDragStart={(event) => {
           writeArticleGroupDragData(event.dataTransfer, { label, articles });
@@ -548,10 +561,7 @@ function DraggableSectionHeading({
         {label}
       </span>
       {onAddArticles ? (
-        <AddToChatButton
-          label={`将「${label}」下 ${articles.length} 篇文章加入对话`}
-          onClick={() => onAddArticles(articles)}
-        />
+        <AddToChatButton label={addLabel} onClick={() => onAddArticles(articles)} />
       ) : null}
     </Tag>
   );
@@ -567,6 +577,7 @@ function DraggableArticleLink({
   articleRef: ArticleRef | null;
   onAddArticle?: (article: ArticleRef) => void;
 }) {
+  const { t } = useLocale();
   if (!articleRef) {
     return (
       <a href={href} target="_blank" rel="noreferrer" className="text-[var(--accent)] no-underline hover:text-[var(--ink)]">
@@ -581,7 +592,7 @@ function DraggableArticleLink({
       target="_blank"
       rel="noreferrer"
       draggable
-      title="按住拖动到右侧对话区，可添加文章并生成摘要或限定提问"
+      title={t("summaryDragArticle")}
       className="cursor-grab rounded px-0.5 text-[var(--accent)] no-underline hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] active:cursor-grabbing"
       onDragStart={(event) => {
         writeArticleDragData(event.dataTransfer, articleRef);

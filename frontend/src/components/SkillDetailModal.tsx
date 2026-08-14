@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import CodeViewer, { languageFromPath } from "./CodeViewer";
 import MarkdownContent from "./MarkdownContent";
 import type { SkillDetail } from "../api";
+import { useLocale } from "../i18n/LocaleContext";
+import { useModalA11y } from "../hooks/useModalA11y";
 
 interface SkillDetailModalProps {
   open: boolean;
@@ -62,6 +64,7 @@ export default function SkillDetailModal({
   onDelete,
   onRepair,
 }: SkillDetailModalProps) {
+  const { t } = useLocale();
   const tabs = useMemo(() => {
     if (!detail) return [] as SkillTab[];
     const items: SkillTab[] = [];
@@ -95,6 +98,8 @@ export default function SkillDetailModal({
   }, [detail]);
 
   const [activeTab, setActiveTab] = useState("");
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useModalA11y(open, onClose, backdropRef);
 
   useEffect(() => {
     if (open && tabs.length > 0) {
@@ -108,7 +113,13 @@ export default function SkillDetailModal({
   const heading = detail?.name?.trim() || title;
 
   return (
-    <div className="ui-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title">
+    <div
+      ref={backdropRef}
+      className="ui-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="skill-detail-title"
+    >
       <div className="ui-modal ui-modal-lg">
         <div className="ui-modal-header">
           <h2 id="skill-detail-title" className="ui-modal-title">
@@ -123,8 +134,12 @@ export default function SkillDetailModal({
         </div>
 
         <div className="ui-modal-body !p-0">
-          {loading ? <p className="px-5 py-6 text-sm text-[var(--ink-muted)]">加载中…</p> : null}
-          {error ? <p className="px-5 py-6 text-sm text-red-800">{error}</p> : null}
+          {loading ? <p className="px-5 py-6 text-sm text-[var(--ink-muted)]">{t("skillDetailLoading")}</p> : null}
+          {error ? (
+            <p className="px-5 py-6 text-sm text-[var(--danger-text)]" role="alert">
+              {error}
+            </p>
+          ) : null}
 
           {!loading && !error && detail && tabs.length > 0 ? (
             <>
@@ -159,7 +174,7 @@ export default function SkillDetailModal({
           ) : null}
 
           {!loading && !error && detail && tabs.length === 0 ? (
-            <p className="px-5 py-6 text-sm text-[var(--ink-muted)]">该 Skill 暂无可读文件。</p>
+            <p className="px-5 py-6 text-sm text-[var(--ink-muted)]">{t("skillDetailNoFiles")}</p>
           ) : null}
         </div>
 
@@ -172,7 +187,7 @@ export default function SkillDetailModal({
                 onClick={onRepair}
                 className="ui-btn ui-btn-accent text-xs disabled:opacity-50"
               >
-                {repairing ? "修复中…" : "反馈修复"}
+                {repairing ? t("skillDetailRepairing") : t("skillDetailFeedback")}
               </button>
             ) : null}
             {deletable && onDelete ? (
@@ -182,12 +197,12 @@ export default function SkillDetailModal({
                 onClick={onDelete}
                 className="ui-btn ui-btn-danger text-xs disabled:opacity-50"
               >
-                {deleting ? "删除中…" : "删除"}
+                {deleting ? t("skillDetailDeleting") : t("delete")}
               </button>
             ) : null}
           </div>
           <button type="button" onClick={onClose} className="ui-btn text-xs">
-            关闭
+            {t("close")}
           </button>
         </div>
       </div>

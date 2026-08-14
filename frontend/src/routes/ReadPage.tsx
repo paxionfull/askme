@@ -22,13 +22,15 @@ import { consumeLastOnboardedFeedId, useOnboarding } from "../contexts/Onboardin
 import { UNGROUPED_GROUP_ID, buildSections } from "../utils/feedLayout";
 import { formatScheduleSummary, SCHEDULES_UPDATED_EVENT } from "../utils/feedScheduler";
 import { resolveDefaultFeedId, setStoredSelectedFeedId } from "../utils/selectedFeed";
-import { deleteFeedMessage, deleteFeedSuccessMessage, isPlatformFeed } from "../utils/platformFeed";
+import { deleteFeedMessage, deleteFeedSuccessMessage, isPlatformFeed, clearUngroupedMessage, deleteGroupMessage } from "../utils/platformFeed";
+import { formatMessage } from "../i18n/messages";
 import { hydrateFeedsState, writeFeedsCache } from "../utils/feedsCache";
 import { useDigest } from "../contexts/DigestContext";
 import { useFeedRefresh } from "../contexts/FeedRefreshContext";
 import { isEmbeddingConfigured, useSettings, formatDaysLabel } from "../hooks/useSettings";
 import { useIndexBuildConfirm } from "../hooks/useIndexBuildConfirm";
 import DaysRangeSelect from "../components/DaysRangeSelect";
+import { useLocale } from "../i18n/LocaleContext";
 
 const INITIAL_FEEDS_CACHE = hydrateFeedsState();
 const SCOPE_GROUP_IDS_KEY = "askme.sources.scopedGroupIds";
@@ -54,6 +56,7 @@ function writeScopedGroupIds(ids: Set<string>) {
 }
 
 export default function ReadPage() {
+  const { t, locale } = useLocale();
   const { settings } = useSettings();
   const {
     days,
@@ -225,14 +228,14 @@ export default function ReadPage() {
       if (section.isSystem) continue;
       const labels = schedules
         .filter((schedule) => (schedule.group_ids ?? []).includes(section.id))
-        .map(formatScheduleSummary);
+        .map((schedule) => formatScheduleSummary(locale, schedule));
       map[section.id] =
         labels.length > 0
-          ? `已加入定时：${labels.join("、")}`
-          : "未加入任何定时（在设置 → 定时里为某条定时选择分组）";
+          ? formatMessage(locale, "readScheduleIn", { labels: labels.join(locale === "zh" ? "、" : ", ") })
+          : t("readScheduleOut");
     }
     return map;
-  }, [schedules, sections]);
+  }, [locale, schedules, sections, t]);
 
   const selectedFeed = feeds.find((feed) => feed.id === selectedFeedId) ?? null;
 
@@ -255,7 +258,7 @@ export default function ReadPage() {
       }
     } catch (err) {
       setArticles([]);
-      setError(err instanceof Error ? err.message : "加载文章失败");
+      setError(err instanceof Error ? err.message : t("readErrLoadArticles"));
     } finally {
       prefetchingAll.current = false;
       setArticlesLoading(false);
@@ -289,7 +292,7 @@ export default function ReadPage() {
         ),
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载数据源失败");
+      setError(err instanceof Error ? err.message : t("readErrLoadFeeds"));
     } finally {
       setFeedsLoading(false);
     }
@@ -330,7 +333,7 @@ export default function ReadPage() {
         return;
       }
       setArticles([]);
-      setError(err instanceof Error ? err.message : "加载文章失败");
+      setError(err instanceof Error ? err.message : t("readErrLoadArticles"));
     } finally {
       if (selectedFeedIdRef.current === feedId) {
         setArticlesLoading(false);
@@ -343,7 +346,7 @@ export default function ReadPage() {
       const feedId = consumeLastOnboardedFeedId();
       if (feedId) {
         setSelectedFeedId(feedId);
-        setInfo(`Agent 已接入 ${feedId}`);
+        setInfo(formatMessage(locale, "readInfoOnboarded", { feedId }));
       }
     });
   }, [loadFeeds]);
@@ -359,7 +362,7 @@ export default function ReadPage() {
       const feedId = consumeLastOnboardedFeedId();
       if (feedId) {
         setSelectedFeedId(feedId);
-        setInfo(batch.message || `已接入 ${feedId}`);
+        setInfo(batch.message || formatMessage(locale, "readInfoOnboarded", { feedId }));
       } else if (batch.status !== "running") {
         setInfo(batch.message);
       }
@@ -438,7 +441,7 @@ export default function ReadPage() {
       clearErrors();
       await loadBodies({ feedIds: scopedFeedIds });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新源信息失败");
+      setError(err instanceof Error ? err.message : t("readErrUpdateFeed"));
     }
   }
 
@@ -472,10 +475,14 @@ export default function ReadPage() {
       const fetched = result.fetched_count ?? 0;
       const missing = meta > withBody ? meta - withBody : 0;
       setInfo(
-        `分组「${groupName}」已更新：列表已刷新 · ${withBody}/${meta} 篇含正文` +
-          `（${formatDaysLabel(days)}）` +
-          `${missing > 0 ? ` · ${missing} 篇无正文` : ""}` +
-          ` · 缓存 ${cached} · 新拉 ${fetched}`,
+        formatMessage(locale, "readInfoGroupUpdated", {
+          name: groupName,
+          withBody,
+          meta,
+        }) +
+          formatMessage(locale, "parenWrap", { value: formatDaysLabel(days) }) +
+          (missing > 0 ? formatMessage(locale, "readInfoGroupUpdatedMissing", { missing }) : "") +
+          formatMessage(locale, "readInfoGroupUpdatedStats", { cached, fetched }),
       );
       for (const feedId of feedIds) {
         articlesCache.current.delete(articleCacheKey(feedId, days));
@@ -484,7 +491,7 @@ export default function ReadPage() {
         void loadArticles(selectedFeedId, days, true);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新分组失败");
+      setError(err instanceof Error ? err.message : t("readErrUpdateGroup"));
     }
   }
 
@@ -511,7 +518,7 @@ export default function ReadPage() {
         void loadArticles(feedId, days, true);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新源信息失败");
+      setError(err instanceof Error ? err.message : t("readErrUpdateFeed"));
     }
   }
 
@@ -535,10 +542,10 @@ export default function ReadPage() {
       );
       setDeleteTarget(null);
       setDeleteRemoveSkill(false);
-      setInfo(deleteFeedSuccessMessage(result));
+      setInfo(deleteFeedSuccessMessage(locale, result));
       await reloadSummaryGroups();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除失败");
+      setError(err instanceof Error ? err.message : t("readErrDelete"));
     } finally {
       setDeletingFeed(false);
     }
@@ -571,9 +578,9 @@ export default function ReadPage() {
     );
     if (!options?.silent) {
       if (removeSkill && removedSkill) {
-        setInfo(`已删除 ${feedIds.length} 个源并删除本地 skill`);
+        setInfo(formatMessage(locale, "readInfoDeletedFeedsSkill", { count: feedIds.length }));
       } else {
-        setInfo(`已删除 ${feedIds.length} 个源`);
+        setInfo(formatMessage(locale, "readInfoDeletedFeeds", { count: feedIds.length }));
       }
     }
     await reloadSummaryGroups();
@@ -591,9 +598,9 @@ export default function ReadPage() {
       setFeeds(latest.feeds);
       setFeedGroups(latest.groups);
       setGroupOrder(latest.group_order ?? []);
-      setInfo(`已将「${feed.name}」重命名为「${nextName}」`);
+      setInfo(formatMessage(locale, "readInfoRenamedFeed", { from: feed.name, to: nextName }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "重命名失败");
+      setError(err instanceof Error ? err.message : t("readErrRename"));
     }
   }
 
@@ -611,9 +618,9 @@ export default function ReadPage() {
       setFeedGroups(result.groups);
       setGroupOrder(result.group_order ?? []);
       await reloadSummaryGroups();
-      setInfo(`已将分组重命名为「${trimmed}」`);
+      setInfo(formatMessage(locale, "readInfoRenamedGroup", { name: trimmed }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "重命名分组失败");
+      setError(err instanceof Error ? err.message : t("readErrRenameGroup"));
     }
   }
 
@@ -655,23 +662,23 @@ export default function ReadPage() {
         await reloadSchedules();
         const skillHint =
           feedIds.length === 0
-            ? "已删除分组"
+            ? t("readInfoDeletedGroup")
             : groupBulkRemoveSkill && removedSkill
-              ? `已删除分组，并删除组内 ${feedIds.length} 个源及其本地 skill`
-              : `已删除分组，并删除组内 ${feedIds.length} 个源（skill 已保留）`;
+              ? formatMessage(locale, "readInfoDeletedGroupWithSkill", { count: feedIds.length })
+              : formatMessage(locale, "readInfoDeletedGroupKeepSkill", { count: feedIds.length });
         setInfo(skillHint);
       } else {
         setInfo(
           groupBulkRemoveSkill && removedSkill
-            ? `已清空未分组 ${feedIds.length} 个源并删除本地 skill`
-            : `已清空未分组 ${feedIds.length} 个源`,
+            ? formatMessage(locale, "readInfoClearedUngroupedSkill", { count: feedIds.length })
+            : formatMessage(locale, "readInfoClearedUngrouped", { count: feedIds.length }),
         );
       }
 
       setGroupBulkTarget(null);
       setGroupBulkRemoveSkill(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "操作失败");
+      setError(err instanceof Error ? err.message : t("readErrOperation"));
     } finally {
       setDeletingGroupBulk(false);
     }
@@ -695,7 +702,7 @@ export default function ReadPage() {
     if (removedCount > 0) {
       await reloadSchedules();
     }
-    setInfo("分组已保存");
+    setInfo(t("readInfoGroupsSaved"));
   }
 
   async function handleLayoutChange(groups: FeedGroup[], nextGroupOrder: string[]) {
@@ -723,29 +730,32 @@ export default function ReadPage() {
     hasScopedSelection && scopedSections.length === selectableGroupIds.length;
 
   const sourcesStatus = (() => {
-    if (refreshBusy) return "正在更新文章列表…";
+    if (refreshBusy) return t("loading");
     if (loadingBodies) {
       return bodyProgress.total > 0
-        ? `正在拉取正文 ${bodyProgress.current}/${bodyProgress.total}`
-        : "正在拉取正文…";
+        ? `${t("fetchingBodies")} ${bodyProgress.current}/${bodyProgress.total}`
+        : t("fetchingBodiesMessage");
     }
     if (loadingIndex) {
       return indexProgress.total > 0
-        ? `建立索引中 ${indexProgress.current}/${indexProgress.total}`
-        : "正在建立索引…";
+        ? `${t("buildingIndex")} ${indexProgress.current}/${indexProgress.total}`
+        : t("buildingIndexMessage");
     }
-    if (feeds.length === 0) return "还没有数据源";
+    if (feeds.length === 0) return t("sourcesNoFeeds");
     if (!hasScopedSelection) {
-      return `未勾选分组 · ${formatDaysLabel(days)}`;
+      return `${t("sourcesNoneSelected")} · ${formatDaysLabel(days)}`;
     }
-    return `已选 ${scopedSections.length} 组 · ${scopedFeedIds.length} 源 · ${formatDaysLabel(days)}`;
+    return `${t("sourcesScopeSelected")} ${scopedSections.length} ${t("sourcesGroups")} · ${scopedFeedIds.length} ${t("sourcesFeeds")} · ${formatDaysLabel(days)}`;
   })();
 
   const sourcesBusy = refreshBusy || loadingBodies;
 
   const indexScopeLabel = hasScopedSelection
-    ? `已选 ${scopedSections.length} 组 · ${scopedFeedIds.length} 源`
-    : "所选范围";
+    ? formatMessage(locale, "readScopeSelected", {
+        groups: scopedSections.length,
+        feeds: scopedFeedIds.length,
+      })
+    : t("readScopeDefault");
 
   const handleRequestIndexBuild = useCallback(() => {
     if (!hasScopedSelection) return;
@@ -758,11 +768,11 @@ export default function ReadPage() {
 
   return (
     <div className="flex h-full flex-col bg-[var(--paper)]">
-      <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-4 py-3">
-        <h1 className="text-[1.35rem] font-semibold tracking-tight text-[var(--ink)]">源</h1>
+      <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-5 pb-3 pt-4">
+        <h1 className="app-page-title text-[var(--ink)]">{t("sourcesTitle")}</h1>
         <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-2">
           <label className="inline-flex items-center gap-1.5 text-sm">
-            <span className="text-xs text-[var(--ink-muted)]">范围</span>
+            <span className="text-xs text-[var(--ink-muted)]">{t("sourcesRange")}</span>
             <DaysRangeSelect value={days} onChange={setDays} disabled={digestBusy} size="sm" />
           </label>
           <span className="text-[var(--ink-muted)]">·</span>
@@ -784,22 +794,22 @@ export default function ReadPage() {
             disabled={!hasScopedSelection || loadingBodies}
             title={
               !hasScopedSelection
-                ? "请先在侧栏勾选至少一个分组"
+                ? t("sourcesNeedGroup")
                 : undefined
             }
             onClick={() => void handleUpdateSourcesSelected()}
             className="ui-btn ui-btn-primary text-sm disabled:opacity-50"
           >
-            {updateAllSelected ? "更新全部" : "更新所选"}
+            {updateAllSelected ? t("sourcesUpdateAll") : t("sourcesUpdateSelected")}
           </button>
           {sourcesBusy ? (
             <button
               type="button"
-              title="停止更新（列表刷新与正文拉取）"
+              title={t("sourcesStopUpdateTitle")}
               onClick={stopUpdateSources}
               className="ui-btn text-sm"
             >
-              停止更新
+              {t("sourcesStopUpdate")}
             </button>
           ) : null}
           <button
@@ -807,32 +817,40 @@ export default function ReadPage() {
             disabled={digestBusy || !hasScopedSelection || indexBuildBusy}
             title={
               !embeddingConfigured
-                ? "请先在设置配置 Embedding 模型与 API Key"
+                ? t("sourcesNeedEmbedding")
                 : !hasScopedSelection
-                  ? "请先在侧栏勾选至少一个分组"
-                  : undefined
+                  ? t("sourcesNeedGroup")
+                  : indexReady
+                    ? t("sourcesRebuildIndexTitle")
+                    : t("sourcesBuildIndexTitle")
             }
             onClick={handleRequestIndexBuild}
             className="ui-btn text-sm disabled:opacity-50"
           >
-            {loadingIndex ? "建立索引中…" : indexReady ? "重建索引" : "建立索引"}
+            {loadingIndex ? t("sourcesBuildingIndex") : indexReady ? t("sourcesRebuildIndex") : t("sourcesBuildIndex")}
           </button>
         </div>
       </header>
 
       {combinedError && (
-        <div className="whitespace-pre-wrap border-b border-[var(--rule)] bg-[var(--error-soft)] px-4 py-2.5 text-sm text-red-800">
+        <div
+          className="whitespace-pre-wrap border-b border-[var(--rule)] bg-[var(--error-soft)] px-4 py-2.5 text-sm text-[var(--danger-text)]"
+          role="alert"
+        >
           {combinedError}
         </div>
       )}
 
-      {info && (
-        <div className="border-b border-[var(--rule)] bg-[var(--accent-soft)] px-4 py-2.5 text-sm text-[var(--accent)]">
+      {info ? (
+        <div
+          className="border-b border-[var(--rule)] bg-[var(--accent-soft)] px-4 py-2.5 text-sm text-[var(--accent)]"
+          role="status"
+        >
           {info}
         </div>
-      )}
+      ) : null}
 
-      <main className="flex min-h-0 flex-1">
+      <div className="app-sources-split flex min-h-0 flex-1">
           <FeedSidebar
             feeds={feeds}
             groups={feedGroups}
@@ -908,7 +926,7 @@ export default function ReadPage() {
             }}
             refreshing={sourcesBusy}
           />
-      </main>
+      </div>
 
       <AddSourceModal
         open={addSourceOpen}
@@ -926,15 +944,24 @@ export default function ReadPage() {
             const skillCount = result.imported.length;
             const platformCount = result.imported_platform_accounts?.length ?? 0;
             const parts: string[] = [];
-            if (skillCount > 0) parts.push(`${skillCount} 个 skill`);
-            if (platformCount > 0) parts.push(`${platformCount} 个平台账号`);
+            if (skillCount > 0) {
+              parts.push(formatMessage(locale, "readImportSkillUnit", { count: skillCount }));
+            }
+            if (platformCount > 0) {
+              parts.push(formatMessage(locale, "readImportAccountUnit", { count: platformCount }));
+            }
             const groupName =
               result.group_id === UNGROUPED_GROUP_ID
-                ? "未分组"
-                : feedGroups.find((group) => group.id === result.group_id)?.name ?? "所选分组";
-            let message = `已导入 ${parts.join("、")}到「${groupName}」`;
+                ? t("addSourceUngrouped")
+                : feedGroups.find((group) => group.id === result.group_id)?.name ?? t("readScopeDefault");
+            let message = formatMessage(locale, "readImportSuccess", {
+              parts: parts.join(locale === "zh" ? "、" : ", "),
+              group: groupName,
+            });
             if (result.needs_auth?.length) {
-              message += `；请补授权：${result.needs_auth.join("、")}`;
+              message += formatMessage(locale, "readImportNeedAuth", {
+                slots: result.needs_auth.join(locale === "zh" ? "、" : ", "),
+              });
             }
             setInfo(message);
           });
@@ -960,8 +987,8 @@ export default function ReadPage() {
       />
       <ConfirmModal
         open={Boolean(deleteTarget)}
-        title="删除数据源"
-        message={deleteTarget ? deleteFeedMessage(deleteTarget) : ""}
+        title={t("deleteFeedTitle")}
+        message={deleteTarget ? deleteFeedMessage(locale, deleteTarget) : ""}
         extraContent={
           deleteTarget && !isPlatformFeed(deleteTarget) ? (
             <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--ink-muted)]">
@@ -971,11 +998,11 @@ export default function ReadPage() {
                 onChange={(e) => setDeleteRemoveSkill(e.target.checked)}
                 disabled={deletingFeed}
               />
-              同时删除本地 skill 目录（不可恢复）
+              {t("deleteFeedRemoveSkill")}
             </label>
           ) : null
         }
-        confirmLabel="确认删除"
+        confirmLabel={t("deleteFeedConfirm")}
         danger
         loading={deletingFeed}
         onCancel={() => {
@@ -991,16 +1018,18 @@ export default function ReadPage() {
       <ConfirmModal
         open={Boolean(groupBulkTarget)}
         title={
-          groupBulkTarget?.kind === "clear-ungrouped" ? "清空未分组" : "删除分组"
+          groupBulkTarget?.kind === "clear-ungrouped" ? t("clearUngroupedTitle") : t("deleteGroupTitle")
         }
         message={
           !groupBulkTarget
             ? ""
             : groupBulkTarget.kind === "clear-ungrouped"
-              ? `清空「未分组」下的 ${groupBulkTarget.feedIds.length} 个数据源？\n\n默认保留本地 discovery skill，之后可通过相同链接重新接入。`
-              : groupBulkTarget.feedIds.length === 0
-                ? `确定删除分组「${groupBulkTarget.name}」？\n\n该分组下没有数据源。`
-                : `确定删除分组「${groupBulkTarget.name}」？\n\n将同时删除组内 ${groupBulkTarget.feedIds.length} 个数据源（不会移到「未分组」）。默认保留本地 discovery skill，之后可通过相同链接重新接入。`
+              ? clearUngroupedMessage(locale, groupBulkTarget.feedIds.length)
+              : deleteGroupMessage(
+                  locale,
+                  groupBulkTarget.name,
+                  groupBulkTarget.feedIds.length,
+                )
         }
         extraContent={
           groupBulkTarget && groupBulkTarget.feedIds.length > 0 ? (
@@ -1014,13 +1043,15 @@ export default function ReadPage() {
               {groupBulkTarget.feedIds.every((id) =>
                 isPlatformFeed(feeds.find((feed) => feed.id === id)),
               )
-                ? "同时移除平台账号登记（不删除共享平台 skill）"
-                : `同时删除这 ${groupBulkTarget.feedIds.length} 个源的本地 skill 目录（不可恢复）`}
+                ? t("deleteGroupRemovePlatform")
+                : formatMessage(locale, "deleteGroupRemoveSkills", {
+                    count: groupBulkTarget.feedIds.length,
+                  })}
             </label>
           ) : null
         }
         confirmLabel={
-          groupBulkTarget?.kind === "clear-ungrouped" ? "确认清空" : "确认删除"
+          groupBulkTarget?.kind === "clear-ungrouped" ? t("confirmClear") : t("deleteFeedConfirm")
         }
         danger
         loading={deletingGroupBulk}

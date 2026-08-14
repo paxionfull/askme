@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        # 国内默认 DaoCloud；海外可改为 python:3.12-slim
+        PYTHON_IMAGE: docker.m.daocloud.io/library/python:3.12-slim
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data:/app/data
+      - ./skills:/app/skills
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # 国内默认 DaoCloud；海外可改为 node:20-slim
+        NODE_IMAGE: docker.m.daocloud.io/library/node:20-slim
+    ports:
+      - "5173:5173"
+    environment:
+      - ASKME_API_PROXY_TARGET=http://backend:8001
+    depends_on:
+      - backend
+    restart: unless-stopped

@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { clearLlmSettings, fetchLlmSettings, saveLlmSettings } from "../api";
 
+import type { Locale } from "../i18n/locale";
+import { readStoredLocale } from "../i18n/locale";
+import { formatMessage } from "../i18n/messages";
+
 export type DefaultDays = 1 | 3;
 
 export function normalizeDefaultDays(value: unknown): DefaultDays {
   return value === 3 ? 3 : 1;
 }
 
-export function formatDaysLabel(days: DefaultDays): string {
-  return days === 1 ? "今天" : "近 3 天";
+export function formatDaysLabel(days: DefaultDays, locale?: Locale): string {
+  const loc = locale ?? readStoredLocale();
+  return formatMessage(loc, days === 1 ? "rangeToday" : "rangeLast3Days", {});
 }
 
 export interface AppSettings {

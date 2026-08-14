@@ -13,12 +13,16 @@ import {
   buildSections,
   moveFeedInLayout,
   reorderGroups,
+  resolveGroupDisplayName,
   sectionsToLayout,
   type FeedSection,
 } from "../utils/feedLayout";
 import { formatFeedSyncTime } from "../utils/formatSyncTime";
 import OverflowMenu from "./OverflowMenu";
 import { formatDaysLabel, type DefaultDays } from "../hooks/useSettings";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
+import { useMenuKeyboard } from "../hooks/useMenuKeyboard";
 
 interface FeedSidebarProps {
   feeds: Feed[];
@@ -79,8 +83,8 @@ interface MenuItem {
 }
 
 function menuItemClass(item: MenuItem, extra = ""): string {
-  return `flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
-    item.danger ? "text-red-600 hover:bg-[var(--error-soft)]" : "text-[var(--ink)] hover:bg-[var(--paper)]"
+  return `flex min-h-9 w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
+    item.danger ? "text-[var(--danger)] hover:bg-[var(--error-soft)]" : "text-[var(--ink)] hover:bg-[var(--paper)]"
   } ${extra}`;
 }
 
@@ -125,6 +129,34 @@ function DropdownMenu({
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [submenuOpen, setSubmenuOpen] = useState<string | null>(null);
   const [submenuPos, setSubmenuPos] = useState<{ top: number; left: number } | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  function closeMenu() {
+    onOpenChange(false);
+    previousFocusRef.current?.focus?.({ preventScroll: true });
+  }
+
+  function closeSubmenu(focusAnchor = true) {
+    const anchor = submenuAnchorRef.current;
+    setSubmenuOpen(null);
+    setSubmenuPos(null);
+    submenuAnchorRef.current = null;
+    if (focusAnchor) anchor?.focus({ preventScroll: true });
+  }
+
+  useMenuKeyboard(open && !submenuOpen, menuRef, closeMenu, {
+    submenuOpen: Boolean(submenuOpen),
+    onOpenSubmenu: (index) => {
+      const item = items[index];
+      if (!item?.submenu?.length) return;
+      const buttons = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
+      const button = buttons?.[index];
+      if (button) openSubmenuFor(item.label, button);
+    },
+    onCloseSubmenu: () => closeSubmenu(true),
+  });
+
+  useMenuKeyboard(Boolean(submenuOpen), submenuRef, () => closeSubmenu(true));
 
   function clearCloseTimer() {
     if (closeTimerRef.current != null) {
@@ -169,6 +201,12 @@ function DropdownMenu({
     }
     setSubmenuPos({ top, left });
     setSubmenuOpen(label);
+    window.requestAnimationFrame(() => {
+      const first = submenuRef.current?.querySelector<HTMLElement>(
+        '[role="menuitem"]:not([disabled])',
+      );
+      first?.focus({ preventScroll: true });
+    });
   }
 
   useEffect(() => {
@@ -180,6 +218,7 @@ function DropdownMenu({
       submenuAnchorRef.current = null;
       return;
     }
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
     updateMenuPosition();
     const raf = window.requestAnimationFrame(() => updateMenuPosition());
     function handleClick(event: MouseEvent) {
@@ -187,7 +226,7 @@ function DropdownMenu({
       if (rootRef.current?.contains(target)) return;
       if (menuRef.current?.contains(target)) return;
       if (submenuRef.current?.contains(target)) return;
-      onOpenChange(false);
+      closeMenu();
     }
     function handleReposition() {
       updateMenuPosition();
@@ -222,6 +261,7 @@ function DropdownMenu({
         ? createPortal(
             <div
               ref={menuRef}
+              role="menu"
               style={{ top: menuPos.top, left: menuPos.left }}
               className="fixed z-[80] min-w-[9rem] rounded-md border border-[var(--rule)] bg-[var(--paper-raised)] py-1 shadow-lg"
             >
@@ -230,6 +270,9 @@ function DropdownMenu({
                   <button
                     key={item.label}
                     type="button"
+                    role="menuitem"
+                    aria-haspopup="menu"
+                    aria-expanded={submenuOpen === item.label}
                     disabled={item.disabled}
                     onMouseEnter={(event) => openSubmenuFor(item.label, event.currentTarget)}
                     onMouseLeave={scheduleCloseSubmenu}
@@ -246,9 +289,10 @@ function DropdownMenu({
                   <button
                     key={item.label}
                     type="button"
+                    role="menuitem"
                     disabled={item.disabled}
                     onClick={() => {
-                      onOpenChange(false);
+                      closeMenu();
                       item.onClick?.();
                     }}
                     className={menuItemClass(item)}
@@ -269,6 +313,7 @@ function DropdownMenu({
         ? createPortal(
             <div
               ref={submenuRef}
+              role="menu"
               style={{ top: submenuPos.top, left: submenuPos.left }}
               onMouseEnter={clearCloseTimer}
               onMouseLeave={scheduleCloseSubmenu}
@@ -278,9 +323,10 @@ function DropdownMenu({
                 <button
                   key={sub.label}
                   type="button"
+                  role="menuitem"
                   disabled={sub.disabled}
                   onClick={() => {
-                    onOpenChange(false);
+                    closeMenu();
                     sub.onClick?.();
                   }}
                   className={menuItemClass(sub)}
@@ -333,6 +379,7 @@ function FeedRow({
   renaming?: boolean;
   savingRename?: boolean;
 }) {
+  const { t, locale } = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
   const enabledMoveTargets = moveTargets.filter((target) => !target.disabled);
   const canMove = Boolean(onMoveTo) && enabledMoveTargets.length > 0;
@@ -372,17 +419,17 @@ function FeedRow({
               type="button"
               disabled={savingRename}
               onClick={() => onConfirmRename?.()}
-              className="rounded px-2 py-0.5 text-xs text-[var(--success)] hover:bg-[var(--success-soft)] disabled:opacity-50"
+              className="ui-btn shrink-0 px-2 text-[11px] text-[var(--success)] hover:bg-[var(--success-soft)] disabled:opacity-50"
             >
-              确认
+              {t("confirm")}
             </button>
             <button
               type="button"
               disabled={savingRename}
               onClick={() => onCancelRename?.()}
-              className="rounded px-2 py-0.5 text-xs text-[var(--ink-muted)] hover:bg-[var(--paper)] disabled:opacity-50"
+              className="ui-btn ui-btn-ghost shrink-0 px-2 text-[11px] disabled:opacity-50"
             >
-              取消
+              {t("cancel")}
             </button>
           </div>
         </div>
@@ -405,18 +452,18 @@ function FeedRow({
             }`}
             title={
               feed.sync_time
-                ? `上次更新 ${new Date(feed.sync_time * 1000).toLocaleString("zh-CN")}`
-                : "尚未更新"
+                ? `${new Date(feed.sync_time * 1000).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")}`
+                : t("commonNeverSynced")
             }
           >
             <span className="block truncate">{feed.name}</span>
             <span className="mt-0.5 block truncate text-[11px] font-normal text-[var(--ink-muted)]">
-              {formatFeedSyncTime(feed.sync_time)}
+              {formatFeedSyncTime(feed.sync_time, locale)}
             </span>
           </div>
           {hasActions && (
             <div
-              className={`shrink-0 ${active || menuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+              className={`shrink-0 ${active || menuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"}`}
             >
               <DropdownMenu
                 open={menuOpen}
@@ -424,9 +471,12 @@ function FeedRow({
                 trigger={
                   <button
                     type="button"
-                    title="更多"
+                    title={t("commonMore")}
+                    aria-label={t("commonMore")}
+                    aria-expanded={menuOpen}
+                    aria-haspopup="menu"
                     onMouseDown={(e) => e.stopPropagation()}
-                    className="rounded px-1.5 py-1 text-xs text-[var(--ink-muted)] hover:bg-[var(--paper-raised)] hover:text-[var(--ink)]"
+                    className="ui-icon-btn"
                   >
                     ⋯
                   </button>
@@ -435,7 +485,7 @@ function FeedRow({
                   ...(onRename
                     ? [
                         {
-                          label: "重命名",
+                          label: t("commonRename"),
                           onClick: () => onStartRename?.(),
                         },
                       ]
@@ -443,7 +493,7 @@ function FeedRow({
                   ...(canMove
                     ? [
                         {
-                          label: "移动到",
+                          label: t("commonMoveTo"),
                           submenu: enabledMoveTargets.map((target) => ({
                             label: target.name,
                             onClick: () => onMoveTo?.(target.id),
@@ -454,7 +504,7 @@ function FeedRow({
                   ...(onDelete
                     ? [
                         {
-                          label: "删除",
+                          label: t("delete"),
                           onClick: () => onDelete(),
                           danger: true,
                         },
@@ -500,6 +550,10 @@ export default function FeedSidebar({
   scheduledGroupIds,
   scheduleHintByGroupId,
 }: FeedSidebarProps) {
+  const { t, locale } = useLocale();
+  const ungroupedLabel = t("addSourceUngrouped");
+  const sectionLabel = (section: FeedSection) =>
+    resolveGroupDisplayName(section.id, section.name, ungroupedLabel);
   const groupBodiesBusy = loadingBodies || Boolean(loadingBodiesGroupId);
   // 刷新进行中仍可继续点更新（后端合并入队）；仅正文拉取时禁用避免交错
   const refreshActionDisabled = groupBodiesBusy;
@@ -539,7 +593,25 @@ export default function FeedSidebar({
     y: number;
   } | null>(null);
   const groupCtxMenuRef = useRef<HTMLDivElement>(null);
+  const groupCtxPreviousFocusRef = useRef<HTMLElement | null>(null);
   const initializedExpand = useRef(false);
+
+  function closeGroupContextMenu() {
+    setGroupCtx(null);
+    groupCtxPreviousFocusRef.current?.focus?.({ preventScroll: true });
+  }
+
+  function openGroupContextMenu(
+    sectionId: string,
+    x: number,
+    y: number,
+    anchor?: HTMLElement | null,
+  ) {
+    groupCtxPreviousFocusRef.current = anchor ?? (document.activeElement as HTMLElement | null);
+    setGroupCtx({ sectionId, x, y });
+  }
+
+  useMenuKeyboard(Boolean(groupCtx), groupCtxMenuRef, closeGroupContextMenu);
 
   const filteredSections = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -588,20 +660,15 @@ export default function FeedSidebar({
     function handleClose(event: MouseEvent) {
       const target = event.target as Node;
       if (groupCtxMenuRef.current?.contains(target)) return;
-      setGroupCtx(null);
-    }
-    function handleKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setGroupCtx(null);
+      closeGroupContextMenu();
     }
     function handleScroll() {
-      setGroupCtx(null);
+      closeGroupContextMenu();
     }
     document.addEventListener("mousedown", handleClose);
-    document.addEventListener("keydown", handleKey);
     document.addEventListener("scroll", handleScroll, true);
     return () => {
       document.removeEventListener("mousedown", handleClose);
-      document.removeEventListener("keydown", handleKey);
       document.removeEventListener("scroll", handleScroll, true);
     };
   }, [groupCtx]);
@@ -708,9 +775,9 @@ export default function FeedSidebar({
     const alarmTitle =
       scheduleHintByGroupId?.[section.id] ||
       (inSchedule
-        ? "已加入定时"
+        ? t("sidebarScheduled")
         : onOpenSchedule
-          ? "未加入任何定时（组行右键 → 设置定时）"
+          ? t("sidebarNotScheduled")
           : "");
     const groupRefreshing =
       refreshingGroupId === section.id || loadingBodiesGroupId === section.id;
@@ -760,11 +827,7 @@ export default function FeedSidebar({
             if (!canGroupContextMenu || renamingThis) return;
             event.preventDefault();
             event.stopPropagation();
-            setGroupCtx({
-              sectionId: section.id,
-              x: event.clientX,
-              y: event.clientY,
-            });
+            openGroupContextMenu(section.id, event.clientX, event.clientY);
           }}
         >
           {canManageLayout && !section.isSystem ? (
@@ -776,20 +839,22 @@ export default function FeedSidebar({
                 setDragData(event, { kind: "group", groupId: section.id });
               }}
               onDragEnd={handleDragEnd}
-              aria-label="拖动调整分组顺序"
-              className="flex w-4 shrink-0 cursor-grab items-center justify-center rounded py-1 text-xs text-[var(--ink-muted)] opacity-0 hover:text-[var(--ink)] group-hover/section:opacity-100 active:cursor-grabbing"
+              aria-label={t("sidebarDragGroups")}
+              className="ui-icon-btn shrink-0 cursor-grab opacity-0 hover:text-[var(--ink)] group-hover/section:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
             >
               ⠿
             </button>
           ) : (
-            <span className="w-4 shrink-0" aria-hidden />
+            <span className="min-w-9 shrink-0" aria-hidden />
           )}
           {onToggleGroupScope && feedIds.length > 0 ? (
             <input
               type="checkbox"
               className="mx-0.5 shrink-0"
               checked={scoped}
-              aria-label={`选中 ${section.name} 参与更新与索引`}
+              aria-label={formatMessage(locale, "sidebarSelectGroupScope", {
+                name: sectionLabel(section),
+              })}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => onToggleGroupScope(section.id, e.target.checked)}
             />
@@ -800,7 +865,7 @@ export default function FeedSidebar({
                 autoFocus
                 value={groupRenameDraft}
                 disabled={savingGroupRenameId === section.id}
-                aria-label="分组名称"
+                aria-label={t("sidebarGroupName")}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => setGroupRenameDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -822,9 +887,9 @@ export default function FeedSidebar({
                   e.stopPropagation();
                   void commitGroupRename(section.id);
                 }}
-                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-[var(--success)] hover:bg-[var(--success-soft)] disabled:opacity-50"
+                className="ui-btn shrink-0 px-2 text-[11px] text-[var(--success)] hover:bg-[var(--success-soft)] disabled:opacity-50"
               >
-                确认
+                {t("confirm")}
               </button>
               <button
                 type="button"
@@ -834,15 +899,28 @@ export default function FeedSidebar({
                   setEditingGroupId(null);
                   setGroupRenameDraft("");
                 }}
-                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-[var(--ink-muted)] hover:bg-[var(--paper)] disabled:opacity-50"
+                className="ui-btn ui-btn-ghost shrink-0 px-2 text-[11px] disabled:opacity-50"
               >
-                取消
+                {t("cancel")}
               </button>
             </div>
           ) : (
             <button
               type="button"
               onClick={() => toggleSection(section.id)}
+              onKeyDown={(event) => {
+                if (!canGroupContextMenu || renamingThis) return;
+                if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                  event.preventDefault();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  openGroupContextMenu(
+                    section.id,
+                    rect.left,
+                    rect.bottom + 4,
+                    event.currentTarget,
+                  );
+                }
+              }}
               className={`flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1.5 text-left text-[13px] ${
                 isExpanded
                   ? "font-semibold text-[var(--ink)]"
@@ -852,12 +930,12 @@ export default function FeedSidebar({
               }`}
             >
               <span
-                className={`shrink-0 text-[10px] text-[var(--ink-muted)] ${isExpanded ? "text-[var(--accent)]" : ""}`}
+                className={`shrink-0 text-[11px] text-[var(--ink-muted)] ${isExpanded ? "text-[var(--accent)]" : ""}`}
                 aria-hidden
               >
                 {isExpanded ? "▾" : "▸"}
               </span>
-              <span className="min-w-0 flex-1 truncate">{section.name}</span>
+              <span className="min-w-0 flex-1 truncate">{sectionLabel(section)}</span>
             </button>
           )}
           {inSchedule ? (
@@ -896,25 +974,55 @@ export default function FeedSidebar({
             {section.feeds.length}
           </span>
           <div
-            className={`flex w-7 shrink-0 justify-end ${
-              hasGroupActions
+            className={`flex shrink-0 items-center justify-end gap-0.5 ${
+              hasGroupActions || (canGroupContextMenu && !renamingThis)
                 ? isExpanded
                   ? "opacity-100"
-                  : "opacity-0 group-hover/section:opacity-100"
+                  : "opacity-0 group-hover/section:opacity-100 focus-within:opacity-100"
                 : "pointer-events-none opacity-0"
             }`}
           >
+            {canGroupContextMenu && !renamingThis ? (
+              <button
+                type="button"
+                title={formatMessage(locale, "sidebarGroupActions", {
+                  name: sectionLabel(section),
+                })}
+                aria-label={formatMessage(locale, "sidebarGroupActions", {
+                  name: sectionLabel(section),
+                })}
+                aria-haspopup="menu"
+                aria-expanded={groupCtx?.sectionId === section.id}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  openGroupContextMenu(
+                    section.id,
+                    rect.left,
+                    rect.bottom + 4,
+                    event.currentTarget,
+                  );
+                }}
+                className="ui-icon-btn"
+              >
+                ⋯
+              </button>
+            ) : null}
             {hasGroupActions ? (
               <button
                 type="button"
                 disabled={refreshActionDisabled}
-                title={`更新本组源信息（${formatDaysLabel(days)}）`}
-                aria-label={`刷新 ${section.name}`}
+                title={formatMessage(locale, "sidebarRefreshGroup", {
+                  range: formatDaysLabel(days),
+                })}
+                aria-label={formatMessage(locale, "sidebarRefreshGroupAria", {
+                  name: sectionLabel(section),
+                })}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onRefreshGroup?.(section.id, section.name, feedIds);
+                  onRefreshGroup?.(section.id, sectionLabel(section), feedIds);
                 }}
-                className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius-control)] text-sm text-[var(--ink-muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
+                className="ui-icon-btn hover:bg-[var(--accent-soft)] hover:text-[var(--accent)] disabled:opacity-40"
               >
                 {groupRefreshing ? "…" : "↻"}
               </button>
@@ -927,7 +1035,7 @@ export default function FeedSidebar({
         {isExpanded ? (
           <ul className="mb-1 ml-3 space-y-0.5 border-l border-[var(--rule)] pl-2">
             {section.feeds.length === 0 ? (
-              <li className="px-2 py-2 text-[11px] text-[var(--ink-muted)]">此组暂无数据源</li>
+              <li className="px-2 py-2 text-[11px] text-[var(--ink-muted)]">{t("sidebarEmptyGroup")}</li>
             ) : (
               section.feeds.map((feed) => renderFeedItem(feed, section.id))
             )}
@@ -959,7 +1067,7 @@ export default function FeedSidebar({
   function renderFeedItem(feed: Feed, sectionId: string) {
     const moveTargets = sections.map((section) => ({
       id: section.id,
-      name: section.name,
+      name: sectionLabel(section),
       disabled: section.id === sectionId,
     }));
 
@@ -1029,7 +1137,7 @@ export default function FeedSidebar({
 
   const libraryMenuItems = [
     {
-      label: refreshingAll || loadingBodies ? "更新中…" : "更新全部",
+      label: refreshingAll || loadingBodies ? t("sidebarUpdatingAll") : t("sourcesUpdateAll"),
       disabled: feeds.length === 0 || refreshActionDisabled,
       onClick: onRefreshAll,
     },
@@ -1046,7 +1154,7 @@ export default function FeedSidebar({
         ...(onRenameGroup && !groupCtxSection.isSystem
           ? [
               {
-                label: "重命名",
+                label: t("commonRename"),
                 onClick: () => {
                   setEditingFeedId(null);
                   setRenameDraft("");
@@ -1056,12 +1164,12 @@ export default function FeedSidebar({
               },
             ]
           : onRenameGroup
-            ? [{ label: "重命名", disabled: true }]
+            ? [{ label: t("commonRename"), disabled: true }]
             : []),
         ...(onAddSource
           ? [
               {
-                label: "添加源",
+                label: t("sidebarAddSource"),
                 onClick: () => onAddSource(groupCtxSection.id),
               },
             ]
@@ -1069,18 +1177,18 @@ export default function FeedSidebar({
         ...(onOpenSchedule && !groupCtxSection.isSystem
           ? [
               {
-                label: "设置定时",
+                label: t("sidebarSetSchedule"),
                 onClick: () => onOpenSchedule(groupCtxSection.id),
               },
             ]
           : onOpenSchedule
-            ? [{ label: "设置定时", disabled: true }]
+            ? [{ label: t("sidebarSetSchedule"), disabled: true }]
             : []),
         ...(groupCtxSection.isSystem
           ? onClearUngrouped
             ? [
                 {
-                  label: "清空",
+                  label: t("commonClear"),
                   danger: true,
                   disabled: groupCtxSection.feeds.length === 0,
                   onClick: () =>
@@ -1091,7 +1199,7 @@ export default function FeedSidebar({
           : onDeleteGroup
             ? [
                 {
-                  label: "删除分组",
+                  label: t("sidebarDeleteGroup"),
                   danger: true,
                   onClick: () =>
                     onDeleteGroup({
@@ -1106,26 +1214,28 @@ export default function FeedSidebar({
     : [];
 
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--paper-raised)]">
+    <aside className="app-sources-sidebar flex h-full w-72 shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--paper-raised)]">
       <div className="shrink-0 border-b border-[var(--rule)] px-3 py-3">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <h1 className="text-sm font-semibold tracking-tight text-[var(--ink)]">订阅</h1>
+              <h1 className="text-sm font-semibold tracking-tight text-[var(--ink)]">{t("sidebarTitle")}</h1>
               {onAddSource ? (
                 <button
                   type="button"
                   onClick={() => onAddSource()}
-                  title="添加源"
-                  aria-label="添加源"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper)] text-base leading-none text-[var(--ink)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                  title={t("sidebarAddSource")}
+                  aria-label={t("sidebarAddSource")}
+                  className="ui-icon-btn border border-[var(--rule)] bg-[var(--paper)] text-base leading-none text-[var(--ink)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
                 >
                   +
                 </button>
               ) : null}
             </div>
             <p className="mt-0.5 text-[11px] text-[var(--ink-muted)]">
-              {loading ? "加载中…" : `${feeds.length} 个源`}
+              {loading
+                ? t("loading")
+                : formatMessage(locale, "sidebarSourceCount", { count: feeds.length })}
             </p>
           </div>
           {onManageGroups ? (
@@ -1134,10 +1244,10 @@ export default function FeedSidebar({
               onClick={onManageGroups}
               className="rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper-raised)] px-2 py-1 text-xs text-[var(--ink-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
             >
-              管理分组
+              {t("commonManageGroups")}
             </button>
           ) : libraryMenuItems.length > 0 ? (
-            <OverflowMenu items={libraryMenuItems} label="订阅操作" />
+            <OverflowMenu items={libraryMenuItems} label={t("sidebarLibraryActions")} />
           ) : null}
         </div>
 
@@ -1146,14 +1256,14 @@ export default function FeedSidebar({
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索…"
+            placeholder={t("commonSearch")}
             className="ui-input w-full text-xs placeholder:text-[var(--ink-muted)]"
           />
         </div>
       </div>
 
       {loading ? (
-        <div className="space-y-2 px-3 py-4" aria-busy="true" aria-label="加载订阅">
+        <div className="space-y-2 px-3 py-4" aria-busy="true" aria-label={t("sidebarLoadingFeeds")}>
           {Array.from({ length: 6 }).map((_, index) => (
             <div
               key={index}
@@ -1163,7 +1273,7 @@ export default function FeedSidebar({
           ))}
         </div>
       ) : filteredSections.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-[var(--ink-muted)]">没有匹配的数据源</p>
+        <p className="px-4 py-6 text-sm text-[var(--ink-muted)]">{t("sidebarNoMatch")}</p>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
           <div className="space-y-0.5">
@@ -1177,6 +1287,13 @@ export default function FeedSidebar({
             <div
               ref={groupCtxMenuRef}
               role="menu"
+              aria-label={
+                groupCtxSection
+                  ? formatMessage(locale, "sidebarGroupActions", {
+                      name: sectionLabel(groupCtxSection),
+                    })
+                  : t("commonMore")
+              }
               style={{ left: groupCtx.x, top: groupCtx.y }}
               className="fixed z-[80] min-w-[9.5rem] rounded-md border border-[var(--rule)] bg-[var(--paper-raised)] py-1 shadow-lg"
             >
@@ -1187,7 +1304,7 @@ export default function FeedSidebar({
                   role="menuitem"
                   disabled={item.disabled}
                   onClick={() => {
-                    setGroupCtx(null);
+                    closeGroupContextMenu();
                     item.onClick?.();
                   }}
                   className={menuItemClass(item)}

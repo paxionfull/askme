@@ -23,6 +23,7 @@ import {
 } from "../api";
 import { getLlmConfigPayload, useSettings } from "../hooks/useSettings";
 import { useStoredFlag } from "../hooks/useStoredFlag";
+import { useLocale } from "../i18n/LocaleContext";
 import { useDigest } from "./DigestContext";
 
 export interface ChatUiMessage {
@@ -169,10 +170,10 @@ function persistChatBuckets(buckets: Record<string, ChatBucket>) {
   }
 }
 
-const PHASE_LABELS: Record<string, string> = {
-  planning_queries: "正在分析问题…",
-  retrieving: "正在检索…",
-  answering: "正在回答…",
+const PHASE_LABEL_KEYS: Record<string, "chatPhasePlanning" | "chatPhaseRetrieving" | "chatPhaseAnswering"> = {
+  planning_queries: "chatPhasePlanning",
+  retrieving: "chatPhaseRetrieving",
+  answering: "chatPhaseAnswering",
 };
 
 function shanghaiDateKey(now = new Date()): string {
@@ -189,6 +190,7 @@ function readBucket(buckets: Record<string, ChatBucket>, key: string): ChatBucke
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { settings } = useSettings();
+  const { t } = useLocale();
   const {
     days,
     generating: digestGenerating,
@@ -293,7 +295,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
 
       setSending(true);
-      setStatusMessage("正在恢复上次生成…");
+      setStatusMessage(t("chatResumingGeneration"));
       setError("");
 
       const applyStatus = (data: ChatJobStatus) => {
@@ -322,7 +324,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
         if (reattachGenerationRef.current !== generation) return;
         if (!data.job_id || data.job_id !== jobId) {
-          finalizeReattach(messagesRef.current, { error: "生成结果已丢失，请重新提问" });
+          finalizeReattach(messagesRef.current, { error: t("chatResultLost") });
           return;
         }
         applyStatus(data);
@@ -331,7 +333,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (data.status === "error") {
-          finalizeReattach(messagesRef.current, { error: data.error || "对话失败" });
+          finalizeReattach(messagesRef.current, { error: data.error || t("chatFailed") });
           return;
         }
         if (data.status === "cancelled") {
@@ -347,7 +349,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       void poll();
     },
-    [finalizeReattach, persistCurrentChat],
+    [finalizeReattach, persistCurrentChat, t],
   );
 
   const chatSummary = panelSummary.trim();
@@ -634,12 +636,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (sending && options?.replaceFromIndex == null) return;
 
       if (!isScopedSummary && !effectiveRagReady) {
-        setError("请先在数据源页拉取正文并建立索引后再提问");
+        setError(t("chatNeedIndexFirst"));
         return;
       }
 
       if (isScopedSummary && !llmConfigured) {
-        setError("请先在设置页配置 API Key 和模型");
+        setError(t("chatNeedLlmConfig"));
         return;
       }
 
@@ -680,7 +682,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setInput("");
       setSending(true);
       setError("");
-      setStatusMessage(isScopedSummary ? "正在生成摘要…" : "正在分析问题…");
+      setStatusMessage(isScopedSummary ? t("chatGeneratingSummary") : t("chatPhasePlanning"));
       setPromptPreview("");
       setCitations([]);
       setActiveCitationIndex(null);
@@ -761,7 +763,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             persistCurrentChat({ messages: messagesRef.current });
           },
           (status) => {
-            const label = status.message || (status.phase ? PHASE_LABELS[status.phase] : "");
+            const phaseKey = status.phase ? PHASE_LABEL_KEYS[status.phase] : undefined;
+            const label = status.message || (phaseKey ? t(phaseKey) : "");
             if (label) setStatusMessage(label);
             if (status.job_id && status.job_id !== pendingJobIdRef.current) {
               pendingJobIdRef.current = status.job_id;
@@ -809,7 +812,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         const isAbort = err instanceof DOMException && err.name === "AbortError";
         if (!isAbort) {
-          setError(err instanceof Error ? err.message : "发送失败");
+          setError(err instanceof Error ? err.message : t("chatSendFailed"));
         }
         setSending(false);
         setStatusMessage("");
@@ -838,6 +841,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       schedulePersistCurrentChat,
       scopedArticles,
       sending,
+      t,
     ],
   );
 

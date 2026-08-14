@@ -3,6 +3,8 @@ import type { AuthPrecheckItem, OnboardBatchItem, OnboardBatchStatus } from "../
 import { isAuthErrorMessage } from "./AddSourceModal";
 import AuthHandoffPanel from "./AuthHandoffPanel";
 import TopJobBanner from "./TopJobBanner";
+import { useLocale } from "../i18n/LocaleContext";
+import { formatMessage } from "../i18n/messages";
 
 interface OnboardingBatchPanelProps {
   batch: OnboardBatchStatus;
@@ -15,9 +17,13 @@ function itemLabel(item: OnboardBatchItem): string {
   return item.name?.trim() || item.slug || item.entry_url;
 }
 
-function statusIcon(status: OnboardBatchItem["status"], phase?: string): string {
+function statusIcon(
+  status: OnboardBatchItem["status"],
+  phase: string | undefined,
+  repairIcon: string,
+): string {
   if (status === "running" && String(phase || "").startsWith("auto_repair")) {
-    return "修";
+    return repairIcon;
   }
   switch (status) {
     case "done":
@@ -50,7 +56,10 @@ function collectAuthFailedUrls(batch: OnboardBatchStatus): string[] {
     .filter(Boolean);
 }
 
-function collectAuthHandoffItems(batch: OnboardBatchStatus): AuthPrecheckItem[] {
+function collectAuthHandoffItems(
+  batch: OnboardBatchStatus,
+  cookieHintDefault: string,
+): AuthPrecheckItem[] {
   const bySlot = new Map<string, AuthPrecheckItem>();
   for (const item of batch.items) {
     if (item.phase === "auth_ineffective" || item.phase === "refresh_empty") continue;
@@ -68,8 +77,7 @@ function collectAuthHandoffItems(batch: OnboardBatchStatus): AuthPrecheckItem[] 
       slot,
       slot_label: slot,
       login_url: item.login_url || item.entry_url,
-      cookie_hint:
-        item.cookie_hint || "粘贴该站点登录后的完整 Cookie（须含业务令牌，访客/追踪字段无效）",
+      cookie_hint: item.cookie_hint || cookieHintDefault,
       configured: false,
       can_proceed: false,
     });
@@ -83,12 +91,17 @@ export default function OnboardingBatchPanel({
   onClose,
   onAuthRetry,
 }: OnboardingBatchPanelProps) {
+  const { t, locale } = useLocale();
   const [expanded, setExpanded] = useState(true);
   const [authCookies, setAuthCookies] = useState<Record<string, string>>({});
   const [savedSlots, setSavedSlots] = useState<Set<string>>(() => new Set());
   const running = batch.status === "running";
   const authFailedUrls = collectAuthFailedUrls(batch);
-  const handoffItems = useMemo(() => collectAuthHandoffItems(batch), [batch]);
+  const cookieHintDefault = t("onboardBatchCookieHint");
+  const handoffItems = useMemo(
+    () => collectAuthHandoffItems(batch, cookieHintDefault),
+    [batch, cookieHintDefault],
+  );
   const tone = running
     ? "progress"
     : batch.failed > 0
@@ -106,7 +119,7 @@ export default function OnboardingBatchPanel({
   return (
     <TopJobBanner
       tone={tone}
-      title="批量接入"
+      title={t("onboardBatchTitle")}
       message={`${batch.message}${batch.batch_id ? ` · #${batch.batch_id}` : ""}`}
       current={finished}
       total={batch.total}
@@ -118,11 +131,11 @@ export default function OnboardingBatchPanel({
             <button
               type="button"
               onClick={() => onAuthRetry(authFailedUrls)}
-              className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+              className="ui-btn ui-btn-ghost px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
             >
               {allAuthSaved
-                ? `授权完成，重试接入 (${authFailedUrls.length})`
-                : `去授权并重试 (${authFailedUrls.length})`}
+                ? formatMessage(locale, "onboardBatchAuthDone", { count: authFailedUrls.length })
+                : formatMessage(locale, "onboardBatchRetryAuth", { count: authFailedUrls.length })}
             </button>
           ) : null}
           <button
@@ -130,15 +143,15 @@ export default function OnboardingBatchPanel({
             onClick={() => setExpanded((value) => !value)}
             className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
           >
-            {expanded ? "收起" : "展开"}
+            {expanded ? t("onboardBatchCollapse") : t("onboardBatchExpand")}
           </button>
           {running ? (
             <button
               type="button"
               onClick={onStop}
-              className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+              className="ui-btn ui-btn-ghost px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
             >
-              停止全部
+              {t("onboardBatchStopAll")}
             </button>
           ) : null}
         </div>
@@ -153,14 +166,14 @@ export default function OnboardingBatchPanel({
                   className="flex gap-2"
                 >
                   <span className="w-4 shrink-0 text-center">
-                    {statusIcon(item.status, item.phase)}
+                    {statusIcon(item.status, item.phase, t("onboardBatchRepairIcon"))}
                   </span>
                   <span className="min-w-0 flex-1 truncate" title={item.entry_url}>
                     {itemLabel(item)}
                   </span>
                   <span className="shrink-0 opacity-80">
                     {item.status === "skipped"
-                      ? item.skip_reason || "已跳过"
+                      ? item.skip_reason || t("onboardBatchSkipped")
                       : item.message || item.status}
                   </span>
                 </li>
@@ -168,9 +181,7 @@ export default function OnboardingBatchPanel({
             </ul>
             {!running && pendingHandoff.length > 0 ? (
               <div className="space-y-3 rounded-md border border-current/15 bg-[var(--paper-raised)]/50 p-3 text-[var(--ink)]">
-                <p className="text-xs font-medium">
-                  以下站点需要登录，完成后 Cookie 会写入「设置 → Cookie」，再点上方重试接入。
-                </p>
+                <p className="text-xs font-medium">{t("onboardBatchAuthHint")}</p>
                 {pendingHandoff.map((item) => (
                   <AuthHandoffPanel
                     key={item.slot || item.entry_url}
@@ -188,7 +199,9 @@ export default function OnboardingBatchPanel({
                       setSavedSlots((current) => new Set(current).add(slot));
                       setAuthCookies((current) => ({ ...current, [slot]: "" }));
                     }}
-                    title={`请授权：${item.slot_label || item.slot}`}
+                    title={formatMessage(locale, "onboardBatchAuthTitle", {
+                      label: item.slot_label || item.slot || "",
+                    })}
                   />
                 ))}
               </div>

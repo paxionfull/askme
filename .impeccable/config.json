@@ -1,0 +1,25 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [
+      "frontend/src/index.css"
+    ],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-08-07T08:22:34.125Z",
+        "reason": "Canon redesign: Linear + Notion craft bar"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "frontend/src/index.css"
+        ],
+        "createdAt": "2026-08-07T08:22:34.203Z",
+        "reason": "Redesign overhaul in progress; blockquote left rule reviewed"
+      }
+    ]
+  }
+}
