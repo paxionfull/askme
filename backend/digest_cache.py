@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -40,6 +41,14 @@ class DigestSummaryStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_digest_summaries_days ON digest_summaries(days)"
             )
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(digest_summaries)").fetchall()
+            }
+            if "article_refs" not in columns:
+                conn.execute(
+                    "ALTER TABLE digest_summaries ADD COLUMN article_refs TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def save(
         self,
@@ -50,25 +59,28 @@ class DigestSummaryStore:
         group_ids: list[str] | None = None,
         article_count: int = 0,
         truncated: bool = False,
+        article_refs: list[dict[str, str]] | None = None,
     ) -> None:
         text = summary.strip()
         if not text:
             return
         key = _cache_key(days, feed_ids, group_ids)
         now = time.time()
+        refs_json = json.dumps(article_refs or [], ensure_ascii=False)
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO digest_summaries (
-                    cache_key, days, summary, article_count, truncated, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    cache_key, days, summary, article_count, truncated, updated_at, article_refs
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(cache_key) DO UPDATE SET
                     summary = excluded.summary,
                     article_count = excluded.article_count,
                     truncated = excluded.truncated,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    article_refs = excluded.article_refs
                 """,
-                (key, days, text, article_count, 1 if truncated else 0, now),
+                (key, days, text, article_count, 1 if truncated else 0, now, refs_json),
             )
 
     def get(self, days: int, feed_ids: list[str] | None = None, group_ids: list[str] | None = None) -> dict | None:
@@ -76,7 +88,7 @@ class DigestSummaryStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT summary, article_count, truncated, updated_at
+                SELECT summary, article_count, truncated, updated_at, article_refs
                 FROM digest_summaries
                 WHERE cache_key = ?
                 """,
@@ -84,11 +96,17 @@ class DigestSummaryStore:
             ).fetchone()
         if row is None:
             return None
+        refs_raw = row["article_refs"] if "article_refs" in row.keys() else "[]"
+        try:
+            article_refs = json.loads(refs_raw or "[]")
+        except json.JSONDecodeError:
+            article_refs = []
         return {
             "summary": row["summary"],
             "article_count": int(row["article_count"]),
             "truncated": bool(row["truncated"]),
             "updated_at": float(row["updated_at"]),
+            "article_refs": article_refs if isinstance(article_refs, list) else [],
         }
 
     def delete(self, days: int, feed_ids: list[str] | None = None, group_ids: list[str] | None = None) -> None:
@@ -108,6 +126,7 @@ def set_summary(
     group_ids: list[str] | None = None,
     article_count: int = 0,
     truncated: bool = False,
+    article_refs: list[dict[str, str]] | None = None,
 ) -> None:
     _store.save(
         days,
@@ -116,6 +135,7 @@ def set_summary(
         group_ids=group_ids,
         article_count=article_count,
         truncated=truncated,
+        article_refs=article_refs,
     )
 
 

@@ -2,6 +2,10 @@ export interface SseStatus {
   phase?: string;
   message?: string;
   article_count?: number;
+  current?: number;
+  total?: number;
+  cached_count?: number;
+  fetched_count?: number;
   job_id?: string;
   slug?: string;
   entry_url?: string;
@@ -107,6 +111,10 @@ export async function streamPost(
           phase?: string;
           message?: string;
           article_count?: number;
+          current?: number;
+          total?: number;
+          cached_count?: number;
+          fetched_count?: number;
           job_id?: string;
           items?: SseCitationItem[];
           system?: string;

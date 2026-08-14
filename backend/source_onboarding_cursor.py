@@ -12,9 +12,14 @@ from typing import Any
 from feed_registry import feed_registry
 from llm import LLMError
 from source_onboarding_log import OnboardingCancelled, OnboardingSession
-from source_platform_onboard import run_platform_onboarding
 from source_platform_scaffold import detect_platform
-from source_skill_writer import load_reference_examples, skill_dir_for, validate_slug
+from source_skill_writer import (
+    is_complete_discovery_skill,
+    load_reference_examples,
+    remove_discovery_skill_dir,
+    skill_dir_for,
+    validate_slug,
+)
 from skill_validate import run_validation
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -138,7 +143,10 @@ def _build_cursor_prompt(
 5. 若验证失败，根据报错修复 discover.py 并重跑，直到通过
 
 ## 硬性约束
-- discover.py 只能用 urllib/json/标准库 + `.cursor/skills/_lib`（如 content_utils），禁止 import backend
+- discover.py 只能用标准库 + `.cursor/skills/_lib`（如 content_utils、http_client），禁止 import backend
+- 所有 HTTP 必须 `from http_client import ...`（统一 5s 超时、重试、429/502/503 退避）；禁止 urlopen 与自定义 timeout=
+- `fetch_article_detail(article_id, **hints)` 必须优先 `resolve_detail_url` / `meta.get("url")`；禁止为查元数据重复拉整表列表或仅靠首页第一页；大列表用 `_lib/list_index.py`，快讯类用 id 内存索引；`discovery_validate.py` 会用 hints.url 实测详情
+- 脚本内分页循环须调用 sleep_between_pages()
 - 不要写 markdown 代码块包裹整个 discover.py 文件本身
 - published_at 转 ISO8601 Asia/Shanghai
 - 金十 jin10.com 若接入：flash-api 必须带 x-app-id 与 x-version 请求头
@@ -146,16 +154,16 @@ def _build_cursor_prompt(
 完成后用一句话说明 feed_id 与验证结果。"""
 
 
-async def _run_cursor_onboarding(
+async def run_cursor_skill_task(
     *,
     slug: str,
-    name: str,
-    entry_url: str,
-    hints: str,
-    list_api_hint: str,
+    prompt: str,
     auto_validate: bool,
     session: OnboardingSession | None,
+    result_engine: str = "cursor_sdk",
+    mark_files_written: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
+    """运行 Cursor Agent 任务（接入或修复），完成后可选验证。"""
     api_key = load_cursor_api_key()
     if not api_key:
         raise LLMError(
@@ -179,15 +187,9 @@ async def _run_cursor_onboarding(
             )
         raise LLMError(hint, status_code=500) from exc
 
-    prompt = _build_cursor_prompt(
-        slug=slug,
-        name=name,
-        entry_url=entry_url,
-        hints=hints,
-        list_api_hint=list_api_hint,
-    )
+    safe_slug = validate_slug(slug)
     if session:
-        session.log("cursor_prompt", chars=len(prompt), slug=slug, entry_url=entry_url)
+        session.log("cursor_prompt", chars=len(prompt), slug=safe_slug)
 
     yield _emit_status(session, phase="cursor", message="正在启动 Cursor Agent（auto）…")
 
@@ -254,7 +256,7 @@ async def _run_cursor_onboarding(
                     )
 
                 if session and session.cancelled:
-                    raise OnboardingCancelled("接入任务已取消")
+                    raise OnboardingCancelled("任务已取消")
 
                 if result.status == "cancelled":
                     raise OnboardingCancelled("Cursor Agent 已取消")
@@ -262,15 +264,14 @@ async def _run_cursor_onboarding(
                     detail = (result.result or result.status or "unknown").strip()
                     raise LLMError(f"Cursor Agent 未完成: {detail}", status_code=502)
 
-                skill_dir = skill_dir_for(slug)
-                if skill_dir.exists() and session:
+                if mark_files_written and session and skill_dir_for(safe_slug).exists():
                     session.mark_files_written()
 
                 validation: dict[str, Any] | None = None
                 if auto_validate:
                     yield _emit_status(session, phase="validate", message="正在验证 skill…")
                     try:
-                        validation = run_validation(slug)
+                        validation = run_validation(safe_slug)
                         if session:
                             session.log("validation", ok=True, result=validation)
                     except Exception as exc:
@@ -283,11 +284,11 @@ async def _run_cursor_onboarding(
 
                 result_data = {
                     "ok": True,
-                    "slug": slug,
-                    "feed_id": f"website:{slug}",
-                    "skill_dir": f"{slug}-discovery",
+                    "slug": safe_slug,
+                    "feed_id": f"website:{safe_slug}",
+                    "skill_dir": f"{safe_slug}-discovery",
                     "analysis": {
-                        "engine": "cursor_sdk",
+                        "engine": result_engine,
                         "agent_id": agent.agent_id,
                         "run_id": run.id,
                         "cursor_result": (result.result or "")[:4000],
@@ -305,6 +306,37 @@ async def _run_cursor_onboarding(
         raise LLMError(f"Cursor SDK 错误: {exc.message}", status_code=502) from exc
 
 
+async def _run_cursor_onboarding(
+    *,
+    slug: str,
+    name: str,
+    entry_url: str,
+    hints: str,
+    list_api_hint: str,
+    auto_validate: bool,
+    session: OnboardingSession | None,
+) -> AsyncIterator[dict[str, Any]]:
+    prompt = _build_cursor_prompt(
+        slug=slug,
+        name=name,
+        entry_url=entry_url,
+        hints=hints,
+        list_api_hint=list_api_hint,
+    )
+    if session:
+        session.log("cursor_prompt", slug=slug, entry_url=entry_url)
+
+    async for event in run_cursor_skill_task(
+        slug=slug,
+        prompt=prompt,
+        auto_validate=auto_validate,
+        session=session,
+        result_engine="cursor_sdk",
+        mark_files_written=True,
+    ):
+        yield event
+
+
 async def run_onboarding_agent(
     *,
     slug: str,
@@ -315,6 +347,7 @@ async def run_onboarding_agent(
     llm_config: dict[str, Any] | None = None,
     auto_validate: bool = True,
     session: OnboardingSession | None = None,
+    auto_repair: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
     """统一接入入口：已知平台走脚手架，其余走 Cursor SDK。"""
     del llm_config  # 不再使用 Askme 内部 LLM Agent
@@ -323,18 +356,39 @@ async def run_onboarding_agent(
     feed_id = platform.feed_id if platform else f"website:{safe_slug}"
 
     if skill_dir_for(safe_slug).exists():
-        if feed_registry.is_hidden(feed_id):
-            feed_registry.unhide_feed(feed_id)
+        if not is_complete_discovery_skill(safe_slug):
+            # 上次接入失败留下的残缺目录，清掉后允许重试
+            remove_discovery_skill_dir(safe_slug)
+            try:
+                feed_registry.purge_feed(feed_id)
+            except Exception:
+                pass
             if session:
-                session.log("restore", feed_id=feed_id, slug=safe_slug)
-            yield _emit_status(session, phase="restore", message="恢复已移除的数据源…")
+                session.log("cleanup_incomplete", slug=safe_slug, feed_id=feed_id)
+        elif feed_registry.is_hidden(feed_id) or (
+            is_complete_discovery_skill(safe_slug) and skill_dir_for(safe_slug).exists()
+        ):
+            restored = False
+            if feed_registry.is_hidden(feed_id):
+                feed_registry.unhide_feed(feed_id)
+                restored = True
+                if session:
+                    session.log("restore", feed_id=feed_id, slug=safe_slug)
+                yield _emit_status(session, phase="restore", message="恢复已移除的数据源…")
+            else:
+                yield _emit_status(
+                    session,
+                    phase="attach",
+                    message="数据源 skill 已存在，准备加入分组…",
+                )
             result_data = {
                 "ok": True,
                 "slug": safe_slug,
                 "feed_id": feed_id,
                 "skill_dir": f"{safe_slug}-discovery",
-                "restored": True,
-                "analysis": {"restored": True},
+                "restored": restored,
+                "already_exists": not restored,
+                "analysis": {"restored": restored, "already_exists": not restored},
                 "validation": None,
             }
             if session:
@@ -345,15 +399,17 @@ async def run_onboarding_agent(
                 **({"job_id": session.job_id} if session else {}),
             }
             return
-        raise LLMError(f"数据源 skill 已存在: {safe_slug}-discovery", status_code=400)
 
     if platform:
+        from source_platform_onboard import run_platform_onboarding
+
         async for event in run_platform_onboarding(
             platform=platform,
             slug=safe_slug,
             name=name.strip(),
             auto_validate=auto_validate,
             session=session,
+            auto_repair=auto_repair,
         ):
             yield event
         return

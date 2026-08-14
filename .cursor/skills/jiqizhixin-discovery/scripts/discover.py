@@ -7,9 +7,10 @@ import argparse
 import json
 import sys
 import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+
+from http_client import fetch_bytes, fetch_json, fetch_text, sleep_between_pages
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 BASE_URL = "https://www.jiqizhixin.com"
@@ -28,7 +29,7 @@ FEED_META = {
     "source": "website",
     "entryUrl": f"{BASE_URL}/articles",
 }
-REFRESH_DEFAULTS = {"max_pages": 3, "per": 20}
+REFRESH_DEFAULTS = {"max_pages": 3, "per": 50}
 
 DEFAULT_HEADERS = {
     "Accept": "application/json",
@@ -45,10 +46,7 @@ def _request_json(url: str, referer: str | None = None) -> dict:
     headers = dict(DEFAULT_HEADERS)
     if referer:
         headers["Referer"] = referer
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        raw = resp.read().decode("utf-8")
-    data = json.loads(raw)
+    data = fetch_json(url, headers=headers)
     if not isinstance(data, dict):
         raise ValueError("响应不是 JSON 对象")
     return data
@@ -107,7 +105,7 @@ def normalize_list_item(item: dict) -> dict:
     }
 
 
-def fetch_article_detail(article_id: str) -> dict:
+def fetch_article_detail(article_id: str, **hints) -> dict:
     slug = article_id
     url = f"{BASE_URL}/api/article_library/articles/{slug}.json"
     data = _request_json(url, referer=f"{BASE_URL}/articles/{slug}")
@@ -180,6 +178,7 @@ def discover_recent(*, days: int = 1, max_pages: int = 5, per: int = 20) -> list
 
         if stop or not has_next_page(payload):
             break
+        sleep_between_pages()
 
     return results
 

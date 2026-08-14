@@ -8,9 +8,10 @@ import json
 import re
 import sys
 import urllib.parse
-import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+from http_client import fetch_bytes, fetch_json, fetch_text, sleep_between_pages
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 BASE_URL = "https://www.jin10.com"
@@ -41,17 +42,46 @@ _HEADERS = {
     ),
 }
 
+_FLASH_BY_ID: dict[str, dict] = {}
+
+
+def _index_flash_items(items: list[dict]) -> None:
+    for item in items:
+        article_id = str(item.get("id", ""))
+        if article_id:
+            _FLASH_BY_ID[article_id] = item
+
 
 def _request_list(*, max_time: str = "") -> list[dict]:
     params = {"channel": "-8200", "vip": "1"}
     if max_time:
         params["max_time"] = max_time
     url = f"{FLASH_API}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    payload = fetch_json(url, headers=_HEADERS)
     items = payload.get("data") if isinstance(payload, dict) else None
-    return items if isinstance(items, list) else []
+    rows = items if isinstance(items, list) else []
+    _index_flash_items(rows)
+    return rows
+
+
+def _find_flash_item(article_id: str, *, max_pages: int = 20) -> dict | None:
+    wanted = str(article_id)
+    if wanted in _FLASH_BY_ID:
+        return _FLASH_BY_ID[wanted]
+    items = _request_list()
+    if wanted in _FLASH_BY_ID:
+        return _FLASH_BY_ID[wanted]
+    max_time = str(items[-1].get("time") or "") if items else ""
+    for _ in range(max(0, max_pages - 1)):
+        if not max_time:
+            break
+        items = _request_list(max_time=max_time)
+        if wanted in _FLASH_BY_ID:
+            return _FLASH_BY_ID[wanted]
+        if not items:
+            break
+        max_time = str(items[-1].get("time") or "")
+    return None
 
 
 def _format_time(value: str) -> str:
@@ -70,12 +100,58 @@ def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
 
+def _item_data(item: dict) -> dict:
+    data = item.get("data")
+    return data if isinstance(data, dict) else {}
+
+
 def _item_content(item: dict) -> str:
-    data = item.get("data") if isinstance(item.get("data"), dict) else {}
-    return str(data.get("content") or "")
+    return str(_item_data(item).get("content") or "")
+
+
+def _is_homepage_url(url: str) -> bool:
+    text = str(url or "").strip()
+    if not text:
+        return True
+    parsed = urllib.parse.urlparse(text)
+    host = (parsed.netloc or "").lower().replace("www.", "")
+    path = (parsed.path or "/").rstrip("/") or "/"
+    if host == "jin10.com" and path in {"/", "/index.html"}:
+        return True
+    return False
+
+
+def _is_article_item(item: dict) -> bool:
+    item_type = int(item.get("type") or 0)
+    data = _item_data(item)
+    content = _strip_html(_item_content(item))
+
+    if item_type == 1:
+        return False
+
+    if item_type == 2:
+        link = str(data.get("link") or "").strip()
+        title = _strip_html(str(data.get("title") or ""))
+        return bool(link and content and title and not _is_homepage_url(link))
+
+    if data.get("lock"):
+        return False
+    return bool(content)
+
+
+def _item_url(item: dict, article_id: str) -> str:
+    if int(item.get("type") or 0) == 2:
+        link = str(_item_data(item).get("link") or "").strip()
+        if link and not _is_homepage_url(link):
+            return link
+    return f"{BASE_URL}/flash/{article_id}.html"
 
 
 def _item_title(item: dict) -> str:
+    data = _item_data(item)
+    explicit = _strip_html(str(data.get("title") or ""))
+    if explicit:
+        return explicit
     content = _strip_html(_item_content(item))
     match_bracket = re.match(r"^【([^】]+)】", content)
     if match_bracket:
@@ -93,7 +169,9 @@ def fetch_list_page(page: int = 1, per: int = 20) -> dict:
 
 def list_items(payload: dict) -> list[dict]:
     items = payload.get("data")
-    return items if isinstance(items, list) else []
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if _is_article_item(item)]
 
 
 def has_next_page(payload: dict) -> bool:
@@ -107,30 +185,40 @@ def normalize_list_item(item: dict) -> dict:
     article_id = str(item.get("id", ""))
     content_html = _item_content(item)
     title = _item_title(item)
+    data = _item_data(item)
     return {
         "id": article_id,
         "title": title,
-        "url": f"{BASE_URL}/flash/{article_id}.html",
+        "url": _item_url(item, article_id),
         "published_at": _format_time(item.get("time")),
         "author": "金十数据",
-        "image": "",
+        "image": str(data.get("pic") or ""),
         "summary": _strip_html(content_html)[:200],
     }
 
 
-def fetch_article_detail(article_id: str) -> dict:
-    for item in _request_list():
-        if str(item.get("id", "")) == str(article_id):
-            normalized = normalize_list_item(item)
-            normalized["content_html"] = _item_content(item)
-            return normalized
+def fetch_article_detail(article_id: str, **hints) -> dict:
+    from detail_hints import pick_hints
+
+    meta = pick_hints(**hints)
+    item = _find_flash_item(str(article_id))
+    if item and _is_article_item(item):
+        normalized = normalize_list_item(item)
+        normalized["content_html"] = _item_content(item)
+        if meta.get("title"):
+            normalized["title"] = meta["title"]
+        if meta.get("url"):
+            normalized["url"] = meta["url"]
+        if meta.get("published_at"):
+            normalized["published_at"] = meta["published_at"]
+        return normalized
     return {
         "id": str(article_id),
-        "title": "",
-        "url": f"{BASE_URL}/flash/{article_id}.html",
-        "published_at": "",
-        "author": "金十数据",
-        "image": "",
+        "title": meta.get("title", ""),
+        "url": meta.get("url") or f"{BASE_URL}/flash/{article_id}.html",
+        "published_at": meta.get("published_at", ""),
+        "author": meta.get("author") or "金十数据",
+        "image": meta.get("image", ""),
         "content_html": "",
     }
 

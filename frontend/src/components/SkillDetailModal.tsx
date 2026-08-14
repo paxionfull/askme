@@ -11,8 +11,11 @@ interface SkillDetailModalProps {
   detail: SkillDetail | null;
   deletable?: boolean;
   deleting?: boolean;
+  repairable?: boolean;
+  repairing?: boolean;
   onClose: () => void;
   onDelete?: () => void;
+  onRepair?: () => void;
 }
 
 type TabFormat = "markdown" | "code";
@@ -53,8 +56,11 @@ export default function SkillDetailModal({
   detail,
   deletable = false,
   deleting = false,
+  repairable = false,
+  repairing = false,
   onClose,
   onDelete,
+  onRepair,
 }: SkillDetailModalProps) {
   const tabs = useMemo(() => {
     if (!detail) return [] as SkillTab[];
@@ -158,12 +164,24 @@ export default function SkillDetailModal({
         )}
 
         <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+          {repairable && onRepair && (
+            <button
+              type="button"
+              disabled={repairing}
+              onClick={onRepair}
+              className="mr-auto rounded-md border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+            >
+              {repairing ? "修复中…" : "反馈并修复"}
+            </button>
+          )}
           {deletable && onDelete && (
             <button
               type="button"
               disabled={deleting}
               onClick={onDelete}
-              className="mr-auto rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
+              className={`rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50 ${
+                repairable ? "" : "mr-auto"
+              }`}
             >
               {deleting ? "删除中..." : "删除"}
             </button>

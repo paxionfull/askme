@@ -2,9 +2,23 @@ import json
 import sqlite3
 import time
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA_DIR / "article_chunks.db"
+
+
+def _normalize_url(url: str) -> str:
+    raw = url.strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+        host = parsed.hostname.lower().removeprefix("www.") if parsed.hostname else ""
+        path = parsed.path.rstrip("/") or "/"
+        return urlunparse((parsed.scheme.lower(), host, path, "", parsed.query, ""))
+    except Exception:
+        return raw.lower()
 
 
 class ChunkStore:
@@ -110,18 +124,34 @@ class ChunkStore:
         self,
         cutoff_iso: str,
         feed_ids: list[str] | None = None,
+        article_pairs: list[tuple[str, str]] | None = None,
     ) -> list[dict]:
-        query = """
-            SELECT id, feed_id, article_id, chunk_index, text, char_start,
-                   title, feed_name, published_at, url, embedding
-            FROM article_chunks
-            WHERE published_at >= ? AND embedding != '[]' AND embedding != ''
-        """
-        params: list[str | list[str]] = [cutoff_iso]
+        scoped = bool(article_pairs)
+        if scoped:
+            query = """
+                SELECT id, feed_id, article_id, chunk_index, text, char_start,
+                       title, feed_name, published_at, url, embedding
+                FROM article_chunks
+                WHERE embedding != '[]' AND embedding != ''
+            """
+            params: list[str] = []
+        else:
+            query = """
+                SELECT id, feed_id, article_id, chunk_index, text, char_start,
+                       title, feed_name, published_at, url, embedding
+                FROM article_chunks
+                WHERE published_at >= ? AND embedding != '[]' AND embedding != ''
+            """
+            params = [cutoff_iso]
         if feed_ids:
             placeholders = ",".join("?" for _ in feed_ids)
             query += f" AND feed_id IN ({placeholders})"
             params.extend(feed_ids)
+        if article_pairs:
+            pair_clauses = " OR ".join("(feed_id = ? AND article_id = ?)" for _ in article_pairs)
+            query += f" AND ({pair_clauses})"
+            for feed_id, article_id in article_pairs:
+                params.extend([feed_id, article_id])
         query += " ORDER BY published_at DESC"
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
@@ -132,19 +162,87 @@ class ChunkStore:
             result.append(item)
         return result
 
-    def count_in_scope(self, cutoff_iso: str, feed_ids: list[str] | None = None) -> int:
-        query = """
-            SELECT COUNT(*) AS cnt FROM article_chunks
-            WHERE published_at >= ? AND embedding != '[]' AND embedding != ''
-        """
-        params: list[str] = [cutoff_iso]
+    def count_in_scope(
+        self,
+        cutoff_iso: str,
+        feed_ids: list[str] | None = None,
+        article_pairs: list[tuple[str, str]] | None = None,
+    ) -> int:
+        scoped = bool(article_pairs)
+        if scoped:
+            query = """
+                SELECT COUNT(*) AS cnt FROM article_chunks
+                WHERE embedding != '[]' AND embedding != ''
+            """
+            params: list[str] = []
+        else:
+            query = """
+                SELECT COUNT(*) AS cnt FROM article_chunks
+                WHERE published_at >= ? AND embedding != '[]' AND embedding != ''
+            """
+            params = [cutoff_iso]
         if feed_ids:
             placeholders = ",".join("?" for _ in feed_ids)
             query += f" AND feed_id IN ({placeholders})"
             params.extend(feed_ids)
+        if article_pairs:
+            pair_clauses = " OR ".join("(feed_id = ? AND article_id = ?)" for _ in article_pairs)
+            query += f" AND ({pair_clauses})"
+            for feed_id, article_id in article_pairs:
+                params.extend([feed_id, article_id])
         with self._connect() as conn:
             row = conn.execute(query, params).fetchone()
         return int(row["cnt"]) if row else 0
+
+    def find_article_pair_by_url(self, url: str) -> tuple[str, str] | None:
+        raw = url.strip()
+        if not raw:
+            return None
+        candidates = [raw, _normalize_url(raw)]
+        seen: set[str] = set()
+        with self._connect() as conn:
+            for candidate in candidates:
+                if not candidate or candidate in seen:
+                    continue
+                seen.add(candidate)
+                row = conn.execute(
+                    """
+                    SELECT feed_id, article_id FROM article_chunks
+                    WHERE url = ? AND embedding != '[]' AND embedding != ''
+                    LIMIT 1
+                    """,
+                    (candidate,),
+                ).fetchone()
+                if row:
+                    return row["feed_id"], row["article_id"]
+            normalized = _normalize_url(raw)
+            if normalized:
+                row = conn.execute(
+                    """
+                    SELECT feed_id, article_id FROM article_chunks
+                    WHERE embedding != '[]' AND embedding != ''
+                      AND lower(replace(replace(url, '://www.', '://'), 'https://', 'http://')) =
+                          lower(replace(replace(?, '://www.', '://'), 'https://', 'http://'))
+                    LIMIT 1
+                    """,
+                    (normalized,),
+                ).fetchone()
+                if row:
+                    return row["feed_id"], row["article_id"]
+        return None
+
+    def article_has_chunks(self, feed_id: str, article_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM article_chunks
+                WHERE feed_id = ? AND article_id = ?
+                  AND embedding != '[]' AND embedding != ''
+                LIMIT 1
+                """,
+                (feed_id, article_id),
+            ).fetchone()
+        return row is not None
 
     def get_by_id(self, chunk_id: str) -> dict | None:
         with self._connect() as conn:

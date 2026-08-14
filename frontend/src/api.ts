@@ -37,6 +37,8 @@ export interface Article {
   image: string;
   published_at: string;
   author: string;
+  has_body?: boolean;
+  plain_text?: string;
 }
 
 export interface RecentArticle {
@@ -68,6 +70,9 @@ export interface StoredArticleBody {
   published_at: string;
   feed_name: string;
   content_html: string;
+  plain_text?: string;
+  body_status?: "ok" | "anti_bot" | "auth_required" | "parse_failed" | "transient_error";
+  body_detail?: string;
 }
 
 export interface LlmStatus {
@@ -110,10 +115,21 @@ export function fetchFeeds() {
   return request<FeedsResponse>("/api/feeds");
 }
 
-export function deleteFeed(feedId: string) {
-  return request<{ ok: boolean; feed_id: string }>(`/api/feeds/${encodeURIComponent(feedId)}`, {
+export function deleteFeed(feedId: string, removeSkill = false) {
+  const params = new URLSearchParams({ remove_skill: String(removeSkill) });
+  return request<{ ok: boolean; feed_id: string; skill_removed?: boolean }>(`/api/feeds/${encodeURIComponent(feedId)}?${params}`, {
     method: "DELETE",
   });
+}
+
+export function renameFeed(feedId: string, name: string) {
+  return request<{ ok: boolean; feed_id: string; name: string }>(
+    `/api/feeds/${encodeURIComponent(feedId)}/name`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    },
+  );
 }
 
 export function saveFeedGroups(
@@ -136,7 +152,8 @@ export function saveFeedGroups(
   });
 }
 
-export function refreshFeed(feedId: string) {
+export function refreshFeed(feedId: string, days = 1) {
+  const params = new URLSearchParams({ days: String(days) });
   return request<{
     ok: boolean;
     article_count: number;
@@ -144,7 +161,7 @@ export function refreshFeed(feedId: string) {
     has_new_content?: boolean;
     fetching_history?: boolean;
     message: string;
-  }>(`/api/feeds/${encodeURIComponent(feedId)}/refresh`, {
+  }>(`/api/feeds/${encodeURIComponent(feedId)}/refresh?${params}`, {
     method: "POST",
   });
 }
@@ -152,11 +169,24 @@ export function refreshFeed(feedId: string) {
 export interface RefreshAllFeedsResponse {
   started: boolean;
   message: string;
+  scope?: string;
+  group_id?: string;
+  group_name?: string;
+  feed_count?: number;
+  days?: number;
 }
 
-export function refreshAllFeeds() {
+export function refreshAllFeeds(days = 1) {
   return request<RefreshAllFeedsResponse>("/api/feeds/refresh-all", {
     method: "POST",
+    body: JSON.stringify({ days }),
+  });
+}
+
+export function refreshGroupFeeds(groupId: string, days = 1) {
+  return request<RefreshAllFeedsResponse>("/api/feeds/refresh-group", {
+    method: "POST",
+    body: JSON.stringify({ group_id: groupId, days }),
   });
 }
 
@@ -165,30 +195,39 @@ function sleep(ms: number) {
 }
 
 export async function waitForRefreshAllComplete(
-  onProgress?: (status: FeedSchedulerConfig) => void,
+  onProgress?: (status: FeedSchedulerConfig) => void | Promise<void>,
+  pollIntervalMs = 800,
 ): Promise<FeedSchedulerConfig> {
   while (true) {
     const status = await fetchFeedSchedulerConfig();
-    onProgress?.(status);
+    if (onProgress) {
+      await onProgress(status);
+    }
     if (!status.refresh_running) {
       return status;
     }
-    await sleep(2000);
+    await sleep(pollIntervalMs);
   }
 }
 
 export function fetchArticles(
   feedId: string,
-  limit = 20,
+  limit?: number,
   includeContent = false,
   fresh = false,
+  days?: number,
 ) {
   const params = new URLSearchParams({
-    limit: String(limit),
     include_content: String(includeContent),
     fresh: String(fresh),
     _t: String(Date.now()),
   });
+  if (limit != null && limit > 0) {
+    params.set("limit", String(limit));
+  }
+  if (days != null) {
+    params.set("days", String(days));
+  }
   return request<Article[]>(`/api/feeds/${encodeURIComponent(feedId)}/articles?${params}`);
 }
 
@@ -224,6 +263,107 @@ export function fetchRecentArticles(days: number, feedIds?: string[], enrich = f
   return request<RecentArticlesResponse>(`/api/articles/recent?${params}`);
 }
 
+export function streamFetchRecentArticles(
+  days: number,
+  enrich: boolean,
+  onStatus: (status: SseStatus) => void,
+  onResult: (result: RecentArticlesResponse) => void,
+  onDone: () => void,
+  onError: (message: string) => void,
+  feedIds?: string[],
+  listLimit?: number,
+) {
+  return streamPost(
+    "/api/articles/recent",
+    {
+      days,
+      feed_ids: feedIds ?? [],
+      enrich,
+      stream: true,
+      ...(listLimit && listLimit > 0 ? { list_limit: listLimit } : {}),
+    },
+    () => {},
+    onDone,
+    onError,
+    onStatus,
+    undefined,
+    undefined,
+    undefined,
+    (data) => onResult(data as unknown as RecentArticlesResponse),
+  );
+}
+
+export interface ContentJobStatus {
+  job_id?: string | null;
+  kind?: string;
+  status: "idle" | "running" | "done" | "error" | string;
+  current?: number;
+  total?: number;
+  message?: string;
+  error?: string | null;
+  result?: RecentArticlesResponse | Record<string, unknown> | null;
+  cached_count?: number;
+  fetched_count?: number;
+  params?: Record<string, unknown>;
+  started?: boolean;
+}
+
+export function startBodiesJob(options: {
+  days: number;
+  feedIds?: string[];
+  listLimit?: number;
+  progressMessage?: string;
+  groupId?: string;
+}) {
+  return request<ContentJobStatus>("/api/articles/bodies/jobs", {
+    method: "POST",
+    body: JSON.stringify({
+      days: options.days,
+      feed_ids: options.feedIds ?? [],
+      enrich: true,
+      list_limit: options.listLimit,
+      progress_message: options.progressMessage ?? "",
+      group_id: options.groupId ?? "",
+    }),
+  });
+}
+
+export function fetchBodiesJobStatus() {
+  return request<ContentJobStatus>("/api/articles/bodies/jobs/current");
+}
+
+export function startIndexJob(days: number, llmConfig: LlmConfigPayload, feedIds?: string[]) {
+  return request<ContentJobStatus>("/api/rag/index/jobs", {
+    method: "POST",
+    body: JSON.stringify({
+      days,
+      feed_ids: feedIds ?? [],
+      llm_config: llmConfig,
+    }),
+  });
+}
+
+export function fetchIndexJobStatus() {
+  return request<ContentJobStatus>("/api/rag/index/jobs/current");
+}
+
+export async function waitForContentJob(
+  fetchStatus: () => Promise<ContentJobStatus>,
+  onProgress?: (status: ContentJobStatus) => void | Promise<void>,
+  pollIntervalMs = 800,
+): Promise<ContentJobStatus> {
+  while (true) {
+    const status = await fetchStatus();
+    if (onProgress) {
+      await onProgress(status);
+    }
+    if (status.status !== "running") {
+      return status;
+    }
+    await sleep(pollIntervalMs);
+  }
+}
+
 export interface BuildIndexResponse {
   article_count: number;
   chunk_count: number;
@@ -241,10 +381,39 @@ export function buildRagIndex(days: number, llmConfig: LlmConfigPayload, feedIds
   });
 }
 
-export function fetchStoredArticleBody(feedId: string, articleId: string) {
+export function streamBuildRagIndex(
+  days: number,
+  llmConfig: LlmConfigPayload,
+  onStatus: (status: SseStatus) => void,
+  onResult: (result: BuildIndexResponse) => void,
+  onDone: () => void,
+  onError: (message: string) => void,
+  feedIds?: string[],
+) {
+  return streamPost(
+    "/api/rag/index",
+    {
+      days,
+      feed_ids: feedIds ?? [],
+      llm_config: llmConfig,
+      stream: true,
+    },
+    () => {},
+    onDone,
+    onError,
+    onStatus,
+    undefined,
+    undefined,
+    undefined,
+    (data) => onResult(data as unknown as BuildIndexResponse),
+  );
+}
+
+export function fetchStoredArticleBody(feedId: string, articleId: string, fetch = true) {
   const params = new URLSearchParams({
     feed_id: feedId,
     article_id: articleId,
+    fetch: String(fetch),
   });
   return request<StoredArticleBody>(`/api/articles/body?${params}`);
 }
@@ -266,11 +435,15 @@ export interface ChatBody {
   summary?: string;
   days: number;
   feed_ids?: string[];
+  article_scope?: ArticleScopeItem[];
+  summarize_scope?: boolean;
   stream?: boolean;
   enable_thinking?: boolean;
   use_rag?: boolean;
   llm_config?: LlmConfigPayload;
 }
+
+export const SCOPED_SUMMARIZE_DEFAULT_MESSAGE = "请对选定文章的正文生成精简摘要";
 
 export interface RagStatusResponse {
   ready: boolean;
@@ -286,11 +459,19 @@ export function fetchRagStatus(days: number, feedIds?: string[]) {
   return request<RagStatusResponse>(`/api/rag/status?${params}`);
 }
 
+export interface ArticleScopeItem {
+  feed_id: string;
+  article_id: string;
+  title?: string;
+  url?: string;
+}
+
 export interface CachedSummaryResponse {
   summary: string;
   article_count: number;
   truncated: boolean;
   updated_at: number | null;
+  article_refs?: ArticleScopeItem[];
 }
 
 export function fetchCachedSummary(days: number, feedIds?: string[], groupIds?: string[]) {
@@ -325,12 +506,23 @@ export interface ScheduleNextRun extends ScheduleTime {
 export interface RefreshProgress {
   current: number;
   total: number;
+  feed_id?: string;
   feed_name: string;
+  last_completed_feed_id?: string;
+  completed_feed_ids?: string[];
+  scope?: string;
+  group_id?: string;
+  group_name?: string;
+}
+
+export interface RefreshFeedFailure {
+  feed_id: string;
+  feed_name: string;
+  error: string;
 }
 
 export interface FeedSchedulerConfig {
   schedules: ScheduleTime[];
-  refresh_interval_seconds?: number;
   enabled: boolean;
   next_runs?: ScheduleNextRun[];
   refresh_running?: boolean;
@@ -339,6 +531,7 @@ export interface FeedSchedulerConfig {
   last_error?: string | null;
   last_feed_count?: number;
   last_refresh_message?: string | null;
+  last_refresh_failed?: RefreshFeedFailure[];
 }
 
 export interface ZhihuCookieStatus {
@@ -352,7 +545,6 @@ export function fetchFeedSchedulerConfig() {
 
 export function updateFeedSchedulerConfig(body: {
   schedules: ScheduleTime[];
-  refresh_interval_seconds: number;
 }) {
   return request<FeedSchedulerConfig>("/api/settings/feed-scheduler", {
     method: "PUT",
@@ -427,6 +619,7 @@ export function streamChat(
   onThinking?: (content: string) => void,
   onCitations?: (items: CitationItem[]) => void,
   onPromptPreview?: (system: string) => void,
+  signal?: AbortSignal,
 ) {
   return streamPost(
     "/api/chat",
@@ -438,7 +631,20 @@ export function streamChat(
     onThinking,
     onCitations,
     onPromptPreview,
+    undefined,
+    undefined,
+    undefined,
+    signal,
   );
+}
+
+export interface RepairSourceBody {
+  feedback: string;
+  issue_types?: string[];
+  sample_url?: string;
+  stream?: boolean;
+  auto_validate?: boolean;
+  reload?: boolean;
 }
 
 export interface OnboardSourceBody {
@@ -463,6 +669,77 @@ export interface OnboardSourceResult {
   analysis?: Record<string, unknown>;
   validation?: Record<string, unknown>;
 }
+
+export type OnboardBatchItemStatus =
+  | "queued"
+  | "running"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+export interface OnboardBatchItem {
+  entry_url: string;
+  slug: string;
+  name: string;
+  status: OnboardBatchItemStatus;
+  phase: string;
+  message: string;
+  error?: string | null;
+  feed_id?: string | null;
+  job_id?: string | null;
+  skip_reason?: string | null;
+}
+
+export interface OnboardBatchStatus {
+  batch_id: string;
+  status: "running" | "done" | "cancelled";
+  total: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  running: number;
+  queued: number;
+  message: string;
+  items: OnboardBatchItem[];
+}
+
+export function startOnboardBatch(body: {
+  entry_urls: string[];
+  max_concurrency?: number;
+  auto_validate?: boolean;
+  reload?: boolean;
+  group_id?: string;
+}) {
+  return request<OnboardBatchStatus>("/api/sources/onboard/batch", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchOnboardBatch(batchId: string) {
+  return request<OnboardBatchStatus>(`/api/sources/onboard/batch/${encodeURIComponent(batchId)}`);
+}
+
+export function cancelOnboardBatch(batchId: string) {
+  return request<OnboardBatchStatus>(`/api/sources/onboard/batch/${encodeURIComponent(batchId)}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function parseOnboardUrls(text: string): string[] {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  for (const part of text.split(/[\n,]+/)) {
+    const url = part.trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    urls.push(url);
+  }
+  return urls;
+}
+
+export const ONBOARD_BATCH_MAX_SIZE = 20;
 
 export interface OnboardLogSummary {
   job_id: string;
@@ -499,6 +776,32 @@ export function getOnboardLog(jobId: string) {
 export interface StreamOnboardOptions {
   signal?: AbortSignal;
   onCancelled?: (detail: string, jobId?: string) => void;
+}
+
+export function streamRepairSource(
+  slug: string,
+  body: RepairSourceBody,
+  onStatus: (status: SseStatus) => void,
+  onDone: () => void,
+  onError: (message: string) => void,
+  onResult?: (data: OnboardSourceResult) => void,
+  options?: StreamOnboardOptions,
+) {
+  return streamPost(
+    `/api/sources/${encodeURIComponent(slug)}/repair`,
+    { ...body, stream: true },
+    () => {},
+    onDone,
+    onError,
+    onStatus,
+    undefined,
+    undefined,
+    undefined,
+    onResult as ((data: Record<string, unknown>) => void) | undefined,
+    undefined,
+    options?.onCancelled,
+    options?.signal,
+  );
 }
 
 export function streamOnboardSource(

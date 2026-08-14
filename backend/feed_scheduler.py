@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -9,20 +10,72 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 
+from time_scope import format_duration_zh
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CONFIG_PATH = DATA_DIR / "feed_scheduler.json"
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-DEFAULT_REFRESH_INTERVAL_SECONDS = 3
-MIN_REFRESH_INTERVAL_SECONDS = 0
-MAX_REFRESH_INTERVAL_SECONDS = 600
 JOB_ID_PREFIX = "feed_refresh_"
+DEFAULT_REFRESH_CONCURRENCY = max(1, int(os.getenv("FEED_REFRESH_CONCURRENCY", "8")))
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "schedules": [],
-    "refresh_interval_seconds": DEFAULT_REFRESH_INTERVAL_SECONDS,
 }
 
 logger = logging.getLogger(__name__)
+
+
+def humanize_refresh_error(raw: str) -> str:
+    """将刷新异常转成用户可读原因（常见为网络不可达/反爬）。"""
+    text = (raw or "").strip()
+    if not text:
+        return "未知错误"
+    lower = text.lower()
+    network_markers = (
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "name or service not known",
+        "nodename nor servname",
+        "getaddrinfo failed",
+        "network is unreachable",
+        "no route to host",
+        "connection refused",
+        "connection reset",
+        "connection aborted",
+        "broken pipe",
+        "ssl",
+        "certificate",
+        "proxyerror",
+        "max retries exceeded",
+        "failed to establish a new connection",
+        "remote end closed connection",
+        "urlopen error",
+        "errno 61",
+        "errno 51",
+        "errno 65",
+        "errno 8",
+        "errno -2",
+        "errno -3",
+    )
+    if any(marker in lower for marker in network_markers):
+        return f"网络无法访问或请求超时（{text}）"
+    anti_bot_markers = (
+        "cloudflare",
+        "captcha",
+        "challenge",
+        "datadome",
+        "403",
+        "401",
+        "429",
+        "access denied",
+        "blocked",
+    )
+    if any(marker in lower for marker in anti_bot_markers):
+        return f"站点拦截或访问受限（{text}）"
+    if len(text) > 180:
+        return text[:177] + "…"
+    return text
 
 
 def _normalize_schedule(entry: dict[str, Any]) -> dict[str, int] | None:
@@ -35,14 +88,6 @@ def _normalize_schedule(entry: dict[str, Any]) -> dict[str, int] | None:
     if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
         return None
     return {"hour": hour, "minute": minute, "second": second}
-
-
-def validate_refresh_interval(value: Any) -> int:
-    try:
-        interval = int(value)
-    except (TypeError, ValueError):
-        return DEFAULT_REFRESH_INTERVAL_SECONDS
-    return min(MAX_REFRESH_INTERVAL_SECONDS, max(MIN_REFRESH_INTERVAL_SECONDS, interval))
 
 
 def validate_schedules(schedules: list[dict[str, Any]]) -> list[dict[str, int]]:
@@ -91,7 +136,13 @@ class FeedSchedulerManager:
         self._refresh_progress: dict[str, Any] = {
             "current": 0,
             "total": 0,
+            "feed_id": "",
             "feed_name": "",
+            "last_completed_feed_id": "",
+            "completed_feed_ids": [],
+            "scope": "all",
+            "group_id": "",
+            "group_name": "",
         }
         self._last_refresh_result: dict[str, Any] | None = None
         self._last_run_at: float | None = None
@@ -107,10 +158,7 @@ class FeedSchedulerManager:
                 schedules = validate_schedules(data["schedules"])
             else:
                 schedules = _migrate_legacy_config(data)
-            interval = validate_refresh_interval(
-                data.get("refresh_interval_seconds", DEFAULT_REFRESH_INTERVAL_SECONDS)
-            )
-            return {"schedules": schedules, "refresh_interval_seconds": interval}
+            return {"schedules": schedules}
         except (json.JSONDecodeError, OSError):
             return dict(DEFAULT_CONFIG)
 
@@ -118,18 +166,11 @@ class FeedSchedulerManager:
         self,
         *,
         schedules: list[dict[str, int]],
-        refresh_interval_seconds: int,
     ) -> dict[str, Any]:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schedules": validate_schedules(schedules),
-            "refresh_interval_seconds": validate_refresh_interval(refresh_interval_seconds),
-        }
+        payload = {"schedules": validate_schedules(schedules)}
         CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return payload
-
-    def get_refresh_interval(self) -> int:
-        return self.load_config().get("refresh_interval_seconds", DEFAULT_REFRESH_INTERVAL_SECONDS)
 
     def start(self, client) -> None:
         self._client = client
@@ -180,7 +221,50 @@ class FeedSchedulerManager:
     def is_refresh_running(self) -> bool:
         return self._refresh_task is not None and not self._refresh_task.done()
 
-    def start_refresh_all(self, client=None) -> dict[str, Any]:
+    def start_refresh_all(self, client=None, *, days: int = 1) -> dict[str, Any]:
+        return self._start_refresh_job(
+            client,
+            feed_ids=None,
+            scope="all",
+            group_id="",
+            group_name="",
+            days=days,
+            start_message="已开始更新全部数据源，后台执行中",
+        )
+
+    def start_refresh_group(
+        self,
+        client,
+        *,
+        group_id: str,
+        group_name: str,
+        feed_ids: list[str],
+        days: int = 1,
+    ) -> dict[str, Any]:
+        if not feed_ids:
+            raise ValueError("该分组暂无数据源")
+        label = group_name or group_id
+        return self._start_refresh_job(
+            client,
+            feed_ids=feed_ids,
+            scope="group",
+            group_id=group_id,
+            group_name=label,
+            days=days,
+            start_message=f"已开始更新分组「{label}」，后台执行中",
+        )
+
+    def _start_refresh_job(
+        self,
+        client,
+        *,
+        feed_ids: list[str] | None,
+        scope: str,
+        group_id: str,
+        group_name: str,
+        start_message: str,
+        days: int = 1,
+    ) -> dict[str, Any]:
         if self.is_refresh_running():
             raise RuntimeError("已有更新任务进行中，请稍后再试")
 
@@ -189,33 +273,91 @@ class FeedSchedulerManager:
             raise RuntimeError("数据源客户端未就绪")
 
         self._last_refresh_result = None
-        self._refresh_task = asyncio.create_task(self._refresh_worker(feed_client))
-        return {
+        self._refresh_task = asyncio.create_task(
+            self._refresh_worker(
+                feed_client,
+                feed_ids=feed_ids,
+                scope=scope,
+                group_id=group_id,
+                group_name=group_name,
+                days=days,
+            )
+        )
+        payload: dict[str, Any] = {
             "started": True,
-            "message": "已开始更新全部数据源，后台执行中",
+            "message": start_message,
+            "scope": scope,
+            "days": max(1, int(days)),
         }
+        if scope == "group":
+            payload["group_id"] = group_id
+            payload["group_name"] = group_name
+            payload["feed_count"] = len(feed_ids or [])
+        return payload
 
-    async def _refresh_worker(self, feed_client) -> None:
+    async def _refresh_worker(
+        self,
+        feed_client,
+        *,
+        feed_ids: list[str] | None = None,
+        scope: str = "all",
+        group_id: str = "",
+        group_name: str = "",
+        days: int = 1,
+    ) -> None:
         try:
-            result = await asyncio.shield(self.run_refresh_all(feed_client))
+            result = await asyncio.shield(
+                self.run_refresh_feeds(
+                    feed_client,
+                    feed_ids=feed_ids,
+                    scope=scope,
+                    group_id=group_id,
+                    group_name=group_name,
+                    days=days,
+                )
+            )
             self._last_refresh_result = result
         except Exception as exc:
-            self._last_error = str(exc) or "更新全部失败"
+            self._last_error = str(exc) or "更新失败"
             self._last_refresh_result = {
                 "ok": False,
                 "feed_count": self._last_feed_count,
                 "failed": [],
                 "message": self._last_error,
             }
-            logger.error("后台更新全部失败: %s", exc)
+            logger.error("后台更新失败: %s", exc)
         finally:
             self._refresh_task = None
-            self._refresh_progress = {"current": 0, "total": 0, "feed_name": ""}
+            self._refresh_progress = {
+                "current": 0,
+                "total": 0,
+                "feed_id": "",
+                "feed_name": "",
+                "last_completed_feed_id": "",
+                "completed_feed_ids": [],
+                "scope": "all",
+                "group_id": "",
+                "group_name": "",
+            }
 
-    async def run_refresh_all(self, client=None) -> dict[str, Any]:
+    async def run_refresh_all(self, client=None, *, days: int = 1) -> dict[str, Any]:
+        return await self.run_refresh_feeds(client or self._client, days=days)
+
+    async def run_refresh_feeds(
+        self,
+        client=None,
+        *,
+        feed_ids: list[str] | None = None,
+        scope: str = "all",
+        group_id: str = "",
+        group_name: str = "",
+        days: int = 1,
+    ) -> dict[str, Any]:
         feed_client = client or self._client
         if feed_client is None:
             raise RuntimeError("数据源客户端未就绪")
+
+        refresh_days = max(1, int(days))
 
         async with self._refresh_lock:
             self._last_run_at = time.time()
@@ -223,6 +365,7 @@ class FeedSchedulerManager:
             self._last_feed_count = 0
             failed: list[dict[str, str]] = []
             no_new: list[dict[str, str]] = []
+            batch_started = time.monotonic()
 
             feeds = await feed_client.list_feeds()
             enabled_feeds = [
@@ -230,42 +373,85 @@ class FeedSchedulerManager:
                 for feed in feeds
                 if feed.get("status", 1) == 1 and feed.get("id")
             ]
+            if feed_ids is not None:
+                allowed = set(feed_ids)
+                enabled_feeds = [feed for feed in enabled_feeds if feed.get("id") in allowed]
+
             total = len(enabled_feeds)
-            self._refresh_progress = {"current": 0, "total": total, "feed_name": ""}
+            self._refresh_progress = {
+                "current": 0,
+                "total": total,
+                "feed_id": "",
+                "feed_name": "",
+                "last_completed_feed_id": "",
+                "completed_feed_ids": [],
+                "scope": scope,
+                "group_id": group_id,
+                "group_name": group_name,
+            }
 
-            for index, feed in enumerate(enabled_feeds):
-                feed_id = feed.get("id", "")
-                feed_name = feed.get("mpName", "")
-                self._refresh_progress = {
-                    "current": index + 1,
-                    "total": total,
-                    "feed_name": feed_name,
-                }
-                try:
-                    feed_result = await feed_client.refresh_feed(feed_id)
-                    self._last_feed_count += 1
-                    if not feed_result.get("has_new_content"):
-                        no_new.append({"feed_id": feed_id, "feed_name": feed_name})
-                except Exception as exc:
-                    logger.error("刷新数据源 %s 失败: %s", feed_id, exc)
-                    failed.append(
-                        {
-                            "feed_id": feed_id,
-                            "feed_name": feed_name,
-                            "error": str(exc) or "刷新失败",
-                        }
-                    )
-                delay = self.get_refresh_interval()
-                if index < total - 1 and delay > 0:
-                    await asyncio.sleep(delay)
+            if total > 0:
+                sem = asyncio.Semaphore(min(DEFAULT_REFRESH_CONCURRENCY, total))
+                completed_count = 0
+                completed_success_ids: list[str] = []
 
-            if self._last_feed_count == 0 and not feeds:
-                message = "暂无数据源"
+                async def refresh_one(feed: dict[str, Any]) -> tuple[str, str, bool, dict[str, Any] | None, str | None]:
+                    feed_id = str(feed.get("id", ""))
+                    feed_name = str(feed.get("mpName", ""))
+                    async with sem:
+                        try:
+                            feed_result = await feed_client.refresh_feed(feed_id, days=refresh_days)
+                            return feed_id, feed_name, True, feed_result, None
+                        except Exception as exc:
+                            return feed_id, feed_name, False, None, str(exc) or "刷新失败"
+
+                tasks = [asyncio.create_task(refresh_one(feed)) for feed in enabled_feeds]
+                for done in asyncio.as_completed(tasks):
+                    feed_id, feed_name, ok, feed_result, error_message = await done
+                    completed_count += 1
+                    if ok and feed_result is not None:
+                        self._last_feed_count += 1
+                        completed_success_ids.append(feed_id)
+                        if not feed_result.get("has_new_content"):
+                            no_new.append({"feed_id": feed_id, "feed_name": feed_name})
+                    else:
+                        reason = humanize_refresh_error(error_message or "刷新失败")
+                        logger.error("刷新数据源 %s 失败: %s", feed_id, reason)
+                        failed.append(
+                            {
+                                "feed_id": feed_id,
+                                "feed_name": feed_name,
+                                "error": reason,
+                            }
+                        )
+                    self._refresh_progress = {
+                        "current": completed_count,
+                        "total": total,
+                        "feed_id": feed_id,
+                        "feed_name": feed_name,
+                        "last_completed_feed_id": feed_id,
+                        "completed_feed_ids": list(completed_success_ids),
+                        "scope": scope,
+                        "group_id": group_id,
+                        "group_name": group_name,
+                    }
+
+            if self._last_feed_count == 0 and not enabled_feeds:
+                if scope == "group" and group_name:
+                    message = f"分组「{group_name}」暂无数据源"
+                elif not feeds:
+                    message = "暂无数据源"
+                else:
+                    message = "未能更新任何数据源"
+                    self._last_error = failed[0]["error"] if failed else message
             elif self._last_feed_count == 0:
                 message = "未能更新任何数据源"
                 self._last_error = failed[0]["error"] if failed else message
             else:
-                parts = [f"已更新 {self._last_feed_count} 个数据源"]
+                if scope == "group" and group_name:
+                    parts = [f"已更新分组「{group_name}」{self._last_feed_count} 个数据源"]
+                else:
+                    parts = [f"已更新 {self._last_feed_count} 个数据源"]
                 if no_new:
                     parts.append(f"{len(no_new)} 个暂无新文章")
                 if failed:
@@ -273,6 +459,9 @@ class FeedSchedulerManager:
                 message = "，".join(parts)
 
             feed_client.invalidate_article_cache()
+            elapsed_seconds = time.monotonic() - batch_started
+            duration = format_duration_zh(elapsed_seconds)
+            message = f"{message}（耗时 {duration}）"
 
             return {
                 "ok": self._last_feed_count > 0,
@@ -280,6 +469,10 @@ class FeedSchedulerManager:
                 "failed": failed,
                 "no_new": no_new,
                 "message": message,
+                "elapsed_seconds": round(elapsed_seconds, 2),
+                "scope": scope,
+                "group_id": group_id or None,
+                "group_name": group_name or None,
             }
 
     def _collect_next_runs(self, schedules: list[dict[str, int]]) -> list[dict[str, Any]]:
@@ -298,9 +491,6 @@ class FeedSchedulerManager:
         next_runs = self._collect_next_runs(schedules)
         return {
             "schedules": schedules,
-            "refresh_interval_seconds": config.get(
-                "refresh_interval_seconds", DEFAULT_REFRESH_INTERVAL_SECONDS
-            ),
             "enabled": len(schedules) > 0,
             "next_runs": next_runs,
             "refresh_running": self.is_refresh_running(),
@@ -311,13 +501,15 @@ class FeedSchedulerManager:
             "last_refresh_message": (
                 self._last_refresh_result.get("message") if self._last_refresh_result else None
             ),
+            "last_refresh_failed": (
+                self._last_refresh_result.get("failed") if self._last_refresh_result else []
+            ),
         }
 
     def update_config(
         self,
         *,
         schedules: list[dict[str, Any]],
-        refresh_interval_seconds: int | None = None,
     ) -> dict[str, Any]:
         normalized = validate_schedules(schedules)
         invalid_count = len(schedules) - len(normalized)
@@ -326,13 +518,7 @@ class FeedSchedulerManager:
         if invalid_count > 0 and not normalized:
             raise ValueError("存在无效的时间，请检查后重试")
 
-        current = self.load_config()
-        interval = validate_refresh_interval(
-            refresh_interval_seconds
-            if refresh_interval_seconds is not None
-            else current.get("refresh_interval_seconds")
-        )
-        self.save_config(schedules=normalized, refresh_interval_seconds=interval)
+        self.save_config(schedules=normalized)
         self.apply_config()
         return self.get_status()
 

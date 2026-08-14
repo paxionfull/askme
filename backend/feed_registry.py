@@ -18,6 +18,7 @@ DEFAULT_REGISTRY: dict[str, Any] = {
     "hidden_feed_ids": [],
     "groups": [],
     "group_order": [],
+    "feed_display_names": {},
     "default_digest_skill": "general-digest",
 }
 
@@ -110,6 +111,14 @@ class FeedRegistry:
         groups = data.get("groups")
         group_order = data.get("group_order")
         normalized_groups = _normalize_groups(groups if isinstance(groups, list) else [])
+        raw_display_names = data.get("feed_display_names")
+        display_names: dict[str, str] = {}
+        if isinstance(raw_display_names, dict):
+            for key, value in raw_display_names.items():
+                fid = str(key).strip()
+                name = str(value).strip()
+                if fid and name:
+                    display_names[fid] = name
         return {
             "hidden_feed_ids": [
                 _normalize_feed_id(str(item))
@@ -121,6 +130,7 @@ class FeedRegistry:
                 group_order if isinstance(group_order, list) else [],
                 normalized_groups,
             ),
+            "feed_display_names": display_names,
             "default_digest_skill": str(data.get("default_digest_skill") or "general-digest").strip(),
         }
 
@@ -155,6 +165,37 @@ class FeedRegistry:
         hidden = [item for item in (self._data.get("hidden_feed_ids") or []) if item != fid]
         self._data["hidden_feed_ids"] = hidden
         self.save()
+
+    def purge_feed(self, feed_id: str) -> None:
+        """彻底移除数据源登记：清 hidden，并从分组中剔除。
+
+        用于「同时删除 skill」场景。此时不应再 hide——否则重接时会误报「数据源已移除」。
+        """
+        fid = _normalize_feed_id(feed_id)
+        hidden = [item for item in (self._data.get("hidden_feed_ids") or []) if item != fid]
+        self._data["hidden_feed_ids"] = hidden
+        self._remove_feed_from_groups(fid)
+        names = dict(self._data.get("feed_display_names") or {})
+        names.pop(fid, None)
+        self._data["feed_display_names"] = names
+        self.save()
+
+    def display_name_for_feed(self, feed_id: str) -> str | None:
+        fid = _normalize_feed_id(feed_id)
+        names = self._data.get("feed_display_names") or {}
+        value = str(names.get(fid, "")).strip()
+        return value or None
+
+    def set_feed_display_name(self, feed_id: str, name: str) -> str:
+        fid = _normalize_feed_id(feed_id)
+        label = name.strip()
+        if not label:
+            raise ValueError("名称不能为空")
+        names = dict(self._data.get("feed_display_names") or {})
+        names[fid] = label
+        self._data["feed_display_names"] = names
+        self.save()
+        return label
 
     def default_digest_skill(self) -> str:
         return str(self._data.get("default_digest_skill") or "general-digest").strip()
@@ -199,6 +240,25 @@ class FeedRegistry:
             feed_ids = [item for item in (group.get("feed_ids") or []) if item != fid]
             updated.append({**group, "feed_ids": feed_ids})
         self._data["groups"] = updated
+
+    def assign_feed_to_group(self, feed_id: str, group_id: str | None) -> None:
+        fid = _normalize_feed_id(feed_id)
+        gid = (group_id or "").strip().lower()
+        self._remove_feed_from_groups(fid)
+        if not gid or gid == UNGROUPED_GROUP_ID:
+            self.save()
+            return
+
+        gid = _normalize_group_id(gid)
+        groups = self._data.get("groups") or []
+        for group in groups:
+            if str(group.get("id", "")) == gid:
+                feed_ids = [item for item in (group.get("feed_ids") or []) if item != fid]
+                feed_ids.append(fid)
+                group["feed_ids"] = feed_ids
+                self.save()
+                return
+        raise ValueError(f"分组不存在: {group_id}")
 
 
 feed_registry = FeedRegistry()

@@ -12,6 +12,7 @@ class BuildIndexRequest(BaseModel):
     days: int = Field(default=1, ge=1, le=30)
     feed_ids: list[str] = Field(default_factory=list)
     llm_config: LlmConfigInput | None = None
+    stream: bool = False
 
 
 class ChatMessage(BaseModel):
@@ -30,12 +31,21 @@ class SummarizeRequest(BaseModel):
     use_cached_context: bool = True
 
 
+class ArticleScopeItem(BaseModel):
+    feed_id: str = Field(..., min_length=1)
+    article_id: str = Field(..., min_length=1)
+    title: str = ""
+    url: str = ""
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1)
     system_prompt: str = ""
     summary: str = ""
     days: int = Field(default=1, ge=1, le=30)
     feed_ids: list[str] = Field(default_factory=list)
+    article_scope: list[ArticleScopeItem] = Field(default_factory=list)
+    summarize_scope: bool = False
     stream: bool = True
     enable_thinking: bool = False
     use_rag: bool = True
@@ -51,6 +61,16 @@ class LlmModelsRequest(BaseModel):
     api_key: str = Field(..., min_length=1)
 
 
+class RecentArticlesRequest(BaseModel):
+    days: int = Field(default=1, ge=1, le=30)
+    feed_ids: list[str] = Field(default_factory=list)
+    enrich: bool = False
+    stream: bool = True
+    list_limit: int | None = Field(default=None, ge=1, le=100)
+    progress_message: str = ""
+    group_id: str = ""
+
+
 class OnboardSourceRequest(BaseModel):
     entry_url: str = Field(..., min_length=1)
     slug: str | None = None
@@ -60,7 +80,40 @@ class OnboardSourceRequest(BaseModel):
     stream: bool = True
     auto_validate: bool = True
     reload: bool = True
+    auto_repair: bool = True
     llm_config: LlmConfigInput | None = None
+    group_id: str | None = None
+
+
+class OnboardBatchRequest(BaseModel):
+    entry_urls: list[str] = Field(..., min_length=1, max_length=20)
+    max_concurrency: int = Field(default=5, ge=1, le=10)
+    auto_validate: bool = True
+    reload: bool = True
+    auto_repair: bool = True
+    group_id: str | None = None
+
+
+class RefreshGroupRequest(BaseModel):
+    group_id: str = Field(..., min_length=1)
+    days: int = Field(default=1, ge=1, le=30)
+
+
+class RefreshAllRequest(BaseModel):
+    days: int = Field(default=1, ge=1, le=30)
+
+
+class FeedRenameRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+
+
+class RepairSourceRequest(BaseModel):
+    feedback: str = Field(..., min_length=1)
+    issue_types: list[str] = Field(default_factory=list)
+    sample_url: str = ""
+    stream: bool = True
+    auto_validate: bool = True
+    reload: bool = True
 
 
 class FeedGroupInput(BaseModel):

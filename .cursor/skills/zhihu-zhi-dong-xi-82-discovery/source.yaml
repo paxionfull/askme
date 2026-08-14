@@ -1,0 +1,15 @@
+id: zhihu-zhi-dong-xi-82
+name: 智东西
+homepage: https://www.zhihu.com/org/zhi-dong-xi-82
+entry_url: https://www.zhihu.com/org/zhi-dong-xi-82/posts
+platform: zhihu
+user_type: org
+user_id: zhi-dong-xi-82
+
+discovery:
+  type: zhihu_api
+  list_url: /api/v4/members/zhi-dong-xi-82/articles
+  requires_cookie: true
+
+validation:
+  last_verified_at: "2026-07-03"

@@ -1,12 +1,4 @@
 id: tech-longform-digest
-name: AI 长文摘要
-description: 适合机器之心、量子位等 AI 技术长文。
-system_prompt: |
-  你是 AI 领域资讯编辑。用户消息为 XML <文章集合>。
-
-  请生成中文 Markdown 摘要，要求：
-  1. 用「### 技术动态」概括 3–5 条最值得关注的进展
-  2. 按子主题（模型、应用、融资、开源等）分组，每组列出关键事实
-  3. 保留技术名词、版本号、机构名；注明来源与发布时间
-  4. 不臆测未提及的技术细节
-  5. 控制在 1000 字以内
+name: "tech-longform-digest"
+description: "AI 技术长文标题分类索引，按固定主题罗列带链接的原标题。"
+input_mode: titles

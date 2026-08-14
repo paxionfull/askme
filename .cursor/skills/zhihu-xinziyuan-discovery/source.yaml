@@ -8,7 +8,7 @@ user_id: xin-zhi-yuan-88-3
 
 discovery:
   type: zhihu_api
-  list_url: /api/v4/org/xin-zhi-yuan-88-3/articles
+  list_url: /api/v4/members/xin-zhi-yuan-88-3/articles
   requires_cookie: true
 
 validation:

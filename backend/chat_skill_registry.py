@@ -16,7 +16,7 @@ from skill_md import (
 CHAT_SKILL_ID = "chat-rag"
 BUILTIN_DIR = Path(__file__).resolve().parent.parent / ".cursor" / "skills" / CHAT_SKILL_ID
 USER_DIR = Path(__file__).resolve().parent.parent / "data" / "chat-skills" / CHAT_SKILL_ID
-DEFAULT_DESCRIPTION = "对话问答时的角色 system prompt（引用规则由系统自动追加）"
+DEFAULT_DESCRIPTION = "对话时的角色 system prompt（问答与选定文章摘要共用；引用硬性规则由系统在问答时自动追加）"
 
 
 def _build_skill_md(name: str, description: str, body: str) -> str:

@@ -8,9 +8,10 @@ import json
 import re
 import sys
 import time
-import urllib.request
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
+from http_client import fetch_bytes, fetch_json, fetch_text, sleep_between_pages
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 BASE_URL = "https://36kr.com"
@@ -29,7 +30,7 @@ FEED_META = {
     "source": "website",
     "entryUrl": ENTRY_URL,
 }
-REFRESH_DEFAULTS = {"max_pages": 3, "per": 20}
+REFRESH_DEFAULTS = {"max_pages": 3, "per": 50}
 
 DEFAULT_HEADERS = {
     "Accept": "application/json",
@@ -48,9 +49,12 @@ def _request_json(url: str, *, data: dict | None = None, referer: str | None = N
     if referer:
         headers["Referer"] = referer
     body = json.dumps(data).encode("utf-8") if data is not None else None
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST" if body else "GET")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        raw = resp.read().decode("utf-8")
+    raw = fetch_bytes(
+        url,
+        headers=headers,
+        data=body,
+        method="POST" if body else "GET",
+    ).decode("utf-8")
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("响应不是 JSON 对象")
@@ -66,9 +70,7 @@ def _request_html(url: str, *, referer: str | None = None) -> str:
     }
     if referer:
         headers["Referer"] = referer
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+    return fetch_text(url, headers=headers)
 
 
 def _format_published_at(value: int | str | None) -> str:
@@ -205,7 +207,7 @@ def normalize_list_item(item: dict) -> dict:
     }
 
 
-def fetch_article_detail(article_id: str) -> dict:
+def fetch_article_detail(article_id: str, **hints) -> dict:
     item_id = str(article_id).strip()
     page_url = _article_url(item_id)
     html = _request_html(page_url, referer=f"{BASE_URL}/information/web_news/")

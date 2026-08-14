@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchFeedSchedulerConfig,
-  FEEDS_NEED_RELOAD_KEY,
-  refreshAllFeeds,
   updateFeedSchedulerConfig,
-  waitForRefreshAllComplete,
   type FeedSchedulerConfig,
   type ScheduleTime,
 } from "../api";
+import { useFeedRefresh } from "../contexts/FeedRefreshContext";
+import { useDigest } from "../contexts/DigestContext";
 
 interface ScheduleDraft extends ScheduleTime {
   id: string;
@@ -56,13 +55,6 @@ function clampTimePart(value: number, max: number): number {
   return Math.min(max, Math.max(0, Math.trunc(value)));
 }
 
-const DEFAULT_REFRESH_INTERVAL_SECONDS = 3;
-
-function clampRefreshInterval(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_REFRESH_INTERVAL_SECONDS;
-  return Math.min(600, Math.max(0, Math.trunc(value)));
-}
-
 function parseDrafts(drafts: ScheduleDraft[]): ScheduleTime[] {
   return drafts.map((item) => ({
     hour: clampTimePart(item.hour, 23),
@@ -74,19 +66,24 @@ function parseDrafts(drafts: ScheduleDraft[]): ScheduleTime[] {
 export default function FeedSchedulerSection() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [refreshingAll, setRefreshingAll] = useState(false);
-  const [refreshMessage, setRefreshMessage] = useState("");
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const {
+    refreshBusy,
+    progress: liveProgress,
+    statusMessage,
+    resultMessage,
+    error: refreshError,
+    startRefreshAll,
+  } = useFeedRefresh();
+  const { days } = useDigest();
 
   const [drafts, setDrafts] = useState<ScheduleDraft[]>([]);
-  const [draftInterval, setDraftInterval] = useState(DEFAULT_REFRESH_INTERVAL_SECONDS);
   const [status, setStatus] = useState<FeedSchedulerConfig | null>(null);
 
   const applyServerConfig = useCallback((config: FeedSchedulerConfig) => {
     setStatus(config);
     setDrafts(toDrafts(config.schedules ?? []));
-    setDraftInterval(config.refresh_interval_seconds ?? DEFAULT_REFRESH_INTERVAL_SECONDS);
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -110,16 +107,12 @@ export default function FeedSchedulerSection() {
 
   const isDirty = useMemo(() => {
     if (!status) return false;
-    const schedulesChanged = !schedulesEqual(status.schedules ?? [], draftSchedules);
-    const intervalChanged =
-      clampRefreshInterval(draftInterval) !==
-      clampRefreshInterval(status.refresh_interval_seconds ?? DEFAULT_REFRESH_INTERVAL_SECONDS);
-    return schedulesChanged || intervalChanged;
-  }, [status, draftSchedules, draftInterval]);
+    return !schedulesEqual(status.schedules ?? [], draftSchedules);
+  }, [status, draftSchedules]);
 
-  const refreshProgress = status?.refresh_progress;
+  const refreshProgress = liveProgress ?? status?.refresh_progress;
   const showProgressBar =
-    (refreshingAll || status?.refresh_running) &&
+    (refreshBusy || status?.refresh_running) &&
     refreshProgress &&
     refreshProgress.total > 0;
   const progressPercent = showProgressBar
@@ -158,7 +151,6 @@ export default function FeedSchedulerSection() {
     try {
       const result = await updateFeedSchedulerConfig({
         schedules: draftSchedules,
-        refresh_interval_seconds: clampRefreshInterval(draftInterval),
       });
       applyServerConfig(result);
       setSaved(true);
@@ -170,39 +162,20 @@ export default function FeedSchedulerSection() {
   }
 
   async function handleRefreshAllNow() {
-    setRefreshingAll(true);
     setError("");
-    setRefreshMessage("");
     setSaved(false);
     try {
       if (isDirty) {
         const savedConfig = await updateFeedSchedulerConfig({
           schedules: draftSchedules,
-          refresh_interval_seconds: clampRefreshInterval(draftInterval),
         });
         applyServerConfig(savedConfig);
       }
-
-      const start = await refreshAllFeeds();
-      setRefreshMessage(start.message);
-
-      const status = await waitForRefreshAllComplete((progress) => {
-        applyServerConfig(progress);
-      });
-      applyServerConfig(status);
-
-      const message = status.last_refresh_message || start.message;
-      if (status.last_error && (status.last_feed_count ?? 0) === 0) {
-        setRefreshMessage("");
-        setError(message);
-      } else {
-        setRefreshMessage(message);
-        sessionStorage.setItem(FEEDS_NEED_RELOAD_KEY, "1");
-      }
+      await startRefreshAll(days);
+      const latest = await fetchFeedSchedulerConfig();
+      applyServerConfig(latest);
     } catch (err) {
       setError(err instanceof Error ? err.message : "立即更新失败");
-    } finally {
-      setRefreshingAll(false);
     }
   }
 
@@ -225,11 +198,11 @@ export default function FeedSchedulerSection() {
         </button>
         <button
           type="button"
-          disabled={refreshingAll}
+          disabled={refreshBusy}
           onClick={() => void handleRefreshAllNow()}
           className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
         >
-          {refreshingAll ? "更新中..." : "立即更新"}
+          {refreshBusy ? "更新中..." : "立即更新"}
         </button>
       </div>
 
@@ -237,9 +210,10 @@ export default function FeedSchedulerSection() {
         <div className="mt-3">
           <div className="mb-1 flex items-center justify-between text-xs text-slate-600">
             <span>
-              {refreshProgress.feed_name
-                ? `正在更新：${refreshProgress.feed_name}`
-                : "更新中…"}
+              {statusMessage ||
+                (refreshProgress.feed_name
+                  ? `正在更新：${refreshProgress.feed_name}`
+                  : "更新中…")}
             </span>
             <span>
               {refreshProgress.current}/{refreshProgress.total}
@@ -258,22 +232,6 @@ export default function FeedSchedulerSection() {
         <p className="mt-4 text-sm text-slate-500">加载中...</p>
       ) : (
         <>
-          <label className="mt-4 flex flex-wrap items-center gap-2 text-sm text-slate-700">
-            <span>数据源拉取间隔</span>
-            <input
-              type="number"
-              min={0}
-              max={600}
-              value={draftInterval}
-              onChange={(e) => {
-                setDraftInterval(Number(e.target.value));
-                setSaved(false);
-              }}
-              className="w-20 rounded border border-slate-300 px-2 py-1 text-sm text-slate-900"
-            />
-            <span className="text-xs text-slate-500">秒（定时更新与「立即更新」均生效，0 表示无间隔）</span>
-          </label>
-
           {drafts.length === 0 ? (
             <p className="mt-4 text-sm text-slate-500">暂无定时，点击「添加定时」创建。</p>
           ) : (
@@ -362,11 +320,27 @@ export default function FeedSchedulerSection() {
               {status.last_error && (
                 <div className="mt-1 text-red-600">上次错误：{status.last_error}</div>
               )}
+              {(status.last_refresh_failed?.length ?? 0) > 0 && (
+                <div className="mt-1 whitespace-pre-wrap text-amber-700">
+                  {[
+                    `上次失败 ${status.last_refresh_failed!.length} 个：`,
+                    ...status.last_refresh_failed!.map(
+                      (item) => `· ${item.feed_name || item.feed_id}：${item.error || "未知错误"}`,
+                    ),
+                  ].join("\n")}
+                </div>
+              )}
             </div>
           )}
 
-          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-          {refreshMessage && <p className="mt-3 text-sm text-green-700">{refreshMessage}</p>}
+          {error && <p className="mt-3 whitespace-pre-wrap text-sm text-red-600">{error}</p>}
+          {refreshError && (
+            <p className="mt-3 whitespace-pre-wrap text-sm text-amber-800">{refreshError}</p>
+          )}
+          {statusMessage && <p className="mt-3 text-sm text-blue-700">{statusMessage}</p>}
+          {resultMessage && !statusMessage && (
+            <p className="mt-3 text-sm text-green-700">{resultMessage}</p>
+          )}
           {saved && !isDirty && <p className="mt-3 text-sm text-green-700">定时设置已保存</p>}
 
           <div className="mt-4 flex justify-end">

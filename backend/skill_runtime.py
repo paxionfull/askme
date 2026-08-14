@@ -16,6 +16,17 @@ def get_digest_system_prompt(skill_id: str) -> str:
     return get_fallback_digest_prompt()
 
 
+def get_digest_input_mode(skill_id: str) -> str:
+    from digest_skill_registry import get_digest_skill
+
+    item = get_digest_skill(skill_id)
+    if item:
+        mode = str(item.get("input_mode") or "full").strip()
+        if mode:
+            return mode
+    return "full"
+
+
 def get_chat_role_prompt() -> str:
     """Chat：返回 SKILL.md 角色层；RAG 规则与上下文由 chat_service 追加。"""
     from chat_skill_registry import get_chat_instructions

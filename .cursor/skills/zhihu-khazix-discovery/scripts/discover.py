@@ -9,6 +9,8 @@ import sys
 
 import zhihu_common as z
 
+from http_client import fetch_bytes, fetch_json, fetch_text, sleep_between_pages
+
 USER_ID = "Khazix"
 USER_TYPE = "people"
 PAGE_URL = f"https://www.zhihu.com/{USER_TYPE}/{USER_ID}/posts"
@@ -53,7 +55,7 @@ def normalize_list_item(item: dict) -> dict:
     }
 
 
-def fetch_article_detail(article_id: str) -> dict:
+def fetch_article_detail(article_id: str, **hints) -> dict:
     return z.fetch_article_by_id(article_id, page_url=PAGE_URL)
 
 

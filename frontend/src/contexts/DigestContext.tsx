@@ -7,19 +7,24 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { flushSync } from "react-dom";
 import {
-  buildRagIndex,
+  fetchBodiesJobStatus,
   fetchCachedSummary,
   fetchFeeds,
+  fetchIndexJobStatus,
+  fetchRagStatus,
   fetchRecentArticles,
-  streamSummarize,
+  startBodiesJob,
+  startIndexJob,
+  waitForContentJob,
+  type ContentJobStatus,
   type Feed,
   type FeedGroup,
+  type RecentArticlesResponse,
   type SummarizeBody,
+  streamSummarize,
 } from "../api";
-import { getLlmConfigPayload, useSettings, type DefaultDays } from "../hooks/useSettings";
-import { useStoredFlag } from "../hooks/useStoredFlag";
+import { getLlmConfigPayload, useSettings, type DefaultDays, normalizeDefaultDays } from "../hooks/useSettings";
 import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
 
 type SummaryPhase = "idle" | "loading_articles" | "generating";
@@ -70,13 +75,25 @@ function persistGroupIds(ids: string[]) {
   localStorage.setItem(SELECTED_GROUPS_KEY, JSON.stringify(ids));
 }
 
-function reconcileSelectedIds(options: SummaryGroupOption[], stored: string[] | null): string[] {
+function arraysEqual(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function reconcileSelectedIds(
+  options: SummaryGroupOption[],
+  stored: string[] | null,
+  current: string[] = [],
+): string[] {
   const valid = new Set(options.map((option) => option.id));
   const fromStored = (stored ?? []).filter((id) => valid.has(id));
-  if (fromStored.length > 0) {
-    return fromStored;
-  }
-  return options.map((option) => option.id);
+  // 单选：只保留第一个有效分组；无历史则默认首个有文章的分组
+  const next =
+    fromStored.length > 0
+      ? [fromStored[0]]
+      : options.length > 0
+        ? [options[0].id]
+        : [];
+  return arraysEqual(next, current) ? current : next;
 }
 
 interface DigestContextValue {
@@ -84,10 +101,11 @@ interface DigestContextValue {
   setDays: (days: DefaultDays) => void;
   summaryGroupOptions: SummaryGroupOption[];
   selectedGroupIds: string[];
-  toggleSummaryGroup: (groupId: string) => void;
-  selectAllSummaryGroups: () => void;
+  selectedGroupId: string | null;
+  setSelectedSummaryGroup: (groupId: string) => void;
   reloadSummaryGroups: () => Promise<void>;
   loadingBodies: boolean;
+  loadingBodiesGroupId: string | null;
   loadingIndex: boolean;
   loadError: string;
   truncated: boolean;
@@ -95,32 +113,46 @@ interface DigestContextValue {
   bodyCount: number;
   cachedCount: number;
   fetchedCount: number;
+  bodyProgress: { current: number; total: number; message: string };
   bodiesReady: boolean;
   indexReady: boolean;
   indexChunkCount: number;
   indexStatusMessage: string;
+  indexProgress: { current: number; total: number; message: string };
   summary: string;
   thinking: string;
   generating: boolean;
   statusMessage: string;
   summaryError: string;
   digestBusy: boolean;
-  loadBodies: () => Promise<void>;
+  loadBodies: (options?: {
+    feedIds?: string[];
+    groupId?: string;
+    groupName?: string;
+    listLimit?: number;
+  }) => Promise<{
+    article_count: number;
+    meta_count?: number;
+    cached_count?: number;
+    fetched_count?: number;
+  } | null>;
   buildIndex: () => Promise<void>;
   startSummarize: () => Promise<void>;
   clearErrors: () => void;
-  enableDeepThinking: boolean;
-  setEnableDeepThinking: (value: boolean) => void;
 }
 
 const DigestContext = createContext<DigestContextValue | null>(null);
 
 export function DigestProvider({ children }: { children: ReactNode }) {
   const { settings } = useSettings();
-  const [days, setDays] = useState<DefaultDays>(settings.defaultDays);
+  const [days, setDaysState] = useState<DefaultDays>(normalizeDefaultDays(settings.defaultDays));
+  const setDays = useCallback((value: DefaultDays) => {
+    setDaysState(normalizeDefaultDays(value));
+  }, []);
   const [summaryGroupOptions, setSummaryGroupOptions] = useState<SummaryGroupOption[]>([]);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const [loadingBodies, setLoadingBodies] = useState(false);
+  const [loadingBodiesGroupId, setLoadingBodiesGroupId] = useState<string | null>(null);
   const [loadingIndex, setLoadingIndex] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [truncated, setTruncated] = useState(false);
@@ -128,10 +160,12 @@ export function DigestProvider({ children }: { children: ReactNode }) {
   const [bodyCount, setBodyCount] = useState(0);
   const [cachedCount, setCachedCount] = useState(0);
   const [fetchedCount, setFetchedCount] = useState(0);
+  const [bodyProgress, setBodyProgress] = useState({ current: 0, total: 0, message: "" });
   const [bodiesLoadedForDays, setBodiesLoadedForDays] = useState<number | null>(null);
   const [indexBuiltForDays, setIndexBuiltForDays] = useState<number | null>(null);
   const [indexChunkCount, setIndexChunkCount] = useState(0);
   const [indexStatusMessage, setIndexStatusMessage] = useState("");
+  const [indexProgress, setIndexProgress] = useState({ current: 0, total: 0, message: "" });
 
   const [summary, setSummary] = useState("");
   const [thinking, setThinking] = useState("");
@@ -142,9 +176,10 @@ export function DigestProvider({ children }: { children: ReactNode }) {
 
   const summaryRef = useRef("");
   const thinkingRef = useRef("");
+  const generatingRef = useRef(false);
   const indexBuildInFlightRef = useRef(false);
   const indexBuildGenerationRef = useRef(0);
-  const [enableDeepThinking, setEnableDeepThinking] = useStoredFlag("askme.digest.enableThinking");
+  const bodiesInFlightRef = useRef(false);
 
   const bodiesReady = bodiesLoadedForDays === days && bodyCount > 0;
   const indexReady = indexBuiltForDays === days && indexChunkCount > 0;
@@ -156,8 +191,14 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       const options = buildSummaryGroupOptions(data.feeds, data.groups);
       setSummaryGroupOptions(options);
       setSelectedGroupIds((current) => {
-        const next = reconcileSelectedIds(options, current.length > 0 ? current : loadStoredGroupIds());
-        persistGroupIds(next);
+        const next = reconcileSelectedIds(
+          options,
+          current.length > 0 ? current : loadStoredGroupIds(),
+          current,
+        );
+        if (!arraysEqual(next, current)) {
+          persistGroupIds(next);
+        }
         return next;
       });
     } catch {
@@ -167,27 +208,63 @@ export function DigestProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setDays(settings.defaultDays);
-  }, [settings.defaultDays]);
+    setDays(normalizeDefaultDays(settings.defaultDays));
+  }, [settings.defaultDays, setDays]);
 
   useEffect(() => {
     void reloadSummaryGroups();
   }, [reloadSummaryGroups]);
 
   useEffect(() => {
-    setBodiesLoadedForDays(null);
-    setBodyCount(0);
-    setMetaCount(0);
-    setCachedCount(0);
-    setFetchedCount(0);
-    setTruncated(false);
-    if (!indexBuildInFlightRef.current) {
-      setIndexBuiltForDays(null);
-      setIndexChunkCount(0);
+    let cancelled = false;
+
+    async function syncScopeFromBackend() {
+      setBodiesLoadedForDays(null);
+      setBodyCount(0);
+      setMetaCount(0);
+      setCachedCount(0);
+      setFetchedCount(0);
+      setTruncated(false);
+      if (!indexBuildInFlightRef.current) {
+        setIndexBuiltForDays(null);
+        setIndexChunkCount(0);
+      }
+
+      try {
+        const data = await fetchRecentArticles(days, undefined, false);
+        if (cancelled) return;
+
+        const items = data.articles ?? [];
+        const bodyItems = items.filter((item) => item.has_body);
+        setMetaCount(data.meta_count ?? items.length);
+        if (bodyItems.length > 0) {
+          setBodiesLoadedForDays(days);
+          setBodyCount(bodyItems.length);
+        }
+
+        const rag = await fetchRagStatus(days);
+        if (cancelled || indexBuildInFlightRef.current) return;
+        if (rag.ready && rag.chunk_count > 0) {
+          setIndexBuiltForDays(days);
+          setIndexChunkCount(rag.chunk_count);
+        }
+      } catch {
+        // 忽略恢复失败，用户可手动重新加载
+      }
     }
+
+    void syncScopeFromBackend();
+    return () => {
+      cancelled = true;
+    };
   }, [days]);
 
+  const selectedGroupIdsKey = selectedGroupIds.join("\0");
+
   const loadCachedSummary = useCallback(async () => {
+    if (generatingRef.current) {
+      return;
+    }
     if (selectedGroupIds.length === 0) {
       setSummary("");
       summaryRef.current = "";
@@ -195,36 +272,29 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     }
     try {
       const data = await fetchCachedSummary(days, undefined, selectedGroupIds);
+      if (generatingRef.current) {
+        return;
+      }
       setSummary(data.summary ?? "");
       summaryRef.current = data.summary ?? "";
     } catch {
+      if (generatingRef.current) {
+        return;
+      }
       setSummary("");
       summaryRef.current = "";
     }
-  }, [days, selectedGroupIds]);
+  }, [days, selectedGroupIds, selectedGroupIdsKey]);
 
   useEffect(() => {
     void loadCachedSummary();
   }, [loadCachedSummary]);
 
-  const toggleSummaryGroup = useCallback((groupId: string) => {
-    setSelectedGroupIds((current) => {
-      const next = current.includes(groupId)
-        ? current.filter((id) => id !== groupId)
-        : [...current, groupId];
-      persistGroupIds(next);
-      return next;
-    });
+  const setSelectedSummaryGroup = useCallback((groupId: string) => {
+    const next = groupId ? [groupId] : [];
+    persistGroupIds(next);
+    setSelectedGroupIds(next);
   }, []);
-
-  const selectAllSummaryGroups = useCallback(() => {
-    setSelectedGroupIds((current) => {
-      const allIds = summaryGroupOptions.map((option) => option.id);
-      const next = current.length === allIds.length ? [] : allIds;
-      persistGroupIds(next);
-      return next;
-    });
-  }, [summaryGroupOptions]);
 
   const resetIndexState = useCallback(() => {
     if (indexBuildInFlightRef.current) {
@@ -234,85 +304,234 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     setIndexChunkCount(0);
   }, []);
 
-  const loadBodies = useCallback(async () => {
-    setLoadingBodies(true);
-    setLoadError("");
-    setSummaryError("");
-    resetIndexState();
-    try {
-      const data = await fetchRecentArticles(days, undefined, true);
-      setTruncated(data.truncated);
-      setMetaCount(data.meta_count ?? data.article_count);
-      setBodyCount(data.article_count);
-      setCachedCount(data.cached_count ?? 0);
-      setFetchedCount(data.fetched_count ?? 0);
-      if (data.article_count > 0) {
-        setBodiesLoadedForDays(days);
-      } else {
-        setBodiesLoadedForDays(null);
-        setLoadError(
-          data.meta_count
-            ? "未能加载到含正文的文章，请先刷新数据源订阅"
-            : "所选时间范围内暂无文章",
-        );
+  const applyBodiesDone = useCallback(
+    async (status: ContentJobStatus, scoped: boolean) => {
+      if (status.status === "error") {
+        if (!scoped) {
+          setBodiesLoadedForDays(null);
+          setBodyCount(0);
+        }
+        setLoadError(status.error || status.message || "拉取正文失败");
+        return null;
       }
-      await loadCachedSummary();
-    } catch (err) {
-      setBodiesLoadedForDays(null);
-      setBodyCount(0);
-      setLoadError(err instanceof Error ? err.message : "加载正文失败");
-    } finally {
+      const data = (status.result || null) as RecentArticlesResponse | null;
+      if (!data) {
+        if (!scoped) {
+          setBodiesLoadedForDays(null);
+          setBodyCount(0);
+        }
+        setLoadError(status.error || "拉取正文失败");
+        return null;
+      }
+      if (!scoped) {
+        setTruncated(data.truncated);
+        setMetaCount(data.meta_count ?? data.article_count);
+        setBodyCount(data.article_count);
+        setCachedCount(data.cached_count ?? 0);
+        setFetchedCount(data.fetched_count ?? 0);
+        if (data.article_count > 0) {
+          setBodiesLoadedForDays(days);
+        } else {
+          setBodiesLoadedForDays(null);
+          setLoadError(
+            data.meta_count
+              ? "未能拉取到含正文的文章，请先刷新数据源订阅"
+              : "所选时间范围内暂无文章",
+          );
+        }
+        await loadCachedSummary();
+      }
+      return data;
+    },
+    [days, loadCachedSummary],
+  );
+
+  const watchBodiesJob = useCallback(
+    async (scoped: boolean) => {
+      const finalStatus = await waitForContentJob(fetchBodiesJobStatus, (status) => {
+        setLoadingBodies(true);
+        setBodyProgress({
+          current: status.current ?? 0,
+          total: status.total ?? 0,
+          message: status.message || "正在拉取正文…",
+        });
+        if (!scoped) {
+          if (typeof status.cached_count === "number") {
+            setCachedCount(status.cached_count);
+          }
+          if (typeof status.fetched_count === "number") {
+            setFetchedCount(status.fetched_count);
+          }
+        }
+        const groupId = String((status.params as { group_id?: string } | undefined)?.group_id || "");
+        setLoadingBodiesGroupId(groupId || null);
+      });
+      const data = await applyBodiesDone(finalStatus, scoped);
+      setBodyProgress({ current: 0, total: 0, message: "" });
       setLoadingBodies(false);
+      setLoadingBodiesGroupId(null);
+      bodiesInFlightRef.current = false;
+      return data;
+    },
+    [applyBodiesDone],
+  );
+
+  const loadBodies = useCallback(
+    async (options?: {
+      feedIds?: string[];
+      groupId?: string;
+      groupName?: string;
+      listLimit?: number;
+    }) => {
+      if (bodiesInFlightRef.current) return null;
+      bodiesInFlightRef.current = true;
+
+      const feedIds = options?.feedIds;
+      const scoped = Boolean(feedIds?.length);
+      const groupId = options?.groupId ?? null;
+      const groupName = options?.groupName?.trim() || "";
+      const listLimit = options?.listLimit;
+      const progressLabel = groupName
+        ? `正在拉取分组「${groupName}」列表内文章正文…`
+        : "正在拉取正文…";
+
+      setLoadingBodies(true);
+      setLoadingBodiesGroupId(groupId);
+      setLoadError("");
+      setSummaryError("");
+      setBodyProgress({ current: 0, total: 0, message: progressLabel });
+      if (!scoped) {
+        resetIndexState();
+      }
+      try {
+        const started = await startBodiesJob({
+          days,
+          feedIds,
+          listLimit,
+          progressMessage: progressLabel,
+          groupId: groupId || undefined,
+        });
+        if (started.status === "running" || started.started === false) {
+          // already running or just started — always poll to completion
+          return await watchBodiesJob(scoped);
+        }
+        return await applyBodiesDone(started, scoped);
+      } catch (err) {
+        if (!scoped) {
+          setBodiesLoadedForDays(null);
+          setBodyCount(0);
+        }
+        setLoadError(err instanceof Error ? err.message : "拉取正文失败");
+        setBodyProgress({ current: 0, total: 0, message: "" });
+        setLoadingBodies(false);
+        setLoadingBodiesGroupId(null);
+        bodiesInFlightRef.current = false;
+        return null;
+      }
+    },
+    [applyBodiesDone, days, resetIndexState, watchBodiesJob],
+  );
+
+  const watchIndexJob = useCallback(async () => {
+    const generation = indexBuildGenerationRef.current;
+    const finalStatus = await waitForContentJob(fetchIndexJobStatus, (status) => {
+      if (generation !== indexBuildGenerationRef.current) return;
+      setLoadingIndex(true);
+      setIndexProgress({
+        current: status.current ?? 0,
+        total: status.total ?? 0,
+        message: status.message || "正在建立向量索引…",
+      });
+      setIndexStatusMessage(status.message || "正在建立向量索引，可切换页面…");
+    });
+    if (generation !== indexBuildGenerationRef.current) return;
+    if (finalStatus.status === "error") {
+      setIndexBuiltForDays(null);
+      setIndexChunkCount(0);
+      setLoadError(finalStatus.error || finalStatus.message || "建立索引失败");
+    } else {
+      const result = finalStatus.result as { chunk_count?: number } | null;
+      setIndexChunkCount(result?.chunk_count ?? 0);
+      setIndexBuiltForDays(days);
     }
-  }, [days, loadCachedSummary, resetIndexState]);
+    setIndexStatusMessage("");
+    setIndexProgress({ current: 0, total: 0, message: "" });
+    indexBuildInFlightRef.current = false;
+    setLoadingIndex(false);
+  }, [days]);
 
   const buildIndex = useCallback(async () => {
     if (bodiesLoadedForDays !== days || bodyCount <= 0) return;
     if (indexBuildInFlightRef.current) return;
 
-    const generation = ++indexBuildGenerationRef.current;
+    ++indexBuildGenerationRef.current;
     indexBuildInFlightRef.current = true;
     setLoadingIndex(true);
     setLoadError("");
+    setIndexProgress({ current: 0, total: 0, message: "正在建立向量索引…" });
     setIndexStatusMessage("正在建立向量索引，可切换页面…");
     try {
       const llmConfig = getLlmConfigPayload();
       if (!llmConfig.embedding_model?.trim()) {
         throw new Error("请先在设置页选择并保存 Embedding 模型");
       }
-      const result = await buildRagIndex(days, llmConfig);
-      if (generation !== indexBuildGenerationRef.current) {
-        return;
-      }
-      setIndexChunkCount(result.chunk_count);
-      setIndexBuiltForDays(days);
-      setIndexStatusMessage("");
+      await startIndexJob(days, llmConfig);
+      await watchIndexJob();
     } catch (err) {
-      if (generation !== indexBuildGenerationRef.current) {
-        return;
-      }
       setIndexBuiltForDays(null);
       setIndexChunkCount(0);
       setLoadError(err instanceof Error ? err.message : "建立索引失败");
       setIndexStatusMessage("");
-    } finally {
-      if (generation === indexBuildGenerationRef.current) {
-        indexBuildInFlightRef.current = false;
-        setLoadingIndex(false);
-      }
+      setIndexProgress({ current: 0, total: 0, message: "" });
+      indexBuildInFlightRef.current = false;
+      setLoadingIndex(false);
     }
-  }, [bodyCount, bodiesLoadedForDays, days]);
+  }, [bodyCount, bodiesLoadedForDays, days, watchIndexJob]);
+
+  // 刷新后恢复正文 / 索引进度条
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [bodiesStatus, indexStatus] = await Promise.all([
+          fetchBodiesJobStatus(),
+          fetchIndexJobStatus(),
+        ]);
+        if (cancelled) return;
+        if (bodiesStatus.status === "running" && !bodiesInFlightRef.current) {
+          bodiesInFlightRef.current = true;
+          const scoped = Boolean(
+            Array.isArray((bodiesStatus.params as { feed_ids?: string[] } | undefined)?.feed_ids) &&
+              ((bodiesStatus.params as { feed_ids?: string[] }).feed_ids?.length ?? 0) > 0,
+          );
+          void watchBodiesJob(scoped);
+        }
+        if (indexStatus.status === "running" && !indexBuildInFlightRef.current) {
+          indexBuildInFlightRef.current = true;
+          ++indexBuildGenerationRef.current;
+          setLoadingIndex(true);
+          void watchIndexJob();
+        }
+      } catch {
+        // ignore resume failures
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [watchBodiesJob, watchIndexJob]);
 
   const startSummarize = useCallback(async () => {
     if (bodiesLoadedForDays !== days || bodyCount <= 0) return;
     if (selectedGroupIds.length === 0) {
-      setSummaryError("请至少选择一个分组");
+      setSummaryError("请先选择一个分组");
       return;
     }
 
     setGenerating(true);
+    generatingRef.current = true;
     setPhase("generating");
-    setStatusMessage("正在生成摘要...");
+    setStatusMessage("正在生成概览...");
     setSummaryError("");
     setSummary("");
     setThinking("");
@@ -323,7 +542,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       group_ids: selectedGroupIds,
       days,
       stream: true,
-      enable_thinking: enableDeepThinking,
+      enable_thinking: false,
       use_cached_context: true,
       llm_config: getLlmConfigPayload(),
     };
@@ -332,11 +551,10 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       body,
       (token) => {
         summaryRef.current += token;
-        flushSync(() => {
-          setSummary(summaryRef.current);
-        });
+        setSummary(summaryRef.current);
       },
       () => {
+        generatingRef.current = false;
         setGenerating(false);
         setPhase("idle");
         setStatusMessage("");
@@ -345,6 +563,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         void loadCachedSummary();
       },
       (message) => {
+        generatingRef.current = false;
         setSummaryError(message);
         setGenerating(false);
         setPhase("idle");
@@ -355,7 +574,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       (status) => {
         if (status.phase === "generating") {
           setPhase("generating");
-          setStatusMessage(status.message ?? "正在生成摘要...");
+          setStatusMessage(status.message ?? "正在生成概览...");
         } else if (status.phase === "loading_articles") {
           setPhase("loading_articles");
           setStatusMessage(status.message ?? "正在加载文章正文...");
@@ -363,16 +582,13 @@ export function DigestProvider({ children }: { children: ReactNode }) {
       },
       (chunk) => {
         thinkingRef.current += chunk;
-        flushSync(() => {
-          setThinking(thinkingRef.current);
-        });
+        setThinking(thinkingRef.current);
       },
     );
   }, [
     bodyCount,
     bodiesLoadedForDays,
     days,
-    enableDeepThinking,
     loadCachedSummary,
     selectedGroupIds,
   ]);
@@ -389,10 +605,11 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         setDays,
         summaryGroupOptions,
         selectedGroupIds,
-        toggleSummaryGroup,
-        selectAllSummaryGroups,
+        selectedGroupId: selectedGroupIds[0] ?? null,
+        setSelectedSummaryGroup,
         reloadSummaryGroups,
         loadingBodies,
+        loadingBodiesGroupId,
         loadingIndex,
         loadError,
         truncated,
@@ -400,15 +617,17 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         bodyCount,
         cachedCount,
         fetchedCount,
+        bodyProgress,
         bodiesReady,
         indexReady,
         indexChunkCount,
         indexStatusMessage,
+        indexProgress,
         summary,
         thinking,
         generating,
         statusMessage: generating
-          ? statusMessage || (phase === "generating" ? "正在生成摘要..." : "")
+          ? statusMessage || (phase === "generating" ? "正在生成概览..." : "")
           : "",
         summaryError,
         digestBusy,
@@ -416,8 +635,6 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         buildIndex,
         startSummarize,
         clearErrors,
-        enableDeepThinking,
-        setEnableDeepThinking,
       }}
     >
       {children}

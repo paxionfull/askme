@@ -59,9 +59,45 @@ class WebsiteArticleStore:
         image: str = "",
         summary: str = "",
     ) -> None:
+        self.upsert_articles(
+            feed_id,
+            [
+                {
+                    "article_id": article_id,
+                    "title": title,
+                    "url": url,
+                    "published_at": published_at,
+                    "author": author,
+                    "image": image,
+                    "summary": summary,
+                }
+            ],
+        )
+
+    def upsert_articles(self, feed_id: str, rows: list[dict]) -> int:
+        """同一事务批量写入；返回实际写入条数。"""
+        if not rows:
+            return 0
         now = time.time()
+        values = [
+            (
+                feed_id,
+                str(row.get("article_id") or ""),
+                str(row.get("title") or ""),
+                str(row.get("url") or ""),
+                str(row.get("published_at") or ""),
+                str(row.get("author") or ""),
+                str(row.get("image") or ""),
+                str(row.get("summary") or ""),
+                now,
+            )
+            for row in rows
+            if str(row.get("article_id") or "").strip()
+        ]
+        if not values:
+            return 0
         with self._connect() as conn:
-            conn.execute(
+            conn.executemany(
                 """
                 INSERT INTO articles (
                     feed_id, article_id, title, url, published_at, author,
@@ -76,31 +112,50 @@ class WebsiteArticleStore:
                     summary = excluded.summary,
                     updated_at = excluded.updated_at
                 """,
-                (
-                    feed_id,
-                    article_id,
-                    title,
-                    url,
-                    published_at,
-                    author,
-                    image,
-                    summary,
-                    now,
-                ),
+                values,
             )
+        return len(values)
 
-    def list_articles(self, feed_id: str, limit: int = 20) -> list[dict]:
+    def article_ids(self, feed_id: str) -> set[str]:
+        """一次取出该源全部 article_id，供刷新时内存去重。"""
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT feed_id, article_id, title, url, published_at, author, image, summary
-                FROM articles
-                WHERE feed_id = ?
-                ORDER BY published_at DESC
-                LIMIT ?
-                """,
-                (feed_id, limit),
+                "SELECT article_id FROM articles WHERE feed_id = ?",
+                (feed_id,),
             ).fetchall()
+        return {str(row["article_id"]) for row in rows if row["article_id"]}
+
+    def has_article(self, feed_id: str, article_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM articles WHERE feed_id = ? AND article_id = ? LIMIT 1",
+                (feed_id, article_id),
+            ).fetchone()
+        return row is not None
+
+    def list_articles(self, feed_id: str, limit: int | None = None) -> list[dict]:
+        with self._connect() as conn:
+            if limit is None or limit <= 0:
+                rows = conn.execute(
+                    """
+                    SELECT feed_id, article_id, title, url, published_at, author, image, summary
+                    FROM articles
+                    WHERE feed_id = ?
+                    ORDER BY published_at DESC
+                    """,
+                    (feed_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT feed_id, article_id, title, url, published_at, author, image, summary
+                    FROM articles
+                    WHERE feed_id = ?
+                    ORDER BY published_at DESC
+                    LIMIT ?
+                    """,
+                    (feed_id, limit),
+                ).fetchall()
         return [dict(row) for row in rows]
 
     def count_articles(self, feed_id: str) -> int:

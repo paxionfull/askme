@@ -1,0 +1,56 @@
+id: ithome
+name: Ithome
+homepage: https://www.ithome.com
+entry_url: https://www.ithome.com
+
+discovery:
+  type: json_api
+  method: GET
+  url: https://api.ithome.com/json/newslist/news
+  headers:
+    Accept: application/json
+    Referer: https://www.ithome.com/
+    User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
+  items_path: newslist
+  fields:
+    id: newsid
+    title: title
+    url: url
+    published_at: postdate
+    summary: description
+    cover_image: image
+  pagination:
+    type: cursor
+    more_url: https://www.ithome.com/getmorenews
+    method: POST
+    cursor_param: ot
+    cursor_unit: unix_ms
+    has_next: content.noMore == false
+
+content:
+  type: json_api
+  url_template: https://api.ithome.com/json/newscontent/{newsid}
+  headers:
+    Accept: application/json
+    Referer: https://www.ithome.com/
+  fields:
+    title: title
+    published_at: postdate
+    author: newsauthor
+    html: detail
+    cover_image: image
+    url: url
+
+quirks:
+  - 禁止使用 RSS（/rss/）；发现层走 api.ithome.com JSON。
+  - 首页「最新」无限滚动走 POST /getmorenews?ot={unix_ms}，ot 必须为毫秒时间戳，ISO 时间字符串会 500。
+  - 列表首屏用 /json/newslist/news 的 newslist（约 25 条）；toplist 多为置顶运营位，勿当主列表。
+  - 文章 URL 规则：/0/{newsid//1000}/{newsid%1000:03d}.htm（如 976680 → /0/976/680.htm）。
+  - 详情正文在 detail 字段（HTML 片段）；postdate 为无时区 ISO，按 Asia/Shanghai 解释。
+  - getmorenews 返回 HTML 片段，字段少于 JSON 列表，刷新去重依赖 newsid。
+
+validation:
+  last_verified_at: "2026-07-14"
+  sample_ids:
+    - "976680"
+  expected_min_items: 5

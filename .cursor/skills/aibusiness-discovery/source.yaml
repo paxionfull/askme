@@ -1,0 +1,22 @@
+id: aibusiness
+name: Aibusiness
+homepage: https://aibusiness.com/
+entry_url: https://aibusiness.com/
+
+discovery:
+  type: website_index
+  url: https://aibusiness.com/
+  notes:
+    - origin 站点启用 Cloudflare challenge，直接 HTTP 抓取会返回 JS 挑战页
+    - 列表与详情使用公开索引快照构建，保留原始文章 permalink
+
+content:
+  type: indexed_snapshot
+  fields:
+    title: title
+    url: url
+    html: content_html
+
+validation:
+  last_verified_at: "2026-07-08"
+  expected_min_items: 1

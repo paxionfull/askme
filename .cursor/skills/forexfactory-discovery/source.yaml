@@ -1,0 +1,23 @@
+id: forexfactory
+name: Forexfactory
+homepage: https://www.forexfactory.com
+entry_url: https://www.forexfactory.com/news
+
+discovery:
+  type: website_index
+  url: https://www.forexfactory.com/news
+  notes:
+    - origin 站点启用 Cloudflare challenge，直接 HTTP 请求返回挑战页
+    - 列表从 Wayback 公开索引快照解析；无法访问时使用稳定兜底样本
+    - 不使用 RSS/Atom
+
+content:
+  type: indexed_snapshot
+  fields:
+    title: title
+    url: url
+    html: content_html
+
+validation:
+  last_verified_at: "2026-07-08"
+  expected_min_items: 1

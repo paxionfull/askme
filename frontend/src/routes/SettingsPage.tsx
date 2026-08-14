@@ -14,6 +14,7 @@ import {
   isLlmConfigured,
   useSettings,
   type DefaultDays,
+  formatDaysLabel,
 } from "../hooks/useSettings";
 import { Link } from "react-router-dom";
 
@@ -449,7 +450,7 @@ export default function SettingsPage() {
             <h2 className="text-sm font-semibold">默认时间范围</h2>
           </div>
           <div className="mt-3 flex gap-4 text-sm">
-            {([1, 3, 7] as DefaultDays[]).map((value) => (
+            {([1, 3] as DefaultDays[]).map((value) => (
               <label key={value} className="flex items-center gap-2">
                 <input
                   type="radio"
@@ -457,7 +458,7 @@ export default function SettingsPage() {
                   checked={settings.defaultDays === value}
                   onChange={() => setSettings({ defaultDays: value })}
                 />
-                近 {value} 天
+                {formatDaysLabel(value)}
               </label>
             ))}
           </div>
@@ -466,7 +467,7 @@ export default function SettingsPage() {
         <section className="rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="text-sm font-semibold">Skill 与 Prompt</h2>
           <p className="mt-1 text-xs text-slate-500">
-            摘要 skill、对话 system prompt、数据源 discovery skill 等统一在 Skill 管理页配置。
+            概览 skill、对话 system prompt、数据源 discovery skill 等统一在 Skill 管理页配置。
           </p>
           <Link
             to="/skills"

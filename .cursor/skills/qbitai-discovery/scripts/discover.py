@@ -9,10 +9,11 @@ import json
 import re
 import sys
 import urllib.parse
-import urllib.request
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
+
+from http_client import fetch_bytes, fetch_json, fetch_text, fetch_with_headers, sleep_between_pages
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 BASE_URL = "https://www.qbitai.com"
@@ -28,7 +29,7 @@ FEED_META = {
     "source": "website",
     "entryUrl": BASE_URL,
 }
-REFRESH_DEFAULTS = {"max_pages": 3, "per": 20}
+REFRESH_DEFAULTS = {"max_pages": 3, "per": 50}
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -37,10 +38,10 @@ USER_AGENT = (
 
 
 def _request(url: str) -> tuple[bytes, dict[str, str]]:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        headers = {k.lower(): v for k, v in resp.headers.items()}
-        return resp.read(), headers
+    return fetch_with_headers(
+        url,
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+    )
 
 
 def _strip_html(text: str) -> str:
@@ -107,7 +108,7 @@ def normalize_list_item(item: dict) -> dict:
     }
 
 
-def fetch_article_detail(article_id: str) -> dict:
+def fetch_article_detail(article_id: str, **hints) -> dict:
     body, _ = _request(f"{API_URL}/{article_id}?_fields=id,link,title,date,content,excerpt")
     item = json.loads(body.decode("utf-8"))
     if not isinstance(item, dict):

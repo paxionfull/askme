@@ -1,0 +1,36 @@
+id: marketwatch
+name: Marketwatch
+homepage: https://www.marketwatch.com/
+entry_url: https://www.marketwatch.com/
+
+discovery:
+  type: sitemap_xml
+  method: GET
+  url: https://www.marketwatch.com/mw_news_sitemap.xml
+  fields:
+    url: loc
+    published_at: news.publication_date|lastmod
+    title: news.title
+    author: news.publication.name
+    image: image.loc
+    keywords: news.keywords
+  pagination:
+    mode: local_slice
+    page_start: 1
+  related:
+    - https://www.marketwatch.com/mw_live_news_sitemap.xml
+
+content:
+  type: html
+  url_template: https://www.marketwatch.com/{id}
+
+quirks:
+  - 主站与文章页受 DataDome 保护，匿名请求常返回 401 挑战页。
+  - 列表使用可访问的 Google News sitemap 索引 mw_news_sitemap.xml（非 RSS），并合并 mw_live_news_sitemap.xml。
+  - 过滤 author/column/topic/tools 等非文章路径，保留 /story/ /livecoverage/ /data-news/。
+  - 详情抓取失败时返回含标题、URL、发布时间等元数据的降级 content_html。
+  - 发布时间优先 news:publication_date，其次 lastmod，统一转为 Asia/Shanghai ISO8601。
+
+validation:
+  last_verified_at: "2026-07-10"
+  min_body_chars: 80

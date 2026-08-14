@@ -51,17 +51,33 @@ export function buildSections(
   return sections;
 }
 
-export function sectionsToLayout(sections: FeedSection[]): {
+export function sectionsToLayout(
+  sections: FeedSection[],
+  previousGroups: FeedGroup[] = [],
+  visibleFeedIds?: Set<string>,
+): {
   groups: FeedGroup[];
   group_order: string[];
 } {
+  const previousById = new Map(previousGroups.map((group) => [group.id, group]));
+  const visible = visibleFeedIds ?? new Set(sections.flatMap((section) => section.feeds.map((feed) => feed.id)));
+
   const groups = sections
     .filter((section) => section.id !== UNGROUPED_GROUP_ID)
-    .map((section) => ({
-      id: section.id,
-      name: section.name,
-      feed_ids: section.feeds.map((feed) => feed.id),
-    }));
+    .map((section) => {
+      const currentIds = section.feeds.map((feed) => feed.id);
+      const currentSet = new Set(currentIds);
+      // 保留「分组里有、但当前 feeds 列表尚未加载」的 id，避免拖拽保存时把刚接入的源丢掉
+      const preserved = (previousById.get(section.id)?.feed_ids ?? []).filter(
+        (feedId) => !visible.has(feedId) && !currentSet.has(feedId),
+      );
+      return {
+        id: section.id,
+        name: section.name,
+        feed_ids: [...currentIds, ...preserved],
+        digest_skill_id: previousById.get(section.id)?.digest_skill_id ?? null,
+      };
+    });
   return {
     groups,
     group_order: groups.map((group) => group.id),

@@ -1,3 +1,5 @@
+import type { MutableRefObject } from "react";
+
 export interface CitationItem {
   index: number;
   id: string;
@@ -18,6 +20,7 @@ interface CitationPanelProps {
   items: CitationItem[];
   activeIndex: number | null;
   onSelect: (index: number) => void;
+  itemRefs?: MutableRefObject<Map<number, HTMLButtonElement>>;
 }
 
 function formatTime(publishedAt: string) {
@@ -32,10 +35,10 @@ function formatTime(publishedAt: string) {
   });
 }
 
-export default function CitationPanel({ items, activeIndex, onSelect }: CitationPanelProps) {
+export default function CitationPanel({ items, activeIndex, onSelect, itemRefs }: CitationPanelProps) {
   if (items.length === 0) {
     return (
-      <div className="flex h-full flex-col border-l border-slate-200 bg-white">
+      <div className="flex h-full w-full flex-col">
         <div className="border-b border-slate-200 px-4 py-3">
           <h2 className="text-sm font-semibold text-slate-800">引用来源</h2>
         </div>
@@ -47,10 +50,10 @@ export default function CitationPanel({ items, activeIndex, onSelect }: Citation
   }
 
   return (
-    <div className="flex h-full flex-col border-l border-slate-200 bg-white">
+    <div className="flex h-full w-full flex-col">
       <div className="border-b border-slate-200 px-4 py-3">
         <h2 className="text-sm font-semibold text-slate-800">引用来源</h2>
-        <p className="mt-1 text-xs text-slate-500">点击回答中的 [n] 或下方条目查看对应片段</p>
+        <p className="mt-1 text-xs text-slate-500">点击回答中的 [n] 查看对应片段</p>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
         {items.map((item) => {
@@ -58,11 +61,19 @@ export default function CitationPanel({ items, activeIndex, onSelect }: Citation
           return (
             <button
               key={item.id}
+              ref={(node) => {
+                if (!itemRefs?.current) return;
+                if (node) {
+                  itemRefs.current.set(item.index, node);
+                } else {
+                  itemRefs.current.delete(item.index);
+                }
+              }}
               type="button"
               onClick={() => onSelect(item.index)}
               className={`w-full rounded-lg border px-3 py-2 text-left transition ${
                 active
-                  ? "border-amber-400 bg-amber-50 shadow-sm"
+                  ? "border-amber-400 bg-amber-50 shadow-sm ring-2 ring-amber-200"
                   : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
               }`}
             >

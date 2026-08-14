@@ -10,9 +10,10 @@ import re
 import sys
 import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
+from http_client import fetch_bytes, fetch_json, fetch_text, sleep_between_pages
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 BASE_URL = "https://zhuanlan.zhihu.com"
@@ -49,10 +50,8 @@ def _request(url: str, referer: str | None = None) -> str:
     headers = dict(DEFAULT_HEADERS)
     if referer:
         headers["Referer"] = referer
-    req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+        return fetch_text(url, headers=headers)
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         if "系统监测到您的网络环境存在异常" in body:
@@ -247,7 +246,7 @@ def normalize_list_item(item: dict) -> dict:
     }
 
 
-def fetch_article_detail(article_id: str) -> dict:
+def fetch_article_detail(article_id: str, **hints) -> dict:
     url = f"{BASE_URL}/p/{article_id}"
     try:
         raw_html = _request(url, referer="https://www.zhihu.com/")

@@ -1,6 +1,9 @@
 import { NavLink, Outlet } from "react-router-dom";
+import OnboardingBatchPanel from "../../components/OnboardingBatchPanel";
+import TopJobBanner from "../../components/TopJobBanner";
 import { DigestProvider, useDigest } from "../../contexts/DigestContext";
 import { ChatProvider } from "../../contexts/ChatContext";
+import { FeedRefreshProvider, useFeedRefresh } from "../../contexts/FeedRefreshContext";
 import { OnboardingProvider, useOnboarding } from "../../contexts/OnboardingContext";
 import { isLlmConfigured, useSettings } from "../../hooks/useSettings";
 
@@ -11,69 +14,162 @@ const navItems = [
   { to: "/settings", label: "设置", end: false },
 ];
 
+function FeedRefreshBanner() {
+  const {
+    refreshBusy,
+    statusMessage,
+    resultMessage,
+    error,
+    progress,
+    bannerTitle,
+    clearResult,
+  } = useFeedRefresh();
+
+  if (refreshBusy && statusMessage) {
+    return (
+      <TopJobBanner
+        tone="progress"
+        title={bannerTitle}
+        message={statusMessage}
+        current={progress?.current}
+        total={progress?.total}
+        indeterminate={!progress || progress.total <= 0}
+      />
+    );
+  }
+
+  if (!refreshBusy && (resultMessage || error)) {
+    const message = [resultMessage, error].filter(Boolean).join("\n\n");
+    return (
+      <TopJobBanner
+        tone={error ? "warning" : "success"}
+        title={bannerTitle}
+        message={message}
+        onClose={clearResult}
+      />
+    );
+  }
+
+  return null;
+}
+
+function DigestJobBanner() {
+  const {
+    loadingBodies,
+    loadingIndex,
+    bodyProgress,
+    indexProgress,
+    indexStatusMessage,
+  } = useDigest();
+
+  if (loadingBodies) {
+    return (
+      <TopJobBanner
+        tone="progress"
+        title="拉取正文"
+        message={bodyProgress.message || "正在拉取正文…"}
+        current={bodyProgress.current}
+        total={bodyProgress.total}
+        indeterminate={bodyProgress.total <= 0}
+      />
+    );
+  }
+
+  if (loadingIndex) {
+    return (
+      <TopJobBanner
+        tone="progress"
+        title="建立索引"
+        message={
+          indexProgress.message || indexStatusMessage || "正在建立向量索引…"
+        }
+        current={indexProgress.current}
+        total={indexProgress.total}
+        indeterminate={indexProgress.total <= 0}
+      />
+    );
+  }
+
+  return null;
+}
+
 function OnboardingBanner() {
-  const { job, clearJob, stopOnboarding } = useOnboarding();
+  const { job, batch, clearJob, stopOnboarding, stopBatch, clearBatch } = useOnboarding();
+
+  if (batch) {
+    return (
+      <OnboardingBatchPanel
+        batch={batch}
+        onStop={stopBatch}
+        onClose={clearBatch}
+      />
+    );
+  }
+
   if (!job) return null;
 
   if (job.running) {
+    const isRepair = job.kind === "repair";
+    const autoRepairing = !isRepair && String(job.phase || "").startsWith("auto_repair");
     return (
-      <div className="flex items-center justify-between border-b border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
-        <div className="min-w-0 flex-1">
-          <span className="font-medium">Cursor 接入中</span>
-          <span className="mx-2 text-blue-600">·</span>
-          <span>{job.message || "处理中…"}</span>
-          {job.jobId && <span className="ml-2 text-xs text-blue-600/70">#{job.jobId}</span>}
-          <span className="ml-2 block truncate text-xs text-blue-600/80 sm:inline">{job.entryUrl}</span>
-        </div>
-        <button
-          type="button"
-          onClick={stopOnboarding}
-          className="ml-3 shrink-0 rounded border border-blue-300 bg-white px-2 py-1 text-xs text-blue-800 hover:bg-blue-100"
-        >
-          停止
-        </button>
-      </div>
+      <TopJobBanner
+        tone="progress"
+        title={
+          isRepair ? "Cursor 修复中" : autoRepairing ? "接入后自动修复中" : "接入数据源"
+        }
+        message={job.message || "处理中…"}
+        indeterminate
+        detail={
+          <div className="mt-1 truncate text-xs opacity-80">
+            {isRepair ? job.slug || job.entryUrl : job.entryUrl}
+            {job.jobId ? ` · #${job.jobId}` : ""}
+          </div>
+        }
+        actions={
+          <button
+            type="button"
+            onClick={stopOnboarding}
+            className="rounded border border-current/20 bg-white/60 px-2 py-1 text-xs hover:bg-white"
+          >
+            停止
+          </button>
+        }
+      />
     );
   }
 
   if (job.phase === "cancelled") {
     return (
-      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-100 px-4 py-2 text-sm text-slate-700">
-        <span>
-          {job.message || "接入已停止"}
-          {job.jobId ? ` · 日志 #${job.jobId}` : ""}
-        </span>
-        <button type="button" onClick={clearJob} className="text-xs underline">
-          关闭
-        </button>
-      </div>
+      <TopJobBanner
+        tone="neutral"
+        title={job.kind === "repair" ? "修复已停止" : "接入已停止"}
+        message={job.message || (job.jobId ? `日志 #${job.jobId}` : "已取消")}
+        onClose={clearJob}
+      />
     );
   }
 
   if (job.error) {
+    const isRepair = job.kind === "repair";
     return (
-      <div className="flex items-center justify-between border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
-        <span>
-          接入失败：{job.error}
-          {job.jobId ? ` · 日志 #${job.jobId}` : ""}
-        </span>
-        <button type="button" onClick={clearJob} className="text-xs underline">
-          关闭
-        </button>
-      </div>
+      <TopJobBanner
+        tone="error"
+        title={isRepair ? "修复失败" : "接入失败"}
+        message={`${job.error}${job.jobId ? ` · 日志 #${job.jobId}` : ""}`}
+        onClose={clearJob}
+      />
     );
   }
 
   if (job.result) {
+    const isRepair = job.kind === "repair";
     return (
-      <div className="flex items-center justify-between border-b border-green-200 bg-green-50 px-4 py-2 text-sm text-green-800">
-        <span>
-          已接入 {job.result.feed_id}（{job.result.skill_dir}）
-        </span>
-        <button type="button" onClick={clearJob} className="text-xs underline">
-          关闭
-        </button>
-      </div>
+      <TopJobBanner
+        tone="success"
+        title={isRepair ? "已修复" : "已接入"}
+        message={`${job.result.feed_id}（${job.result.skill_dir}）`}
+        onClose={clearJob}
+      />
     );
   }
 
@@ -82,27 +178,31 @@ function OnboardingBanner() {
 
 function AppShellContent() {
   const { settings } = useSettings();
-  const { generating, loadingBodies, loadingIndex, indexStatusMessage } = useDigest();
-  const { job } = useOnboarding();
+  const { generating, loadingBodies, loadingIndex } = useDigest();
+  const { job, batch } = useOnboarding();
+  const { refreshBusy } = useFeedRefresh();
   const llmConfigured = isLlmConfigured(settings);
-  const sourcesInProgress = loadingBodies || loadingIndex || Boolean(job?.running);
+  const sourcesInProgress =
+    loadingBodies ||
+    loadingIndex ||
+    refreshBusy ||
+    Boolean(job?.running) ||
+    batch?.status === "running";
   const chatInProgress = generating;
 
   return (
     <div className="flex h-screen flex-col">
       {!llmConfigured && (
-        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-          LLM 未配置，请在「设置」页填写 API Key 和模型名称。
-        </div>
+        <TopJobBanner
+          tone="warning"
+          title="LLM 未配置"
+          message="请在「设置」页填写 API Key 和模型名称。"
+        />
       )}
 
       <OnboardingBanner />
-
-      {loadingIndex && indexStatusMessage && (
-        <div className="border-b border-slate-200 bg-slate-100 px-4 py-2 text-sm text-slate-600">
-          {indexStatusMessage}
-        </div>
-      )}
+      <FeedRefreshBanner />
+      <DigestJobBanner />
 
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-16 shrink-0 flex-col border-r border-slate-200 bg-white">
@@ -146,11 +246,13 @@ function AppShellContent() {
 export default function AppShell() {
   return (
     <OnboardingProvider>
-      <DigestProvider>
-        <ChatProvider>
-          <AppShellContent />
-        </ChatProvider>
-      </DigestProvider>
+      <FeedRefreshProvider>
+        <DigestProvider>
+          <ChatProvider>
+            <AppShellContent />
+          </ChatProvider>
+        </DigestProvider>
+      </FeedRefreshProvider>
     </OnboardingProvider>
   );
 }

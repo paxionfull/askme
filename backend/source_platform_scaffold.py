@@ -90,7 +90,7 @@ def detect_platform(entry_url: str) -> PlatformMatch | None:
             posts_url=posts,
             slug=slug,
             feed_id=f"website:zhihu:{user_id.lower()}",
-            list_api_path=f"/api/v4/org/{user_id}/articles",
+            list_api_path=f"/api/v4/members/{user_id}/articles",
             requires_cookie=True,
             reference_slug="zhihu-xinziyuan",
         )
@@ -104,7 +104,6 @@ def detect_platform(entry_url: str) -> PlatformMatch | None:
             profile = f"https://www.zhihu.com/{path_parts[0]}/{user_id}"
             posts = f"{profile}/posts"
             slug = _resolve_slug(f"zhihu-{user_id.lower()}")
-            prefix = "members" if user_type == "people" else "org"
             return PlatformMatch(
                 platform="zhihu",
                 user_type=user_type,
@@ -113,7 +112,7 @@ def detect_platform(entry_url: str) -> PlatformMatch | None:
                 posts_url=posts,
                 slug=slug,
                 feed_id=f"website:zhihu:{user_id.lower()}",
-                list_api_path=f"/api/v4/{prefix}/{user_id}/articles",
+                list_api_path=f"/api/v4/members/{user_id}/articles",
                 requires_cookie=True,
                 reference_slug="zhihu-aitechtalk" if user_type == "people" else "zhihu-xinziyuan",
             )
@@ -138,12 +137,9 @@ def detect_platform(entry_url: str) -> PlatformMatch | None:
 
 
 def _resolve_slug(base: str) -> str:
-    from source_skill_writer import skill_dir_for, validate_slug
+    from source_skill_writer import validate_slug
 
-    slug = validate_slug(base)
-    if skill_dir_for(slug).exists():
-        raise ValueError(f"数据源已存在: {slug}-discovery")
-    return slug
+    return validate_slug(base)
 
 
 def _zhihu_cookie_configured() -> bool:
@@ -274,7 +270,7 @@ def normalize_list_item(item: dict) -> dict:
     }}
 
 
-def fetch_article_detail(article_id: str) -> dict:
+def fetch_article_detail(article_id: str, **hints) -> dict:
     return z.fetch_article_by_id(article_id, page_url=PAGE_URL)
 
 
@@ -381,7 +377,7 @@ def probe_jin10_api() -> dict[str, Any]:
     url = f"{JIN10_FLASH_API}?channel=-8200&vip=1"
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         items = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(items, list) or not items:
@@ -409,9 +405,10 @@ import json
 import re
 import sys
 import urllib.parse
-import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+from http_client import fetch_json
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 BASE_URL = "https://www.jin10.com"
@@ -442,17 +439,46 @@ _HEADERS = {{
     ),
 }}
 
+_FLASH_BY_ID: dict[str, dict] = {{}}
+
+
+def _index_flash_items(items: list[dict]) -> None:
+    for item in items:
+        article_id = str(item.get("id", ""))
+        if article_id:
+            _FLASH_BY_ID[article_id] = item
+
 
 def _request_list(*, max_time: str = "") -> list[dict]:
     params = {{"channel": "-8200", "vip": "1"}}
     if max_time:
         params["max_time"] = max_time
     url = f"{{FLASH_API}}?{{urllib.parse.urlencode(params)}}"
-    req = urllib.request.Request(url, headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    payload = fetch_json(url, headers=_HEADERS)
     items = payload.get("data") if isinstance(payload, dict) else None
-    return items if isinstance(items, list) else []
+    rows = items if isinstance(items, list) else []
+    _index_flash_items(rows)
+    return rows
+
+
+def _find_flash_item(article_id: str, *, max_pages: int = 20) -> dict | None:
+    wanted = str(article_id)
+    if wanted in _FLASH_BY_ID:
+        return _FLASH_BY_ID[wanted]
+    items = _request_list()
+    if wanted in _FLASH_BY_ID:
+        return _FLASH_BY_ID[wanted]
+    max_time = str(items[-1].get("time") or "") if items else ""
+    for _ in range(max(0, max_pages - 1)):
+        if not max_time:
+            break
+        items = _request_list(max_time=max_time)
+        if wanted in _FLASH_BY_ID:
+            return _FLASH_BY_ID[wanted]
+        if not items:
+            break
+        max_time = str(items[-1].get("time") or "")
+    return None
 
 
 def _format_time(value: str) -> str:
@@ -519,17 +545,26 @@ def normalize_list_item(item: dict) -> dict:
     }}
 
 
-def fetch_article_detail(article_id: str) -> dict:
-    for item in _request_list():
-        if str(item.get("id", "")) == str(article_id):
-            normalized = normalize_list_item(item)
-            normalized["content_html"] = _item_content(item)
-            return normalized
+def fetch_article_detail(article_id: str, **hints) -> dict:
+    from detail_hints import pick_hints
+
+    meta = pick_hints(**hints)
+    item = _find_flash_item(str(article_id))
+    if item:
+        normalized = normalize_list_item(item)
+        normalized["content_html"] = _item_content(item)
+        if meta.get("title"):
+            normalized["title"] = meta["title"]
+        if meta.get("url"):
+            normalized["url"] = meta["url"]
+        if meta.get("published_at"):
+            normalized["published_at"] = meta["published_at"]
+        return normalized
     return {{
         "id": str(article_id),
-        "title": "",
-        "url": f"{{BASE_URL}}/flash/{{article_id}}.html",
-        "published_at": "",
+        "title": meta.get("title", ""),
+        "url": meta.get("url") or f"{{BASE_URL}}/flash/{{article_id}}.html",
+        "published_at": meta.get("published_at", ""),
         "author": "{display_name}",
         "image": "",
         "content_html": "",

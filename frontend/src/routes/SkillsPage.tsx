@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ConfirmModal from "../components/ConfirmModal";
 import SkillDetailModal from "../components/SkillDetailModal";
 import SkillMarkdownModal from "../components/SkillMarkdownModal";
+import SkillRepairModal from "../components/SkillRepairModal";
+import { useOnboarding } from "../contexts/OnboardingContext";
 import {
   createDigestSkill,
   deleteDigestSkill,
@@ -127,6 +129,7 @@ function DigestSkillListItem({
 }
 
 export default function SkillsPage() {
+  const { job: onboardJob, startSkillRepair } = useOnboarding();
   const [catalog, setCatalog] = useState<SkillsCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -159,8 +162,24 @@ export default function SkillsPage() {
     name: string;
   } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [repairOpen, setRepairOpen] = useState(false);
+  const [discoveryQuery, setDiscoveryQuery] = useState("");
 
   const defaultDigestSkillId = catalog?.default_digest_skill ?? "";
+  const repairing = Boolean(onboardJob?.running && onboardJob.kind === "repair");
+
+  const filteredDiscovery = useMemo(() => {
+    const skills = catalog?.discovery ?? [];
+    const q = discoveryQuery.trim().toLowerCase();
+    if (!q) return skills;
+    return skills.filter((skill) => {
+      const haystack = [skill.id, skill.name, skill.description, skill.path]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [catalog?.discovery, discoveryQuery]);
 
   const loadCatalog = useCallback(async () => {
     setLoading(true);
@@ -178,6 +197,18 @@ export default function SkillsPage() {
   useEffect(() => {
     void loadCatalog();
   }, [loadCatalog]);
+
+  useEffect(() => {
+    if (
+      onboardJob?.kind === "repair" &&
+      onboardJob.phase === "done" &&
+      !onboardJob.running
+    ) {
+      void fetchSkillsCatalog()
+        .then(setCatalog)
+        .catch(() => {});
+    }
+  }, [onboardJob?.kind, onboardJob?.phase, onboardJob?.running, onboardJob?.jobId]);
 
   async function openSkillViewer(category: "discovery" | "other", skill: SkillItem) {
     const displayName = skill.name?.trim() || skill.id;
@@ -383,7 +414,7 @@ export default function SkillsPage() {
           <>
             <section className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold">Digest 摘要 Skill</h2>
+                <h2 className="text-sm font-semibold">Digest 概览 Skill</h2>
                 <button
                   type="button"
                   onClick={() => void openDigestEditor()}
@@ -393,7 +424,7 @@ export default function SkillsPage() {
                 </button>
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                按 SKILL.md 格式编写摘要 skill；生成摘要时使用完整 skill 内容作为指令。
+                按 SKILL.md 格式编写概览 skill；生成概览时使用完整 skill 内容作为指令。
               </p>
               <ul className="mt-4 space-y-2">
                 {catalog.digest.map((skill) => (
@@ -421,20 +452,47 @@ export default function SkillsPage() {
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-5">
-              <h2 className="text-sm font-semibold">Discovery Skill</h2>
-              <p className="mt-1 text-xs text-slate-500">
-                数据源抓取 skill，可查看详情或删除（删除后隐藏对应数据源）。
-              </p>
-              <ul className="mt-3 space-y-2">
-                {catalog.discovery.map((skill) => (
-                  <SkillListItem
-                    key={skill.id}
-                    skill={skill}
-                    onView={() => void openSkillViewer("discovery", skill)}
-                    onDelete={() => requestDeleteSkill("discovery", skill)}
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-sm font-semibold">Discovery Skill</h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    数据源抓取 skill，可查看详情、反馈问题让 Cursor 修复，或删除（删除后隐藏对应数据源）。
+                  </p>
+                </div>
+                <label className="block w-full max-w-xs text-xs text-slate-500 sm:w-56">
+                  <span className="sr-only">搜索 Discovery Skill</span>
+                  <input
+                    type="search"
+                    value={discoveryQuery}
+                    onChange={(e) => setDiscoveryQuery(e.target.value)}
+                    placeholder="搜索 id / 名称 / 描述…"
+                    className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-800"
                   />
-                ))}
+                </label>
+              </div>
+              <ul className="mt-3 space-y-2">
+                {filteredDiscovery.length === 0 ? (
+                  <li className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-500">
+                    {discoveryQuery.trim()
+                      ? `没有匹配「${discoveryQuery.trim()}」的 discovery skill`
+                      : "暂无 discovery skill"}
+                  </li>
+                ) : (
+                  filteredDiscovery.map((skill) => (
+                    <SkillListItem
+                      key={skill.id}
+                      skill={skill}
+                      onView={() => void openSkillViewer("discovery", skill)}
+                      onDelete={() => requestDeleteSkill("discovery", skill)}
+                    />
+                  ))
+                )}
               </ul>
+              {discoveryQuery.trim() && filteredDiscovery.length > 0 && (
+                <p className="mt-2 text-xs text-slate-400">
+                  显示 {filteredDiscovery.length} / {catalog.discovery.length} 个
+                </p>
+              )}
             </section>
 
             {catalog.other.length > 0 && (
@@ -464,10 +522,27 @@ export default function SkillsPage() {
         detail={skillDetail}
         deletable={Boolean(skillDetail)}
         deleting={deleting}
+        repairable={viewingSkill?.category === "discovery" && Boolean(skillDetail)}
+        repairing={repairing}
         onClose={closeSkillViewer}
+        onRepair={() => setRepairOpen(true)}
         onDelete={() => {
           if (!skillDetail || !viewingSkill) return;
           requestDeleteSkill(viewingSkill.category, skillDetail);
+        }}
+      />
+
+      <SkillRepairModal
+        open={repairOpen && Boolean(skillDetail)}
+        skillName={skillDetail?.name?.trim() || skillDetail?.id || ""}
+        skillId={skillDetail?.id ?? ""}
+        busy={repairing}
+        onClose={() => setRepairOpen(false)}
+        onSubmit={(payload) => {
+          if (!skillDetail) return;
+          setRepairOpen(false);
+          closeSkillViewer();
+          void startSkillRepair(skillDetail.id, payload);
         }}
       />
 

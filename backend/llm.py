@@ -231,15 +231,19 @@ async def stream_llm(
     messages: list[dict[str, str]],
     llm_config: dict[str, Any] | None = None,
     *,
+    temperature: float | None = None,
     enable_thinking: bool = False,
 ) -> AsyncIterator[LlmStreamPart]:
     config = resolve_llm_config(llm_config)
     ensure_configured(config)
+    kwargs = _completion_kwargs(config, enable_thinking=enable_thinking)
+    if temperature is not None:
+        kwargs["temperature"] = temperature
     try:
         response = await litellm.acompletion(
             messages=messages,
             stream=True,
-            **_completion_kwargs(config, enable_thinking=enable_thinking),
+            **kwargs,
         )
         async for chunk in response:
             for part in _extract_stream_parts_from_chunk(chunk):

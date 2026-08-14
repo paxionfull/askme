@@ -70,6 +70,15 @@ body {
   color: #0f172a;
 }
 
+.markdown-body a {
+  color: #4338ca;
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  color: #3730a3;
+}
+
 .markdown-body code {
   border-radius: 0.25rem;
   background: #f1f5f9;
@@ -206,4 +215,24 @@ body {
 
 .chat-bubble {
   word-break: break-word;
+}
+
+.summary-markdown-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.summary-markdown-nowrap {
+  width: max-content;
+  min-width: 100%;
+}
+
+.summary-markdown-nowrap h2,
+.summary-markdown-nowrap h3,
+.summary-markdown-nowrap p,
+.summary-markdown-nowrap li,
+.summary-markdown-nowrap a,
+.summary-markdown-nowrap strong {
+  white-space: nowrap;
 }

@@ -94,12 +94,15 @@ def _load_digest_skill(skill_dir: Path, *, builtin: bool) -> dict[str, Any] | No
     if (is_stub_skill_body(body, legacy_prompt) and legacy_prompt) or not skill_md.strip():
         skill_md = _build_skill_md(skill_id, name, description, skill_content)
 
+    input_mode = str(raw.get("input_mode") or "full").strip() or "full"
+
     return {
         "id": skill_id,
         "name": name,
         "description": description,
         "skill_content": skill_content,
         "skill_md": skill_md,
+        "input_mode": input_mode,
         "builtin": builtin,
         "readonly": False,
         "deletable": True,
@@ -203,10 +206,11 @@ def save_user_digest_skill(
 
     normalized_md = md if md.endswith("\n") else md + "\n"
     (skill_dir / "SKILL.md").write_text(normalized_md, encoding="utf-8")
-    (skill_dir / "digest.yaml").write_text(
-        f'id: {safe_id}\nname: "{display_name}"\ndescription: "{desc}"\n',
-        encoding="utf-8",
-    )
+    input_mode = str(existing.get("input_mode") or "").strip() if existing else ""
+    yaml_text = f'id: {safe_id}\nname: "{display_name}"\ndescription: "{desc}"\n'
+    if input_mode:
+        yaml_text += f"input_mode: {input_mode}\n"
+    (skill_dir / "digest.yaml").write_text(yaml_text, encoding="utf-8")
 
     item = _load_digest_skill(skill_dir, builtin=builtin)
     if not item:

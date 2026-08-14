@@ -32,11 +32,14 @@ WebsiteFeedAdapter 接口（discover.py 必须实现）：
 - list_items(payload) -> list[dict]
 - has_next_page(payload) -> bool
 - normalize_list_item(item) -> {id,title,url,published_at,author,image,summary}
-- fetch_article_detail(article_id) -> 含 content_html
+- fetch_article_detail(article_id, **hints) -> 含 content_html；批量拉正文时 backend 会传入 url/title/published_at 等列表元数据，必须优先 resolve_detail_url / meta.get("url")，禁止为查元数据重复拉整表列表或仅靠首页第一页定位 url
 - normalize_article_body(raw_html, article_id="") -> str，可选，可委托 content_utils.clean_html_fragment
+- 列表项较多时：用 _lib/list_index.ListByIdIndex 建 id 索引；快讯类列表在 _request_list 时写入内存索引，fetch_article_detail 禁止每篇重拉整包列表
 
 约束：
-- 仅 urllib / json / 标准库 + skill 内 _lib（content_utils、zhihu_common 等），不要 import backend
+- 仅 urllib / json / 标准库 + skill 内 _lib（http_client、content_utils、zhihu_common 等），不要 import backend
+- 所有 HTTP 必须通过 _lib/http_client（统一 5s 超时、失败重试 1 次、429/502/503 退避、页间 sleep_between_pages）；禁止 urllib.request.urlopen 与自定义 timeout
+- 自行分页时在页间调用 sleep_between_pages()
 - 不要使用 RSS/Atom
 - 针对该网站的真实 API/HTML 结构写代码
 - 从侦察证据里选真实 URL、字段名、请求头（Referer 等）

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,11 +18,20 @@ class OnboardingCancelled(Exception):
 
 
 class OnboardingSession:
-    def __init__(self, *, job_id: str, entry_url: str, slug: str, name: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        job_id: str,
+        entry_url: str,
+        slug: str,
+        name: str = "",
+        kind: str = "onboard",
+    ) -> None:
         self.job_id = job_id
         self.entry_url = entry_url
         self.slug = slug
         self.name = name
+        self.kind = kind
         self.cancelled = False
         self.files_written = False
         self.completed = False
@@ -70,14 +78,27 @@ class OnboardingSession:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def cleanup_partial_skill(self) -> None:
-        if not self.files_written or self.completed:
+        """接入失败/取消时清理本任务可能留下的 skill 目录。
+
+        Cursor Agent 可能在 mark_files_written 之前就已写出部分文件，
+        因此不能只依赖 files_written 标志。
+        """
+        if self.kind == "repair":
             return
-        from source_skill_writer import skill_dir_for
+        from source_skill_writer import remove_discovery_skill_dir, skill_dir_for
 
         skill_dir = skill_dir_for(self.slug)
-        if skill_dir.is_dir():
-            shutil.rmtree(skill_dir)
-            self.log("cleanup", removed=str(skill_dir))
+        if not skill_dir.is_dir():
+            return
+        if remove_discovery_skill_dir(self.slug):
+            self.log("cleanup", removed=str(skill_dir), files_written=self.files_written)
+            try:
+                from feed_registry import feed_registry
+
+                feed_registry.purge_feed(f"website:{self.slug}")
+            except Exception:
+                pass
+        self.files_written = False
 
     @property
     def log_path(self) -> Path:
@@ -92,12 +113,19 @@ def new_job_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def create_session(*, entry_url: str, slug: str, name: str = "") -> OnboardingSession:
+def create_session(
+    *,
+    entry_url: str,
+    slug: str,
+    name: str = "",
+    kind: str = "onboard",
+) -> OnboardingSession:
     session = OnboardingSession(
         job_id=new_job_id(),
         entry_url=entry_url,
         slug=slug,
         name=name,
+        kind=kind,
     )
     register_session(session)
     return session

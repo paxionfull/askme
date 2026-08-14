@@ -21,6 +21,30 @@ def skill_dir_for(slug: str) -> Path:
     return SKILLS_ROOT / f"{validate_slug(slug)}-discovery"
 
 
+def is_complete_discovery_skill(slug: str) -> bool:
+    """目录存在且含可用 discover.py 才算完整 skill。"""
+    skill_dir = skill_dir_for(slug)
+    discover = skill_dir / "scripts" / "discover.py"
+    if not discover.is_file():
+        return False
+    try:
+        text = discover.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return "FEED_ID" in text and "fetch_list_page" in text and "fetch_article_detail" in text
+
+
+def remove_discovery_skill_dir(slug: str) -> bool:
+    """删除 discovery skill 目录（若存在）。返回是否删除。"""
+    import shutil
+
+    skill_dir = skill_dir_for(slug)
+    if not skill_dir.is_dir():
+        return False
+    shutil.rmtree(skill_dir)
+    return True
+
+
 def normalize_entry_url(url: str) -> str:
     value = url.strip()
     if not value:
@@ -52,15 +76,22 @@ def derive_source_identity(entry_url: str) -> tuple[str, str]:
         slug_base = "site"
 
     slug_base = re.sub(r"[^a-z0-9]", "", slug_base.lower()) or "site"
+    name = slug_base.replace("-", " ").title()
+
+    # 完整 skill 已存在时优先复用 base slug（再次添加 = 加入分组），勿自动改成 site-2
+    if skill_dir_for(slug_base).exists() and is_complete_discovery_skill(slug_base):
+        return validate_slug(slug_base), name
+
     slug = slug_base
     suffix = 2
-    while skill_dir_for(slug).exists() and not _is_hidden_feed(f"website:{slug}"):
+    while skill_dir_for(slug).exists() and is_complete_discovery_skill(slug) and not _is_hidden_feed(
+        f"website:{slug}"
+    ):
         slug = f"{slug_base}-{suffix}"
         suffix += 1
         if suffix > 99:
             raise ValueError("无法为该域名生成唯一 slug")
 
-    name = slug_base.replace("-", " ").title()
     return validate_slug(slug), name
 
 
@@ -82,17 +113,35 @@ def resolve_onboard_target(
             final_name = name.strip() if name and name.strip() else "金十数据"
         else:
             final_name = name.strip() if name and name.strip() else platform.user_id
-        if skill_dir_for(final_slug).exists() and not _is_hidden_feed(platform.feed_id):
-            raise ValueError(f"数据源已存在: {final_slug}-discovery")
+        if skill_dir_for(final_slug).exists() and not is_complete_discovery_skill(final_slug):
+            remove_discovery_skill_dir(final_slug)
         entry = platform.posts_url if platform.platform in {"zhihu", "jin10"} else normalized_url
         return final_slug, final_name, entry
 
     auto_slug, auto_name = derive_source_identity(normalized_url)
     final_slug = validate_slug(slug) if slug and slug.strip() else auto_slug
     final_name = name.strip() if name and name.strip() else auto_name
-    if skill_dir_for(final_slug).exists() and not _is_hidden_feed(f"website:{final_slug}"):
-        raise ValueError(f"数据源已存在: {final_slug}-discovery")
+    if skill_dir_for(final_slug).exists() and not is_complete_discovery_skill(final_slug):
+        remove_discovery_skill_dir(final_slug)
     return final_slug, final_name, normalized_url
+
+
+def resolve_feed_id_for_target(entry_url: str, slug: str) -> str:
+    """根据入口 URL / slug 解析 feed_id（知乎等平台不等于 website:{slug}）。"""
+    from source_platform_scaffold import detect_platform
+
+    platform = detect_platform((entry_url or "").strip())
+    if platform:
+        return platform.feed_id
+    return f"website:{validate_slug(slug)}"
+
+
+def onboard_target_already_exists(slug: str, feed_id: str) -> bool:
+    return (
+        skill_dir_for(slug).exists()
+        and is_complete_discovery_skill(slug)
+        and not _is_hidden_feed(feed_id)
+    )
 
 
 def _is_hidden_feed(feed_id: str) -> bool:

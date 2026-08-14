@@ -1,7 +1,10 @@
+import type { ReactNode } from "react";
+
 interface ConfirmModalProps {
   open: boolean;
   title: string;
   message: string;
+  extraContent?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
@@ -14,6 +17,7 @@ export default function ConfirmModal({
   open,
   title,
   message,
+  extraContent,
   confirmLabel = "确认",
   cancelLabel = "取消",
   danger = false,
@@ -29,6 +33,7 @@ export default function ConfirmModal({
         <div className="px-5 py-4">
           <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
           <p className="mt-2 whitespace-pre-line text-sm text-slate-600">{message}</p>
+          {extraContent ? <div className="mt-3">{extraContent}</div> : null}
         </div>
         <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
           <button

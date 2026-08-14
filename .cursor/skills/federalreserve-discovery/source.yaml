@@ -1,0 +1,29 @@
+id: federalreserve
+name: Federalreserve
+homepage: https://www.federalreserve.gov/
+entry_url: https://www.federalreserve.gov/
+
+discovery:
+  type: html_page
+  method: GET
+  url: https://www.federalreserve.gov/recentpostings.htm
+  fields:
+    date_selector: div.eventlist__time > time
+    link_selector: div.eventlist__event a
+    title_selector: div.eventlist__event p:last-of-type
+  pagination:
+    mode: local_slice
+    page_start: 1
+
+content:
+  type: html
+  url_template: https://www.federalreserve.gov/{id}
+
+quirks:
+  - 列表使用 recentpostings.htm 的静态 HTML 区块（eventlist），不使用 RSS。
+  - 列表项为全站聚合流，包含 press release、speech、statistical release 等多类内容。
+  - 详情正文优先截取 div#article 区块；若结构变化则回退整页 HTML。
+  - 日期格式可能是 M/D/YYYY 或 Month DD, YYYY，统一转 Asia/Shanghai ISO8601。
+
+validation:
+  last_verified_at: "2026-07-08"

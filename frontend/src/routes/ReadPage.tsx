@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FEEDS_NEED_RELOAD_KEY, deleteFeed, fetchArticles, fetchFeeds, refreshAllFeeds, refreshFeed, saveFeedGroups, waitForRefreshAllComplete, type Article, type Feed, type FeedGroup } from "../api";
+import { FEEDS_NEED_RELOAD_KEY, deleteFeed, fetchArticles, fetchFeeds, renameFeed, saveFeedGroups, type Article, type Feed, type FeedGroup } from "../api";
 import ArticleList from "../components/ArticleList";
 import AddSourceModal from "../components/AddSourceModal";
 import FeedGroupModal from "../components/FeedGroupModal";
 import ConfirmModal from "../components/ConfirmModal";
 import FeedSidebar from "../components/FeedSidebar";
 import { consumeLastOnboardedFeedId, useOnboarding } from "../contexts/OnboardingContext";
+import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
 import { useDigest } from "../contexts/DigestContext";
-import { isLlmConfigured, useSettings, type DefaultDays } from "../hooks/useSettings";
+import { useFeedRefresh } from "../contexts/FeedRefreshContext";
+import { isLlmConfigured, useSettings, type DefaultDays, formatDaysLabel } from "../hooks/useSettings";
 
 export default function ReadPage() {
   const { settings } = useSettings();
@@ -25,11 +27,13 @@ export default function ReadPage() {
     bodiesReady,
     indexReady,
     indexChunkCount,
+    indexProgress,
     digestBusy,
     loadBodies,
     buildIndex,
     clearErrors,
     reloadSummaryGroups,
+    loadingBodiesGroupId,
   } = useDigest();
 
   const [feeds, setFeeds] = useState<Feed[]>([]);
@@ -41,20 +45,32 @@ export default function ReadPage() {
 
   const [feedsLoading, setFeedsLoading] = useState(true);
   const [articlesLoading, setArticlesLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshingAll, setRefreshingAll] = useState(false);
+  const {
+    refreshingAll,
+    refreshingGroupId,
+    refreshingFeedId,
+    refreshBusy,
+    startRefreshAll,
+    startRefreshGroup,
+    startRefreshFeed,
+  } = useFeedRefresh();
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [addSourceOpen, setAddSourceOpen] = useState(false);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Feed | null>(null);
+  const [deleteRemoveSkill, setDeleteRemoveSkill] = useState(false);
   const [deletingFeed, setDeletingFeed] = useState(false);
-  const { job: onboardJob } = useOnboarding();
+  const [maintenanceOpen, setMaintenanceOpen] = useState(false);
+  const { batch } = useOnboarding();
 
   const articlesCache = useRef<Map<string, Article[]>>(new Map());
+
+  const articleCacheKey = useCallback((feedId: string, rangeDays: number) => `${feedId}:${rangeDays}`, []);
   const pendingForceReload = useRef(sessionStorage.getItem(FEEDS_NEED_RELOAD_KEY) === "1");
   const prefetchingAll = useRef(false);
   const selectedFeedIdRef = useRef<string | null>(selectedFeedId);
+  const prevLoadingBodiesRef = useRef(false);
 
   useEffect(() => {
     selectedFeedIdRef.current = selectedFeedId;
@@ -62,7 +78,7 @@ export default function ReadPage() {
 
   const selectedFeed = feeds.find((feed) => feed.id === selectedFeedId) ?? null;
 
-  const prefetchAllArticles = useCallback(async (feedList: Feed[]) => {
+  const prefetchAllArticles = useCallback(async (feedList: Feed[], rangeDays: number) => {
     if (feedList.length === 0) return;
 
     prefetchingAll.current = true;
@@ -72,12 +88,12 @@ export default function ReadPage() {
     try {
       await Promise.all(
         feedList.map(async (feed) => {
-          const data = await fetchArticles(feed.id, 20, false, true);
-          articlesCache.current.set(feed.id, data);
+          const data = await fetchArticles(feed.id, undefined, false, true, rangeDays);
+          articlesCache.current.set(articleCacheKey(feed.id, rangeDays), data);
         }),
       );
       if (selectedFeedIdRef.current) {
-        setArticles(articlesCache.current.get(selectedFeedIdRef.current) ?? []);
+        setArticles(articlesCache.current.get(articleCacheKey(selectedFeedIdRef.current, rangeDays)) ?? []);
       }
     } catch (err) {
       setArticles([]);
@@ -86,7 +102,7 @@ export default function ReadPage() {
       prefetchingAll.current = false;
       setArticlesLoading(false);
     }
-  }, []);
+  }, [articleCacheKey]);
 
   const loadFeeds = useCallback(async () => {
     setFeedsLoading(true);
@@ -111,9 +127,10 @@ export default function ReadPage() {
     }
   }, []);
 
-  const loadArticles = useCallback(async (feedId: string, force = false) => {
+  const loadArticles = useCallback(async (feedId: string, rangeDays: number, force = false) => {
+    const cacheKey = articleCacheKey(feedId, rangeDays);
     const cachedWhilePrefetching = prefetchingAll.current
-      ? articlesCache.current.get(feedId)
+      ? articlesCache.current.get(cacheKey)
       : undefined;
     if (prefetchingAll.current) {
       if (cachedWhilePrefetching) {
@@ -125,20 +142,20 @@ export default function ReadPage() {
     const needsReload = sessionStorage.getItem(FEEDS_NEED_RELOAD_KEY) === "1";
     const reallyForce = force || needsReload;
 
-    if (!prefetchingAll.current && !reallyForce && articlesCache.current.has(feedId)) {
-      setArticles(articlesCache.current.get(feedId)!);
+    if (!prefetchingAll.current && !reallyForce && articlesCache.current.has(cacheKey)) {
+      setArticles(articlesCache.current.get(cacheKey)!);
       return;
     }
 
     setArticlesLoading(true);
     setError("");
     try {
-      const data = await fetchArticles(feedId, 20, false, true);
+      const data = await fetchArticles(feedId, undefined, false, true, rangeDays);
       if (selectedFeedIdRef.current !== feedId) {
-        articlesCache.current.set(feedId, data);
+        articlesCache.current.set(cacheKey, data);
         return;
       }
-      articlesCache.current.set(feedId, data);
+      articlesCache.current.set(cacheKey, data);
       setArticles(data);
     } catch (err) {
       if (selectedFeedIdRef.current !== feedId) {
@@ -151,7 +168,7 @@ export default function ReadPage() {
         setArticlesLoading(false);
       }
     }
-  }, []);
+  }, [articleCacheKey]);
 
   useEffect(() => {
     void loadFeeds().then(() => {
@@ -163,12 +180,23 @@ export default function ReadPage() {
     });
   }, [loadFeeds]);
 
+  // 接入过程中每完成一个、或整批结束时刷新侧边栏，避免 skill 已写入但列表仍是旧的
   useEffect(() => {
-    if (!onboardJob?.result) return;
-    const feedId = onboardJob.result.feed_id;
-    setInfo(`Agent 已接入 ${feedId} · ${onboardJob.result.skill_dir}`);
-    void loadFeeds().then(() => setSelectedFeedId(feedId));
-  }, [onboardJob?.result, loadFeeds]);
+    if (!batch) return;
+    if (batch.status === "running" && batch.completed === 0 && batch.failed === 0) {
+      return;
+    }
+
+    void loadFeeds().then(() => {
+      const feedId = consumeLastOnboardedFeedId();
+      if (feedId) {
+        setSelectedFeedId(feedId);
+        setInfo(batch.message || `已接入 ${feedId}`);
+      } else if (batch.status !== "running") {
+        setInfo(batch.message);
+      }
+    });
+  }, [batch?.batch_id, batch?.completed, batch?.failed, batch?.status, batch?.message, loadFeeds]);
 
   useEffect(() => {
     if (feeds.length === 0) return;
@@ -180,79 +208,113 @@ export default function ReadPage() {
     prefetchingAll.current = true;
     pendingForceReload.current = false;
     sessionStorage.removeItem(FEEDS_NEED_RELOAD_KEY);
-    void prefetchAllArticles(feeds);
-  }, [feeds, prefetchAllArticles]);
+    void prefetchAllArticles(feeds, days);
+  }, [feeds, days, prefetchAllArticles]);
 
   useEffect(() => {
     if (selectedFeedId) {
-      const cached = articlesCache.current.get(selectedFeedId);
+      const cacheKey = articleCacheKey(selectedFeedId, days);
+      const cached = articlesCache.current.get(cacheKey);
       if (cached) {
         setArticles(cached);
       } else {
         setArticles([]);
       }
-      void loadArticles(selectedFeedId);
+      void loadArticles(selectedFeedId, days);
     } else {
       setArticles([]);
     }
-  }, [selectedFeedId, loadArticles]);
+  }, [selectedFeedId, days, loadArticles, articleCacheKey]);
+
+  // 批量拉取正文结束后刷新列表，更新 has_body 与标题颜色
+  useEffect(() => {
+    const wasLoading = prevLoadingBodiesRef.current;
+    prevLoadingBodiesRef.current = loadingBodies;
+    if (wasLoading && !loadingBodies && selectedFeedId) {
+      void loadArticles(selectedFeedId, days, true);
+    }
+  }, [loadingBodies, selectedFeedId, days, loadArticles]);
+
+  const feedRefreshBusy = refreshBusy;
+  const prevRefreshBusyRef = useRef(refreshBusy);
+
+  useEffect(() => {
+    const wasBusy = prevRefreshBusyRef.current;
+    prevRefreshBusyRef.current = refreshBusy;
+    if (wasBusy && !refreshBusy) {
+      void loadFeeds();
+      if (selectedFeedIdRef.current) {
+        articlesCache.current.delete(articleCacheKey(selectedFeedIdRef.current, days));
+        void loadArticles(selectedFeedIdRef.current, days, true);
+      }
+    }
+  }, [refreshBusy, loadFeeds, loadArticles, days, articleCacheKey]);
 
   async function handleRefresh() {
-    if (!selectedFeedId) return;
-
-    setRefreshing(true);
+    if (!selectedFeedId || feedRefreshBusy) return;
     setError("");
-    setInfo("正在从官网拉取最新文章...");
+    setInfo("");
     try {
-      const result = await refreshFeed(selectedFeedId);
-      articlesCache.current.delete(selectedFeedId);
-      await loadArticles(selectedFeedId, true);
-      await loadFeeds();
-      setInfo(result.message);
+      await startRefreshFeed(selectedFeedId, selectedFeed?.name, days);
     } catch (err) {
-      setInfo("");
       setError(err instanceof Error ? err.message : "刷新失败");
-    } finally {
-      setRefreshing(false);
     }
   }
 
   async function handleRefreshAll() {
-    if (feeds.length === 0) return;
-
-    setRefreshingAll(true);
+    if (feeds.length === 0 || feedRefreshBusy) return;
     setError("");
-    setInfo("正在启动更新全部数据源…");
+    setInfo("");
     try {
-      const start = await refreshAllFeeds();
-      setInfo(start.message);
-
-      const status = await waitForRefreshAllComplete((progress) => {
-        const item = progress.refresh_progress;
-        if (item && item.total > 0) {
-          setInfo(`正在更新 ${item.current}/${item.total}：${item.feed_name || "…"}`);
-        }
-      });
-
-      articlesCache.current.clear();
       const latest = await fetchFeeds();
       setFeeds(latest.feeds);
       setFeedGroups(latest.groups);
       setGroupOrder(latest.group_order ?? []);
-      await prefetchAllArticles(latest.feeds);
-
-      const message = status.last_refresh_message || start.message;
-      if (status.last_error && (status.last_feed_count ?? 0) === 0) {
-        setInfo("");
-        setError(message);
-      } else {
-        setInfo(message);
-      }
+      await startRefreshAll(days);
     } catch (err) {
-      setInfo("");
       setError(err instanceof Error ? err.message : "更新全部失败");
-    } finally {
-      setRefreshingAll(false);
+    }
+  }
+
+  async function handleRefreshGroup(groupId: string, groupName: string, feedIds: string[]) {
+    if (feedIds.length === 0 || feedRefreshBusy) return;
+    setError("");
+    setInfo("");
+    try {
+      await startRefreshGroup(groupId, groupName, days);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新分组失败");
+    }
+  }
+
+  async function handleLoadBodiesGroup(groupId: string, groupName: string, feedIds: string[]) {
+    if (feedIds.length === 0 || loadingBodies || feedRefreshBusy) return;
+    setError("");
+    setInfo("");
+    const result = await loadBodies({
+      feedIds,
+      groupId,
+      groupName,
+    });
+    if (!result) {
+      return;
+    }
+    const withBody = result.article_count ?? 0;
+    const meta = result.meta_count ?? withBody;
+    const cached = result.cached_count ?? 0;
+    const fetched = result.fetched_count ?? 0;
+    const missing = meta > withBody ? meta - withBody : 0;
+    setInfo(
+      `分组「${groupName}」正文拉取完成：${withBody}/${meta} 篇含正文` +
+        `（${formatDaysLabel(days)}）` +
+        `${missing > 0 ? ` · ${missing} 篇无正文` : ""}` +
+        ` · 缓存 ${cached} · 新拉 ${fetched}`,
+    );
+    for (const feedId of feedIds) {
+      articlesCache.current.delete(articleCacheKey(feedId, days));
+    }
+    if (selectedFeedId && feedIds.includes(selectedFeedId)) {
+      void loadArticles(selectedFeedId, days, true);
     }
   }
 
@@ -260,7 +322,7 @@ export default function ReadPage() {
     setDeletingFeed(true);
     setError("");
     try {
-      await deleteFeed(feedId);
+      const result = await deleteFeed(feedId, deleteRemoveSkill);
       articlesCache.current.delete(feedId);
       const latest = await fetchFeeds();
       setFeeds(latest.feeds);
@@ -273,11 +335,29 @@ export default function ReadPage() {
         return current;
       });
       setDeleteTarget(null);
-      setInfo("已从列表移除数据源（skill 已保留）");
+      setDeleteRemoveSkill(false);
+      setInfo(result.skill_removed ? "已移除数据源并删除本地 skill" : "已从列表移除数据源（skill 已保留）");
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除失败");
     } finally {
       setDeletingFeed(false);
+    }
+  }
+
+  async function handleRenameFeed(feedId: string, nextName: string) {
+    const feed = feeds.find((item) => item.id === feedId);
+    if (!feed) return;
+    if (!nextName.trim() || nextName === feed.name) return;
+    setError("");
+    try {
+      await renameFeed(feedId, nextName);
+      const latest = await fetchFeeds();
+      setFeeds(latest.feeds);
+      setFeedGroups(latest.groups);
+      setGroupOrder(latest.group_order ?? []);
+      setInfo(`已将「${feed.name}」重命名为「${nextName}」`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重命名失败");
     }
   }
 
@@ -299,7 +379,12 @@ export default function ReadPage() {
   }
 
   async function handleLayoutChange(groups: FeedGroup[], nextGroupOrder: string[]) {
-    const result = await saveFeedGroups(groups, nextGroupOrder);
+    const skillById = new Map(feedGroups.map((group) => [group.id, group.digest_skill_id ?? null]));
+    const merged = groups.map((group) => ({
+      ...group,
+      digest_skill_id: group.digest_skill_id ?? skillById.get(group.id) ?? null,
+    }));
+    const result = await saveFeedGroups(merged, nextGroupOrder);
     setFeedGroups(result.groups);
     setGroupOrder(result.group_order ?? []);
     const latest = await fetchFeeds();
@@ -308,68 +393,101 @@ export default function ReadPage() {
 
   const combinedError = error || digestError;
 
+  const bodyStatusLabel = bodiesReady
+    ? "正文已就绪"
+    : loadingBodies
+      ? "拉取正文中…"
+      : metaCount > 0
+        ? "待拉取正文"
+        : "暂无文章";
+  const indexStatusLabel = indexReady
+    ? "索引已就绪"
+    : loadingIndex
+      ? `建立索引中 ${indexProgress.current}/${indexProgress.total || "…"}`
+      : "未建索引";
+
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-        <div>
-          <h1 className="text-base font-semibold">数据源</h1>
-          <p className="text-xs text-slate-500">
-            近 {days} 天
-            {bodiesReady
-              ? ` · ${bodyCount} 篇含正文${metaCount > bodyCount ? `（共 ${metaCount} 篇）` : ""}`
-              : metaCount > 0
-                ? ` · ${metaCount} 篇文章待加载正文`
+      <header className="border-b border-slate-200 bg-white px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-base font-semibold">数据源</h1>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {formatDaysLabel(days)} · {bodyStatusLabel} · {indexStatusLabel}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={days}
+              disabled={digestBusy}
+              onChange={(e) => setDays(Number(e.target.value) as DefaultDays)}
+              className="rounded-md border border-slate-300 px-2 py-1.5 text-sm disabled:opacity-50"
+            >
+              <option value={1}>今天</option>
+              <option value={3}>近 3 天</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => setMaintenanceOpen((open) => !open)}
+              className={`rounded-md border px-3 py-1.5 text-sm ${
+                maintenanceOpen
+                  ? "border-slate-400 bg-slate-100 text-slate-800"
+                  : "border-slate-300 text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              维护{maintenanceOpen ? " ▴" : " ▾"}
+            </button>
+          </div>
+        </div>
+        {maintenanceOpen && (
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+            <p>
+              {bodiesReady
+                ? `${bodyCount} 篇含正文${metaCount > bodyCount ? `（共 ${metaCount} 篇）` : ""}`
+                : metaCount > 0
+                  ? `${metaCount} 篇文章待拉取正文`
+                  : "当前时间范围内暂无文章"}
+              {bodiesReady && cachedCount + fetchedCount > 0
+                ? ` · 缓存 ${cachedCount} · 新拉 ${fetchedCount}`
                 : ""}
-            {bodiesReady && cachedCount + fetchedCount > 0
-              ? ` · 缓存 ${cachedCount} · 新拉 ${fetchedCount}`
-              : ""}
-            {bodiesReady && truncated ? " · 部分内容将在生成时截断" : ""}
-            {indexReady ? ` · 索引 ${indexChunkCount} 片段` : loadingIndex ? " · 正在建立索引..." : ""}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={days}
-            disabled={digestBusy}
-            onChange={(e) => setDays(Number(e.target.value) as DefaultDays)}
-            className="rounded-md border border-slate-300 px-2 py-1.5 text-sm disabled:opacity-50"
-          >
-            <option value={1}>近 1 天</option>
-            <option value={3}>近 3 天</option>
-            <option value={7}>近 7 天</option>
-          </select>
-          <button
-            type="button"
-            disabled={digestBusy}
-            onClick={() => {
-              clearErrors();
-              void loadBodies();
-            }}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-          >
-            {loadingBodies ? "加载正文中..." : bodiesReady ? "重新加载正文" : "加载正文"}
-          </button>
-          <button
-            type="button"
-            disabled={digestBusy || !bodiesReady || !isLlmConfigured(settings)}
-            onClick={() => {
-              clearErrors();
-              void buildIndex();
-            }}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-          >
-            {loadingIndex ? "建立索引中..." : indexReady ? "重新建立索引" : "建立索引"}
-          </button>
-        </div>
+              {bodiesReady && truncated ? " · 部分内容将在生成时截断" : ""}
+              {indexReady ? ` · 索引 ${indexChunkCount} 片段` : ""}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={digestBusy}
+                onClick={() => {
+                  clearErrors();
+                  void loadBodies();
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                {loadingBodies ? "拉取正文中..." : bodiesReady ? "重新拉取正文" : "拉取正文"}
+              </button>
+              <button
+                type="button"
+                disabled={digestBusy || !bodiesReady || !isLlmConfigured(settings)}
+                onClick={() => {
+                  clearErrors();
+                  void buildIndex();
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                {loadingIndex ? "建立索引中..." : indexReady ? "重新建立索引" : "建立索引"}
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
       {combinedError && (
-        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+        <div className="whitespace-pre-wrap border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
           {combinedError}
         </div>
       )}
 
-      {info && !combinedError && (
+      {info && (
         <div className="border-b border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700">
           {info}
         </div>
@@ -384,13 +502,27 @@ export default function ReadPage() {
           loading={feedsLoading}
           onSelect={setSelectedFeedId}
           onRefreshAll={() => void handleRefreshAll()}
+          onRefreshGroup={(groupId, groupName, feedIds) =>
+            void handleRefreshGroup(groupId, groupName, feedIds)
+          }
+          onLoadGroupBodies={(groupId, groupName, feedIds) =>
+            void handleLoadBodiesGroup(groupId, groupName, feedIds)
+          }
           refreshingAll={refreshingAll}
+          refreshing={Boolean(refreshingFeedId)}
+          refreshingGroupId={refreshingGroupId}
+          loadingBodies={loadingBodies}
+          loadingBodiesGroupId={loadingBodiesGroupId}
           onAddSource={() => setAddSourceOpen(true)}
           onManageGroups={() => setGroupModalOpen(true)}
           onDeleteFeed={(feedId) => {
             const feed = feeds.find((item) => item.id === feedId) ?? null;
-            if (feed) setDeleteTarget(feed);
+            if (feed) {
+              setDeleteTarget(feed);
+              setDeleteRemoveSkill(false);
+            }
           }}
+          onRenameFeed={(feedId, name) => handleRenameFeed(feedId, name)}
           onLayoutChange={handleLayoutChange}
         />
         <ArticleList
@@ -399,12 +531,19 @@ export default function ReadPage() {
           articles={articles}
           loading={articlesLoading}
           feedName={selectedFeed?.name ?? ""}
+          feedUrl={selectedFeed?.entry_url}
+          syncTime={selectedFeed?.sync_time}
           onRefresh={handleRefresh}
-          refreshing={refreshing || refreshingAll}
+          refreshing={feedRefreshBusy}
         />
       </main>
 
-      <AddSourceModal open={addSourceOpen} onClose={() => setAddSourceOpen(false)} />
+      <AddSourceModal
+        open={addSourceOpen}
+        onClose={() => setAddSourceOpen(false)}
+        groups={feedGroups}
+        defaultGroupId={selectedFeed?.group_id ?? UNGROUPED_GROUP_ID}
+      />
       <FeedGroupModal
         open={groupModalOpen}
         feeds={feeds}
@@ -421,11 +560,27 @@ export default function ReadPage() {
             ? `确定从列表移除「${deleteTarget.name}」？\n\nskill 文件会保留，之后可通过相同链接重新接入。`
             : ""
         }
+        extraContent={
+          deleteTarget ? (
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={deleteRemoveSkill}
+                onChange={(e) => setDeleteRemoveSkill(e.target.checked)}
+                disabled={deletingFeed}
+              />
+              同时移除本地 skill（默认保留）
+            </label>
+          ) : null
+        }
         confirmLabel="确认移除"
         danger
         loading={deletingFeed}
         onCancel={() => {
-          if (!deletingFeed) setDeleteTarget(null);
+          if (!deletingFeed) {
+            setDeleteTarget(null);
+            setDeleteRemoveSkill(false);
+          }
         }}
         onConfirm={() => {
           if (deleteTarget) void handleDeleteFeed(deleteTarget.id);

@@ -97,12 +97,38 @@ def delete_discovery_skill(skill_id: str) -> dict[str, str | None]:
     from feed_registry import feed_registry
 
     if feed_id:
-        feed_registry.hide_feed(feed_id)
+        # skill 已物理删除：purge 而非 hide，避免重接时踩「数据源已移除」
+        feed_registry.purge_feed(feed_id)
 
     from skill_registry import clear_loaded_skill_modules
 
     clear_loaded_skill_modules()
     return {"id": skill_id, "feed_id": feed_id}
+
+
+def delete_discovery_skill_by_feed_id(feed_id: str) -> dict[str, str | None]:
+    target = (feed_id or "").strip()
+    if not target:
+        raise ValueError("无效的 feed_id")
+    if not SKILLS_ROOT.is_dir():
+        raise ValueError("未找到对应的 discovery skill")
+
+    for skill_dir in sorted(SKILLS_ROOT.iterdir()):
+        if not skill_dir.is_dir() or not skill_dir.name.endswith("-discovery"):
+            continue
+        resolved_feed_id = _extract_feed_id(skill_dir)
+        if resolved_feed_id == target:
+            skill_id = skill_dir.name[: -len("-discovery")]
+            return delete_discovery_skill(skill_id)
+
+    if target.startswith("website:"):
+        skill_id = target.split(":", 1)[1].strip()
+        if skill_id:
+            skill_dir = _skill_dir_for_discovery(skill_id)
+            if skill_dir.is_dir():
+                return delete_discovery_skill(skill_id)
+
+    raise ValueError("未找到对应的 discovery skill")
 
 
 def delete_other_skill(skill_id: str) -> dict[str, str]:

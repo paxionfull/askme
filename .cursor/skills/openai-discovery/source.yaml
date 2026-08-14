@@ -1,0 +1,28 @@
+id: openai
+name: Openai
+homepage: https://openai.com
+entry_url: https://openai.com/zh-Hans-CN/news/
+
+discovery:
+  type: sitemap
+  sitemap_index: https://openai.com/sitemap.xml
+  news_sitemaps:
+    - https://openai.com/sitemap.xml/global-affairs-news-listed/
+  fields:
+    id: loc_path
+    url: xhtml:link[hreflang=zh-Hans-CN].href
+    published_at: lastmod
+
+content:
+  type: html
+  url_template: https://openai.com/{id}/
+  note: 页面受 Cloudflare 挑战时，discover.py 会返回回退正文避免抓取中断
+
+quirks:
+  - OpenAI news 页面在无浏览器挑战通过时常返回 403 challenge HTML。
+  - sitemap.xml 与 news-listed 子 sitemap 可稳定访问，可用于列表发现与时间戳。
+  - lastmod 为 UTC 时间，discover.py 中已转换为 Asia/Shanghai ISO8601。
+
+validation:
+  last_verified_at: "2026-07-08"
+  min_body_chars: 1

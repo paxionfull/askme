@@ -49,6 +49,20 @@ class FeedClient:
             raise FeedError(f"未知数据源: {feed_id}", status_code=404)
         feed_registry.hide_feed(feed_id)
 
+    def ensure_feed_visible(self, feed_id: str) -> None:
+        """重新接入后恢复可见性，并确保 skill 已装载。"""
+        if feed_registry.is_hidden(feed_id):
+            feed_registry.unhide_feed(feed_id)
+        if feed_id not in self._feeds:
+            self.reload_skills()
+        if feed_id not in self._feeds:
+            raise FeedError(f"skill 未装载: {feed_id}", status_code=404)
+
+    def rename_feed(self, feed_id: str, name: str) -> str:
+        if feed_id not in self._feeds:
+            raise FeedError(f"未知数据源: {feed_id}", status_code=404)
+        return feed_registry.set_feed_display_name(feed_id, name)
+
     def list_groups(self) -> list[dict[str, Any]]:
         return feed_registry.list_groups()
 
@@ -91,6 +105,9 @@ class FeedClient:
             group_id = feed_registry.group_id_for_feed(feed_id)
             if group_id:
                 meta = {**meta, "groupId": group_id}
+            display_name = feed_registry.display_name_for_feed(feed_id)
+            if display_name:
+                meta = {**meta, "mpName": display_name}
             feeds.append(meta)
         return feeds
 
@@ -107,9 +124,9 @@ class FeedClient:
             return
         self.body_store.delete_feed(feed_id)
 
-    async def refresh_feed(self, feed_id: str) -> dict[str, Any]:
+    async def refresh_feed(self, feed_id: str, *, days: int = 1) -> dict[str, Any]:
         try:
-            return await self._get_feed(feed_id).refresh_feed()
+            return await self._get_feed(feed_id).refresh_feed(days=days)
         except Exception as exc:
             if isinstance(exc, FeedError):
                 raise
@@ -118,37 +135,40 @@ class FeedClient:
     async def get_articles(
         self,
         feed_id: str,
-        limit: int = 20,
+        limit: int | None = None,
         refresh: bool = False,
         fresh: bool = False,
         include_content: bool = False,
+        *,
+        days: int = 1,
     ) -> list[dict]:
         if refresh:
-            await self.refresh_feed(feed_id)
+            await self.refresh_feed(feed_id, days=days)
         articles = self._get_feed(feed_id).get_articles(limit=limit)
-        if not include_content:
-            return articles
-
         enriched: list[dict] = []
         for article in articles:
             article_id = article.get("id", "")
             body = self.body_store.get(feed_id, article_id) if article_id else None
-            if body and body.get("plain_text", "").strip():
-                enriched.append(
-                    {
-                        **article,
-                        "content_html": body.get("content_html", ""),
-                        "plain_text": body.get("plain_text", ""),
-                        "has_body": True,
-                    }
-                )
-            else:
-                enriched.append({**article, "has_body": False})
+            has_body = bool(body and body.get("plain_text", "").strip())
+            item = {**article, "has_body": has_body}
+            if include_content and has_body and body:
+                item["content_html"] = body.get("content_html", "")
+                item["plain_text"] = body.get("plain_text", "")
+            enriched.append(item)
         return enriched
 
-    async def fetch_article_detail(self, feed_id: str, article_id: str) -> dict[str, Any]:
+    async def fetch_article_detail(
+        self,
+        feed_id: str,
+        article_id: str,
+        *,
+        hints: dict | None = None,
+    ) -> dict[str, Any]:
         try:
-            return await self._get_feed(feed_id).fetch_article_detail_normalized(article_id)
+            return await self._get_feed(feed_id).fetch_article_detail_normalized(
+                article_id,
+                hints=hints,
+            )
         except Exception as exc:
             if isinstance(exc, FeedError):
                 raise
@@ -161,6 +181,8 @@ class FeedClient:
             "title": detail["title"],
             "url": detail["url"],
             "content_html": detail["content_html"],
+            "body_status": detail.get("body_status", "ok"),
+            "body_detail": detail.get("body_detail", ""),
             "image": detail.get("image", ""),
             "published_at": detail.get("published_at", ""),
             "author": detail.get("author", ""),
@@ -179,8 +201,16 @@ class FeedClient:
         url: str = "",
         published_at: str = "",
         feed_name: str = "",
+        hints: dict | None = None,
     ) -> dict[str, Any]:
-        detail = await self.fetch_article_detail(feed_id, article_id)
+        merged_hints = dict(hints or {})
+        if url and not merged_hints.get("url"):
+            merged_hints["url"] = url
+        if title and not merged_hints.get("title"):
+            merged_hints["title"] = title
+        if published_at and not merged_hints.get("published_at"):
+            merged_hints["published_at"] = published_at
+        detail = await self.fetch_article_detail(feed_id, article_id, hints=merged_hints)
         content_html = detail.get("content_html", "")
         plain_text = detail.get("plain_text", "")
         if plain_text.strip():
@@ -189,6 +219,21 @@ class FeedClient:
                 article_id,
                 content_html=content_html,
                 plain_text=plain_text,
+                body_status=detail.get("body_status", "ok"),
+                body_detail=detail.get("body_detail", ""),
+                title=title or detail.get("title", ""),
+                url=url or detail.get("url", ""),
+                published_at=published_at or detail.get("published_at", ""),
+                feed_name=feed_name,
+            )
+        else:
+            self.body_store.save(
+                feed_id,
+                article_id,
+                content_html=content_html,
+                plain_text=plain_text,
+                body_status=detail.get("body_status", "parse_failed"),
+                body_detail=detail.get("body_detail", ""),
                 title=title or detail.get("title", ""),
                 url=url or detail.get("url", ""),
                 published_at=published_at or detail.get("published_at", ""),
@@ -212,6 +257,8 @@ class FeedClient:
             "feed_name": stored.get("feed_name", ""),
             "content_html": content_html,
             "plain_text": stored.get("plain_text", ""),
+            "body_status": stored.get("body_status", "ok"),
+            "body_detail": stored.get("body_detail", ""),
         }
 
     async def get_or_fetch_body(
@@ -229,6 +276,23 @@ class FeedClient:
         if cached:
             return cached
         if not fetch:
+            stored = self.body_store.get(feed_id, article_id)
+            if not stored:
+                return None
+            status = stored.get("body_status", "")
+            if status and status != "ok":
+                return {
+                    "id": article_id,
+                    "feed_id": feed_id,
+                    "title": stored.get("title", title),
+                    "url": stored.get("url", url),
+                    "published_at": stored.get("published_at", published_at),
+                    "feed_name": stored.get("feed_name", feed_name),
+                    "content_html": stored.get("content_html", ""),
+                    "plain_text": stored.get("plain_text", ""),
+                    "body_status": status,
+                    "body_detail": stored.get("body_detail", ""),
+                }
             return None
         detail = await self.fetch_and_persist_body(
             feed_id,
@@ -239,7 +303,18 @@ class FeedClient:
             feed_name=feed_name,
         )
         if not detail.get("plain_text", "").strip():
-            return None
+            return {
+                "id": article_id,
+                "feed_id": feed_id,
+                "title": title or detail.get("title", ""),
+                "url": url or detail.get("url", ""),
+                "published_at": published_at or detail.get("published_at", ""),
+                "feed_name": feed_name,
+                "content_html": detail.get("content_html", ""),
+                "plain_text": detail.get("plain_text", ""),
+                "body_status": detail.get("body_status", "parse_failed"),
+                "body_detail": detail.get("body_detail", ""),
+            }
         return {
             "id": article_id,
             "feed_id": feed_id,
@@ -249,4 +324,6 @@ class FeedClient:
             "feed_name": feed_name,
             "content_html": detail.get("content_html", ""),
             "plain_text": detail.get("plain_text", ""),
+            "body_status": detail.get("body_status", "ok"),
+            "body_detail": detail.get("body_detail", ""),
         }

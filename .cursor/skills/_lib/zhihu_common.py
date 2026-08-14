@@ -6,11 +6,11 @@ import json
 import os
 import re
 import urllib.parse
-import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import zhihu_sign
+from http_client import fetch_json, fetch_text
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 ZSE93 = zhihu_sign.ZSE_93
@@ -28,12 +28,10 @@ def _cookie_value(cookie: str, key: str) -> str:
 def _fetch_zse_ck() -> str:
     for version in ("v3",):
         try:
-            req = urllib.request.Request(
+            script = fetch_text(
                 f"https://static.zhihu.com/zse-ck/{version}.js",
                 headers={"User-Agent": USER_AGENT},
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                script = resp.read().decode("utf-8", errors="ignore")
             match = re.search(r'__g\.ck\|\|"([\w+/=\\]*)",_=', script)
             if match:
                 return match.group(1)
@@ -43,7 +41,9 @@ def _fetch_zse_ck() -> str:
 
 
 def _fetch_dc0(page_url: str, zse_ck: str) -> str:
-    req = urllib.request.Request(
+    from http_client import fetch_bytes_and_headers
+
+    _, resp_headers = fetch_bytes_and_headers(
         page_url,
         headers={
             "User-Agent": USER_AGENT,
@@ -51,10 +51,9 @@ def _fetch_dc0(page_url: str, zse_ck: str) -> str:
             "Referer": "https://www.zhihu.com/",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        for header in resp.headers.get_all("Set-Cookie") or []:
-            if header.startswith("d_c0="):
-                return header.split(";", 1)[0].split("=", 1)[1]
+    for header in resp_headers.get_all("Set-Cookie") or []:
+        if header.startswith("d_c0="):
+            return header.split(";", 1)[0].split("=", 1)[1]
     raise RuntimeError("无法获取知乎 d_c0 cookie")
 
 
@@ -91,9 +90,7 @@ def _signed_headers(page_url: str, api_path: str, cookie_override: str = "") -> 
 
 
 def _request_json(url: str, headers: dict[str, str]) -> dict:
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = fetch_json(url, headers=headers)
     if not isinstance(data, dict):
         raise ValueError("知乎 API 返回格式异常")
     if data.get("error"):
@@ -110,7 +107,9 @@ def _format_timestamp(value: int | str) -> str:
 
 
 def build_articles_api_path(usertype: str, user_id: str, offset: int, limit: int) -> str:
-    prefix = "members" if usertype == "people" else "org"
+    # 机构号页面路径为 /org/{id}，但文章列表 API 与个人号相同，均走 /api/v4/members/
+    # （/api/v4/org/{id}/articles 会 404）
+    del usertype  # Referer 用 usertype；列表 API 固定 members
     params = urllib.parse.urlencode(
         {
             "include": (
@@ -125,7 +124,7 @@ def build_articles_api_path(usertype: str, user_id: str, offset: int, limit: int
             "sort_by": "created",
         }
     )
-    return f"/api/v4/{prefix}/{user_id}/articles?{params}"
+    return f"/api/v4/members/{user_id}/articles?{params}"
 
 
 def fetch_article_by_id(article_id: str, *, page_url: str) -> dict:

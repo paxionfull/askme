@@ -1,10 +1,10 @@
-"""按分组与 digest skill 生成摘要。"""
+"""按分组与 digest skill 生成概览。"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from skill_runtime import get_digest_system_prompt
+from skill_runtime import get_digest_input_mode, get_digest_system_prompt
 from feed_registry import UNGROUPED_GROUP_ID, feed_registry
 from skill_config import get_default_digest_skill, get_fallback_digest_prompt
 
@@ -62,7 +62,15 @@ def partition_articles_by_groups(
     return partitions
 
 
-def build_partition_context(article_service, articles: list[dict], *, days: int) -> tuple[str, bool]:
+def build_partition_context(
+    article_service,
+    articles: list[dict],
+    *,
+    days: int,
+    input_mode: str = "full",
+) -> tuple[str, bool]:
+    if input_mode == "titles":
+        return article_service._build_title_index_context(articles, days=days)
     return article_service._build_context(articles, days=days)
 
 
@@ -72,10 +80,41 @@ def build_summary_messages_for_partition(
     system_prompt: str,
     articles: list[dict],
     days: int,
+    digest_skill_id: str | None = None,
 ) -> tuple[list[dict[str, str]], bool]:
-    context_text, truncated = build_partition_context(article_service, articles, days=days)
+    input_mode = get_digest_input_mode(digest_skill_id) if digest_skill_id else "full"
+    context_text, truncated = build_partition_context(
+        article_service,
+        articles,
+        days=days,
+        input_mode=input_mode,
+    )
     prompt = system_prompt.strip() or get_fallback_digest_prompt()
     return article_service.build_summary_messages(prompt, context_text), truncated
+
+
+def build_article_refs(partitions: list[dict[str, Any]]) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for partition in partitions:
+        for article in partition.get("articles") or []:
+            feed_id = str(article.get("feed_id") or "").strip()
+            article_id = str(article.get("id") or "").strip()
+            if not feed_id or not article_id:
+                continue
+            key = f"{feed_id}:{article_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            refs.append(
+                {
+                    "feed_id": feed_id,
+                    "article_id": article_id,
+                    "title": str(article.get("title") or ""),
+                    "url": str(article.get("url") or ""),
+                }
+            )
+    return refs
 
 
 def stitch_summaries(sections: list[dict[str, Any]]) -> str:
