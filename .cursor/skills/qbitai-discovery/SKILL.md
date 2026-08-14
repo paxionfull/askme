@@ -2,7 +2,8 @@
 name: qbitai-discovery
 description: >-
   Discovers articles from 量子位 (qbitai.com) via WordPress REST API.
-  Use when fetching updates from qbitai.com or 量子位.
+  Use when fetching updates from qbitai.com or 量子位 only.
+  Not for onboarding other websites.
 ---
 
 # 量子位发现层

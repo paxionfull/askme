@@ -42,15 +42,54 @@ def _check_fetch_article_detail_hints(script_text: str) -> None:
     body = _function_body(script_text, "fetch_article_detail")
     if not body:
         return
-    if "fetch_list_page" not in body:
-        return
-    if any(token in body for token in _DETAIL_HINTS_TOKENS):
-        return
-    raise ValueError(
-        "fetch_article_detail 内直接调用 fetch_list_page 定位 url，但未使用 hints："
-        "须 from detail_hints import pick_hints, resolve_detail_url，"
-        "优先 resolve_detail_url(article_id, **hints) 或 meta.get('url')"
-    )
+    uses_list = "fetch_list_page" in body
+    uses_hints = any(token in body for token in _DETAIL_HINTS_TOKENS)
+    if uses_list and not uses_hints:
+        raise ValueError(
+            "fetch_article_detail 内直接调用 fetch_list_page 定位 url，但未使用 hints："
+            "须 from detail_hints import pick_hints, resolve_detail_url，"
+            "优先 resolve_detail_url(article_id, **hints) 或 meta.get('url')"
+        )
+    # 有列表回退时也必须先读 hints.url，避免批量拉正文重复扫表
+    if uses_list and uses_hints:
+        if not any(
+            token in body
+            for token in (
+                "resolve_detail_url",
+                'hints.get("url"',
+                "hints.get('url'",
+                'meta.get("url"',
+                "meta.get('url'",
+                "pick_hints",
+            )
+        ):
+            raise ValueError(
+                "fetch_article_detail 调用了 fetch_list_page，但未见优先读取 hints.url；"
+                "请先 resolve_detail_url / pick_hints，仅在无 url 时再回退列表"
+            )
+
+
+def _fetch_detail_without_list_scan(module, sample_id: str, hint_payload: dict) -> dict:
+    """有 hints.url 时禁止再打 fetch_list_page（运行时守卫）。"""
+    original = module.fetch_list_page
+    calls: list[tuple] = []
+
+    def _guarded(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    module.fetch_list_page = _guarded  # type: ignore[method-assign]
+    try:
+        detail = module.fetch_article_detail(sample_id, **hint_payload)
+    finally:
+        module.fetch_list_page = original  # type: ignore[method-assign]
+    if calls:
+        raise ValueError(
+            "fetch_article_detail 在已提供 hints.url 时仍调用了 fetch_list_page；"
+            "批量拉正文会传入列表 url，须优先使用 resolve_detail_url / meta['url']，"
+            "禁止为定位正文再拉整表列表"
+        )
+    return detail
 
 def _load_module(skill_dir: Path):
     script = skill_dir / DISCOVER_SCRIPT
@@ -171,7 +210,7 @@ def validate_skill(slug: str, *, min_items: int = MIN_LIST_ITEMS) -> dict:
 
     hint_payload = hints_from_list_item(sample)
     if hint_payload.get("url"):
-        detail = module.fetch_article_detail(sample_id, **hint_payload)
+        detail = _fetch_detail_without_list_scan(module, sample_id, hint_payload)
     else:
         detail = module.fetch_article_detail(sample_id)
     html = str(detail.get("content_html", "") or "")

@@ -9,8 +9,11 @@ from urllib.parse import urlparse
 
 _DOMAIN_SLOTS = {
     "zhihu.com": "zhihu",
+    "zhimg.com": "zhihu",
     "xiaohongshu.com": "xiaohongshu",
     "xhscdn.com": "xiaohongshu",
+    "xhslink.com": "xiaohongshu",
+    "mp.weixin.qq.com": "weixin",
 }
 
 _LOGIN_MARKERS = (
@@ -36,6 +39,17 @@ def looks_like_login_wall(body: str) -> bool:
     return hits >= 2 or "请先登录" in text or "扫码登录" in text
 
 
+def _slot_from_host(host: str) -> str:
+    host = host.replace("www.", "")
+    parts = [p for p in host.split(".") if p]
+    if len(parts) >= 2:
+        base = "-".join(parts[-2:])
+    else:
+        base = parts[0] if parts else "unknown"
+    safe = re.sub(r"[^a-z0-9-]+", "-", base.lower()).strip("-")
+    return safe[:48] or "unknown"
+
+
 def resolve_slot_hint(skill_dir: Path, feed_meta: dict[str, Any]) -> str:
     source_yaml = skill_dir / "source.yaml"
     if source_yaml.is_file():
@@ -54,10 +68,17 @@ def resolve_slot_hint(skill_dir: Path, feed_meta: dict[str, Any]) -> str:
         for domain, slot in _DOMAIN_SLOTS.items():
             if host == domain or host.endswith("." + domain):
                 return slot
+        if host:
+            return _slot_from_host(host)
     # skill 目录名启发
     name = skill_dir.name.lower()
     if "zhihu" in name:
         return "zhihu"
     if "xiaohongshu" in name or "xhs" in name:
         return "xiaohongshu"
+    if "weixin" in name or "wechat" in name:
+        return "weixin"
+    m = re.match(r"^(.+)-discovery$", skill_dir.name)
+    if m:
+        return m.group(1).lower().replace("_", "-")[:48]
     return "unknown"

@@ -7,8 +7,11 @@ platform_skill: true
 discovery:
   type: weixin_mp_admin
   requires_cookie: true
-  cookie_slot: weixin
+  auth_slot: weixin
+  login_url: https://mp.weixin.qq.com/
+  required_token: askme_mp_token=
+  cookie_hint: 须登录【公众号】后台（勿选小程序）；含 askme_mp_token 与 slave_sid
 
 validation:
-  min_body_chars: 40
   expected_min_items: 1
+  min_body_chars: 40

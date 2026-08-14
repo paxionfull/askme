@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""知乎用户发现层适配器（脚手架模板）。
+"""知乎用户发现层脚手架模板（占位符替换）；运行时以 zhihu-platform-discovery 为准。
 
-占位符由 scaffold_zhihu_files 替换：
-  __ASKME_USER_ID__ / __ASKME_USER_TYPE__ / __ASKME_PAGE_URL__
-  __ASKME_FEED_ID__ / __ASKME_DISPLAY_NAME__
+占位：__ASKME_USER_ID__ / __ASKME_USER_TYPE__ / __ASKME_PAGE_URL__ /
+__ASKME_FEED_ID__ / __ASKME_DISPLAY_NAME__
 """
 
 from __future__ import annotations

@@ -9,11 +9,13 @@ import { consumeLastOnboardedFeedId, useOnboarding } from "../contexts/Onboardin
 import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
 import { resolveDefaultFeedId, setStoredSelectedFeedId } from "../utils/selectedFeed";
 import { deleteFeedMessage, deleteFeedSuccessMessage, isPlatformFeed } from "../utils/platformFeed";
+import { hydrateFeedsState, writeFeedsCache } from "../utils/feedsCache";
 import { useDigest } from "../contexts/DigestContext";
 import { useFeedRefresh } from "../contexts/FeedRefreshContext";
 import { isLlmConfigured, useSettings, formatDaysLabel } from "../hooks/useSettings";
 import DaysRangeSelect from "../components/DaysRangeSelect";
-import OverflowMenu from "../components/OverflowMenu";
+
+const INITIAL_FEEDS_CACHE = hydrateFeedsState();
 
 export default function ReadPage() {
   const { settings } = useSettings();
@@ -24,11 +26,10 @@ export default function ReadPage() {
     loadingIndex,
     loadError: digestError,
     metaCount,
-    bodyCount,
-    bodiesReady,
     indexReady,
     indexChunkCount,
     indexProgress,
+    bodyProgress,
     digestBusy,
     loadBodies,
     buildIndex,
@@ -37,14 +38,16 @@ export default function ReadPage() {
     loadingBodiesGroupId,
   } = useDigest();
 
-  const [feeds, setFeeds] = useState<Feed[]>([]);
-  const [feedGroups, setFeedGroups] = useState<FeedGroup[]>([]);
-  const [groupOrder, setGroupOrder] = useState<string[]>([]);
-  const [defaultDigestSkill, setDefaultDigestSkill] = useState("general-digest");
+  const [feeds, setFeeds] = useState<Feed[]>(() => INITIAL_FEEDS_CACHE?.feeds ?? []);
+  const [feedGroups, setFeedGroups] = useState<FeedGroup[]>(() => INITIAL_FEEDS_CACHE?.groups ?? []);
+  const [groupOrder, setGroupOrder] = useState<string[]>(() => INITIAL_FEEDS_CACHE?.groupOrder ?? []);
+  const [defaultDigestSkill, setDefaultDigestSkill] = useState(
+    () => INITIAL_FEEDS_CACHE?.defaultDigestSkill ?? "general-digest",
+  );
   const [selectedFeedId, setSelectedFeedId] = useState<string | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
 
-  const [feedsLoading, setFeedsLoading] = useState(true);
+  const [feedsLoading, setFeedsLoading] = useState(() => !INITIAL_FEEDS_CACHE);
   const [articlesLoading, setArticlesLoading] = useState(false);
   const {
     refreshingAll,
@@ -119,7 +122,9 @@ export default function ReadPage() {
   }, [articleCacheKey]);
 
   const loadFeeds = useCallback(async () => {
-    setFeedsLoading(true);
+    if (!INITIAL_FEEDS_CACHE) {
+      setFeedsLoading(true);
+    }
     setError("");
     setInfo("");
     try {
@@ -128,6 +133,12 @@ export default function ReadPage() {
       setFeedGroups(data.groups);
       setGroupOrder(data.group_order ?? []);
       setDefaultDigestSkill(data.default_digest_skill ?? "general-digest");
+      writeFeedsCache({
+        feeds: data.feeds,
+        groups: data.groups,
+        groupOrder: data.group_order ?? [],
+        defaultDigestSkill: data.default_digest_skill ?? "general-digest",
+      });
       setSelectedFeedId((current) =>
         resolveDefaultFeedId(
           data.feeds,
@@ -266,19 +277,8 @@ export default function ReadPage() {
     }
   }, [refreshBusy, loadFeeds, loadArticles, days, articleCacheKey]);
 
-  async function handleRefresh() {
-    if (!selectedFeedId || feedRefreshBusy) return;
-    setError("");
-    setInfo("");
-    try {
-      await startRefreshFeed(selectedFeedId, selectedFeed?.name, days, selectedFeed?.entry_url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "刷新失败");
-    }
-  }
-
-  async function handleRefreshAll() {
-    if (feeds.length === 0 || feedRefreshBusy) return;
+  async function handleUpdateSourcesAll() {
+    if (feeds.length === 0 || feedRefreshBusy || loadingBodies) return;
     setError("");
     setInfo("");
     try {
@@ -287,50 +287,71 @@ export default function ReadPage() {
       setFeedGroups(latest.groups);
       setGroupOrder(latest.group_order ?? []);
       await startRefreshAll(days);
+      clearErrors();
+      await loadBodies();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新全部失败");
+      setError(err instanceof Error ? err.message : "更新源信息失败");
     }
   }
 
-  async function handleRefreshGroup(groupId: string, groupName: string, feedIds: string[]) {
-    if (feedIds.length === 0 || feedRefreshBusy) return;
+  async function handleUpdateSourcesGroup(groupId: string, groupName: string, feedIds: string[]) {
+    if (feedIds.length === 0 || feedRefreshBusy || loadingBodies) return;
     setError("");
     setInfo("");
     try {
       await startRefreshGroup(groupId, groupName, days);
+      clearErrors();
+      const result = await loadBodies({
+        feedIds,
+        groupId,
+        groupName,
+      });
+      if (!result) return;
+      const withBody = result.article_count ?? 0;
+      const meta = result.meta_count ?? withBody;
+      const cached = result.cached_count ?? 0;
+      const fetched = result.fetched_count ?? 0;
+      const missing = meta > withBody ? meta - withBody : 0;
+      setInfo(
+        `分组「${groupName}」已更新：列表已刷新 · ${withBody}/${meta} 篇含正文` +
+          `（${formatDaysLabel(days)}）` +
+          `${missing > 0 ? ` · ${missing} 篇无正文` : ""}` +
+          ` · 缓存 ${cached} · 新拉 ${fetched}`,
+      );
+      for (const feedId of feedIds) {
+        articlesCache.current.delete(articleCacheKey(feedId, days));
+      }
+      if (selectedFeedId && feedIds.includes(selectedFeedId)) {
+        void loadArticles(selectedFeedId, days, true);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新分组失败");
     }
   }
 
-  async function handleLoadBodiesGroup(groupId: string, groupName: string, feedIds: string[]) {
-    if (feedIds.length === 0 || loadingBodies || feedRefreshBusy) return;
+  async function handleUpdateSourcesFeed(
+    feedId: string,
+    feedName?: string,
+    entryUrl?: string | null,
+  ) {
+    if (!feedId || feedRefreshBusy || loadingBodies) return;
     setError("");
     setInfo("");
-    const result = await loadBodies({
-      feedIds,
-      groupId,
-      groupName,
-    });
-    if (!result) {
-      return;
-    }
-    const withBody = result.article_count ?? 0;
-    const meta = result.meta_count ?? withBody;
-    const cached = result.cached_count ?? 0;
-    const fetched = result.fetched_count ?? 0;
-    const missing = meta > withBody ? meta - withBody : 0;
-    setInfo(
-      `分组「${groupName}」正文拉取完成：${withBody}/${meta} 篇含正文` +
-        `（${formatDaysLabel(days)}）` +
-        `${missing > 0 ? ` · ${missing} 篇无正文` : ""}` +
-        ` · 缓存 ${cached} · 新拉 ${fetched}`,
-    );
-    for (const feedId of feedIds) {
+    try {
+      await startRefreshFeed(
+        feedId,
+        feedName,
+        days,
+        entryUrl == null ? undefined : entryUrl,
+      );
+      clearErrors();
+      await loadBodies({ feedIds: [feedId] });
       articlesCache.current.delete(articleCacheKey(feedId, days));
-    }
-    if (selectedFeedId && feedIds.includes(selectedFeedId)) {
-      void loadArticles(selectedFeedId, days, true);
+      if (selectedFeedId === feedId) {
+        void loadArticles(feedId, days, true);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新源信息失败");
     }
   }
 
@@ -410,83 +431,98 @@ export default function ReadPage() {
   }
 
   const combinedError = error || digestError;
+  const llmConfigured = isLlmConfigured(settings);
+  const hasList = metaCount > 0 || feeds.length > 0;
 
-  const bodyStatusLabel = bodiesReady
-    ? "正文已就绪"
-    : loadingBodies
-      ? "拉取正文中…"
-      : metaCount > 0
-        ? "待拉取正文"
-        : "暂无文章";
-  const indexStatusLabel = indexReady
-    ? "索引已就绪"
-    : loadingIndex
-      ? `建立索引中 ${indexProgress.current}/${indexProgress.total || "…"}`
-      : "未建索引";
+  const sourcesStatus = (() => {
+    if (refreshBusy) return "正在更新文章列表…";
+    if (loadingBodies) {
+      return bodyProgress.total > 0
+        ? `正在拉取正文 ${bodyProgress.current}/${bodyProgress.total}`
+        : "正在拉取正文…";
+    }
+    if (loadingIndex) {
+      return indexProgress.total > 0
+        ? `建立索引中 ${indexProgress.current}/${indexProgress.total}`
+        : "正在建立索引…";
+    }
+    const parts: string[] = [];
+    if (feeds.length > 0) parts.push(`${feeds.length} 个源`);
+    parts.push(formatDaysLabel(days));
+    if (metaCount > 0) parts.push(`${metaCount} 篇列表`);
+    else if (feeds.length > 0) parts.push("暂无文章");
+    if (indexReady) parts.push(`索引 ${indexChunkCount} 片段`);
+    return parts.join(" · ") || "还没有数据源";
+  })();
+
+  const sourcesBusy = refreshBusy || loadingBodies;
 
   return (
     <div className="flex h-full flex-col bg-[var(--paper)]">
       <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-base font-semibold tracking-tight text-[var(--ink)]">库</h1>
-            <p className="mt-0.5 truncate text-xs text-[var(--ink-muted)]">
-              {formatDaysLabel(days)} · {bodyStatusLabel} · {indexStatusLabel}
-              {bodiesReady && bodyCount > 0 ? ` · ${bodyCount} 篇正文` : ""}
-              {indexReady ? ` · ${indexChunkCount} 片段` : ""}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <DaysRangeSelect value={days} onChange={setDays} disabled={digestBusy} />
-            <OverflowMenu
-              disabled={digestBusy && !loadingBodies && !loadingIndex}
-              items={[
-                {
-                  label: loadingBodies
-                    ? "拉取正文中…"
-                    : bodiesReady
-                      ? "重新拉取正文"
-                      : "拉取正文",
-                  hint: bodiesReady
-                    ? `${bodyCount} 篇含正文${metaCount > bodyCount ? `（共 ${metaCount}）` : ""}`
-                    : metaCount > 0
-                      ? `${metaCount} 篇待拉取`
-                      : "当前范围暂无文章",
-                  disabled: digestBusy,
-                  onClick: () => {
-                    clearErrors();
-                    void loadBodies();
-                  },
-                },
-                {
-                  label: loadingIndex
-                    ? "建立索引中…"
-                    : indexReady
-                      ? "重新建立索引"
-                      : "建立索引",
-                  hint: indexReady
-                    ? `已有 ${indexChunkCount} 个向量片段（近 3 天范围保留）`
-                    : "无新正文时按 0 篇处理，保留近 3 天已有索引",
-                  disabled: digestBusy || !isLlmConfigured(settings),
-                  onClick: () => {
-                    clearErrors();
-                    void buildIndex();
-                  },
-                },
-              ]}
-            />
-          </div>
+        <h1 className="text-[1.35rem] font-semibold tracking-tight text-[var(--ink)]">源</h1>
+        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-2">
+          <label className="inline-flex items-center gap-1.5 text-sm">
+            <span className="text-xs text-[var(--ink-muted)]">范围</span>
+            <DaysRangeSelect value={days} onChange={setDays} disabled={digestBusy} size="sm" />
+          </label>
+          <span className="text-[var(--ink-muted)]">·</span>
+          <span
+            className={`text-sm ${
+              sourcesBusy || loadingIndex
+                ? "text-[var(--accent)]"
+                : hasList
+                  ? "text-[var(--success)]"
+                  : "text-[var(--ink-muted)]"
+            }`}
+          >
+            {sourcesStatus}
+          </span>
         </div>
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={sourcesBusy || feeds.length === 0}
+            title={
+              feeds.length === 0
+                ? "请先添加数据源"
+                : "刷新各源文章列表，并拉取正文。\n生成简报与摘要会用到更新后的内容；建立索引仍需另点。"
+            }
+            onClick={() => void handleUpdateSourcesAll()}
+            className="ui-btn ui-btn-primary text-sm disabled:opacity-50"
+          >
+            {sourcesBusy ? "更新中…" : "更新源信息"}
+          </button>
+          <button
+            type="button"
+            disabled={digestBusy || !llmConfigured}
+            title={
+              !llmConfigured
+                ? "请先在设置配置模型"
+                : "为已有正文建立检索索引，仅自由提问时需要。\n生成简报或对选定文章做摘要不需要索引，可跳过以节省 token。"
+            }
+            onClick={() => {
+              clearErrors();
+              void buildIndex();
+            }}
+            className="ui-btn text-sm disabled:opacity-50"
+          >
+            {loadingIndex ? "建立索引中…" : indexReady ? "重建索引" : "建立索引"}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-[var(--ink-muted)]">
+          更新源信息 = 刷新列表并拉取正文；建立索引仅在提问时需要。
+        </p>
       </header>
 
       {combinedError && (
-        <div className="whitespace-pre-wrap border-b border-[var(--rule)] bg-[var(--error-soft)] px-4 py-2 text-sm text-red-800">
+        <div className="whitespace-pre-wrap border-b border-[var(--rule)] bg-[var(--error-soft)] px-4 py-2.5 text-sm text-red-800">
           {combinedError}
         </div>
       )}
 
       {info && (
-        <div className="border-b border-[var(--rule)] bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--accent)]">
+        <div className="border-b border-[var(--rule)] bg-[var(--accent-soft)] px-4 py-2.5 text-sm text-[var(--accent)]">
           {info}
         </div>
       )}
@@ -499,18 +535,16 @@ export default function ReadPage() {
           selectedId={selectedFeedId}
           loading={feedsLoading}
           onSelect={setSelectedFeedId}
-          onRefreshAll={() => void handleRefreshAll()}
+          onRefreshAll={() => void handleUpdateSourcesAll()}
           onRefreshGroup={(groupId, groupName, feedIds) =>
-            void handleRefreshGroup(groupId, groupName, feedIds)
-          }
-          onLoadGroupBodies={(groupId, groupName, feedIds) =>
-            void handleLoadBodiesGroup(groupId, groupName, feedIds)
+            void handleUpdateSourcesGroup(groupId, groupName, feedIds)
           }
           refreshingAll={refreshingAll}
           refreshing={Boolean(refreshingFeedId)}
           refreshingGroupId={refreshingGroupId}
           loadingBodies={loadingBodies}
           loadingBodiesGroupId={loadingBodiesGroupId}
+          sourcesBusy={sourcesBusy}
           onAddSource={() => setAddSourceOpen(true)}
           onManageGroups={() => setGroupModalOpen(true)}
           onDeleteFeed={(feedId) => {
@@ -532,8 +566,15 @@ export default function ReadPage() {
           feedName={selectedFeed?.name ?? ""}
           feedUrl={selectedFeed?.entry_url}
           syncTime={selectedFeed?.sync_time}
-          onRefresh={handleRefresh}
-          refreshing={feedRefreshBusy}
+          onRefresh={() => {
+            if (!selectedFeedId) return;
+            void handleUpdateSourcesFeed(
+              selectedFeedId,
+              selectedFeed?.name,
+              selectedFeed?.entry_url,
+            );
+          }}
+          refreshing={sourcesBusy}
         />
       </main>
 

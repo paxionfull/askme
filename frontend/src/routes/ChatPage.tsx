@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import CitationMarkdown from "../components/CitationMarkdown";
 import CitationSidebar from "../components/CitationSidebar";
 import DaysRangeSelect from "../components/DaysRangeSelect";
@@ -12,7 +13,7 @@ import SummaryMarkdown, {
 } from "../components/SummaryMarkdown";
 import { useChat } from "../contexts/ChatContext";
 import { useDigest } from "../contexts/DigestContext";
-import { useResizablePane } from "../hooks/useResizablePane";
+import { useResizableRatio } from "../hooks/useResizableRatio";
 import { formatDaysLabel, isLlmConfigured, useSettings } from "../hooks/useSettings";
 
 /** 焦点在可输入控件 / 菜单 / 弹层时，不抢占 Enter 发送。 */
@@ -47,6 +48,7 @@ export default function ChatPage() {
     summaryError,
     digestBusy,
     startSummarize,
+    stopSummarize,
     summaryGroupOptions,
     selectedGroupId,
     setSelectedSummaryGroup,
@@ -88,18 +90,38 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const overviewScrollRef = useRef<HTMLDivElement>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
   const [showPromptPreview, setShowPromptPreview] = useState(false);
   const displaySummary = generating ? summary : chatSummary;
   const showTree = Boolean(!generating && digestTree);
   const hasOverview = Boolean(displaySummary || digestTree || generating);
-  const { containerRef, width: summaryWidth, startDrag } = useResizablePane({
-    storageKey: "askme.chat.summaryPaneWidth",
-    defaultWidth: 360,
-    minWidth: 240,
-    maxWidth: 640,
+  const {
+    containerRef,
+    askPercent,
+    briefPercent,
+    dragging,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+    resetRatio,
+    nudgeRatio,
+  } = useResizableRatio({
+    storageKey: "askme.brief.askPaneRatio",
+    defaultRatio: 0.32,
+    minRatio: 0.22,
+    maxRatio: 0.55,
   });
+  const todayLabel = (() => {
+    const now = new Date();
+    const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+    return {
+      date: `${now.getMonth() + 1} 月 ${now.getDate()} 日`,
+      weekday: `星期${weekdays[now.getDay()]}`,
+    };
+  })();
   const [citationOpen, setCitationOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const canSubmit = (canSend && Boolean(input.trim())) || canSendScopedSummary;
@@ -107,24 +129,41 @@ export default function ChatPage() {
 
   const statusLine = (() => {
     const parts = [formatDaysLabel(days)];
-    if (loadingStatus && !effectiveRagReady) {
-      parts.push("同步索引中");
-    } else if (effectiveRagReady) {
-      if (scopedArticles.length > 0) {
-        parts.push(`限定 ${scopedArticles.length} 篇`);
-      } else {
-        parts.push(`${effectiveChunkCount} 片段`);
-        if (statusRevalidating) parts.push("同步中");
-      }
-    } else {
-      parts.push("未建索引");
-    }
     if (hasOverview) {
       parts.push("概览就绪");
     } else if (!loadingSummary && !generating) {
       parts.push("无概览");
     }
+    if (scopedArticles.length > 0) {
+      parts.push(`限定 ${scopedArticles.length} 篇`);
+    } else if (loadingStatus && !effectiveRagReady) {
+      parts.push("同步索引中");
+    } else if (effectiveRagReady) {
+      parts.push(`${effectiveChunkCount} 片段`);
+      if (statusRevalidating) parts.push("同步中");
+      if (hasOverview) parts.push("可提问");
+    } else {
+      parts.push("未建索引");
+      if (hasOverview) parts.push("可拖文章提问");
+    }
     return parts.join(" · ");
+  })();
+
+  const emptyState = (() => {
+    if (messages.length > 0) return null;
+    if (generating) {
+      return { kind: "generating" as const };
+    }
+    if (!hasOverview) {
+      return { kind: "no-overview" as const };
+    }
+    if (scopedArticles.length > 0) {
+      return { kind: "scoped" as const };
+    }
+    if (effectiveRagReady) {
+      return { kind: "ready" as const };
+    }
+    return { kind: "overview-no-index" as const };
   })();
 
   const focusChatInput = useCallback(() => {
@@ -289,14 +328,7 @@ export default function ChatPage() {
     void sendMessage(text, { replaceFromIndex: index });
   }, [editingIndex, editingText, sendMessage]);
 
-  const composerMenuItems: OverflowMenuItem[] = [
-    {
-      label: enableDeepThinking ? "深度思考：开" : "深度思考：关",
-      hint: "开启后回答前会先推理，需模型支持",
-      disabled: !inputEnabled,
-      onClick: () => setEnableDeepThinking(!enableDeepThinking),
-    },
-  ];
+  const composerMenuItems: OverflowMenuItem[] = [];
   if (promptPreview) {
     composerMenuItems.push({
       label: showPromptPreview ? "隐藏 Prompt" : "查看 Prompt",
@@ -316,22 +348,26 @@ export default function ChatPage() {
   }
 
   return (
-    <div ref={containerRef} className="flex h-full bg-[var(--paper)]">
-      <aside
-        style={{ width: summaryWidth }}
-        className="flex min-w-0 shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--paper-raised)]"
-      >
-        <div className="border-b border-[var(--rule)] px-3 py-2.5">
-          <div className="flex items-center gap-2">
+    <div className="flex h-full flex-col bg-[var(--paper)]">
+      <header className="shrink-0 border-b border-[var(--rule)] bg-[var(--paper-raised)] px-5 pb-3 pt-4">
+        <p className="text-[1.35rem] font-semibold tracking-tight text-[var(--ink)]">
+          <span className="mb-0.5 block text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
+            简报
+          </span>
+          {todayLabel.date}
+          <span className="ml-1.5 text-[0.95rem] font-medium text-[var(--ink-muted)]">
+            · {todayLabel.weekday}
+          </span>
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper)] px-3 py-2.5">
+          <label className="inline-flex min-w-0 items-center gap-1.5 text-sm">
+            <span className="shrink-0 text-xs text-[var(--ink-muted)]">板块</span>
             <select
               value={selectedGroupId ?? ""}
               onChange={(e) => setSelectedSummaryGroup(e.target.value)}
               disabled={summaryGroupOptions.length === 0 || digestBusy}
-              className="ui-select min-w-0 flex-1 truncate py-1.5 text-xs disabled:opacity-50"
+              className="ui-select min-w-0 max-w-[10rem] truncate py-1.5 text-sm disabled:opacity-50"
               aria-label="选择分组"
-              title={
-                summaryGroupOptions.find((g) => g.id === selectedGroupId)?.name || "选择分组"
-              }
             >
               {summaryGroupOptions.length === 0 ? (
                 <option value="">暂无分组</option>
@@ -343,6 +379,9 @@ export default function ChatPage() {
                 ))
               )}
             </select>
+          </label>
+          <label className="inline-flex items-center gap-1.5 text-sm">
+            <span className="shrink-0 text-xs text-[var(--ink-muted)]">范围</span>
             <DaysRangeSelect
               value={days}
               onChange={setDays}
@@ -350,99 +389,197 @@ export default function ChatPage() {
               size="sm"
               className="shrink-0"
             />
-            <button
-              type="button"
-              disabled={digestBusy || !isLlmConfigured(settings) || !selectedGroupId}
-              onClick={() => void startSummarize()}
-              className="ui-btn ui-btn-primary shrink-0 px-2.5 py-1.5 text-xs disabled:opacity-50"
-              title="按当前分组与时间范围生成结构化概览目录"
-            >
-              {generating ? "生成中…" : "生成概览"}
-            </button>
-          </div>
-          {summaryError ? <p className="mt-2 text-xs text-red-700">{summaryError}</p> : null}
+          </label>
+          <button
+            type="button"
+            disabled={
+              generating
+                ? false
+                : digestBusy || !isLlmConfigured(settings) || !selectedGroupId
+            }
+            onClick={() => void (generating ? stopSummarize() : startSummarize())}
+            className={`group/gen relative min-w-[5.5rem] shrink-0 rounded-[var(--radius-control)] px-3 py-1.5 text-sm disabled:opacity-50 ${
+              generating
+                ? "ui-btn"
+                : hasOverview
+                  ? "border border-[var(--rule)] bg-[var(--paper-raised)] text-[var(--ink-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                  : "ui-btn ui-btn-primary"
+            }`}
+            title={
+              generating
+                ? "停止当前简报生成，保留上一版"
+                : hasOverview
+                  ? "重新生成简报"
+                  : "按当前板块与时间范围生成简报"
+            }
+          >
+            {generating ? (
+              "停止生成"
+            ) : hasOverview ? (
+              <>
+                <span className="group-hover/gen:hidden group-focus-visible/gen:hidden">已生成</span>
+                <span className="hidden group-hover/gen:inline group-focus-visible/gen:inline">
+                  重新生成
+                </span>
+              </>
+            ) : (
+              "生成简报"
+            )}
+          </button>
+          <span className="text-[var(--ink-muted)]">·</span>
+          <span
+            className={`text-sm ${
+              hasOverview ? "text-[var(--success)]" : "text-[var(--ink-muted)]"
+            }`}
+          >
+            {statusLine}
+          </span>
         </div>
-        <div className="flex-1 overflow-y-auto px-3 py-3">
-          {generating ? (
-            <DigestGeneratingPanel
-              phase={summaryPhase}
-              message={summarizeStatus}
-              hasPreview={Boolean(displaySummary || digestTree || thinking)}
-            />
-          ) : null}
-          {loadingSummary && !generating && !displaySummary && !digestTree ? (
-            <p className="px-1 text-sm text-[var(--ink-muted)]">加载目录…</p>
-          ) : displaySummary || digestTree || thinking ? (
-            <div className="min-w-0">
-              {thinking && !generating ? (
-                <details className="mb-3 border-l-2 border-[var(--rule)] pl-2">
-                  <summary className="cursor-pointer text-[11px] text-[var(--ink-muted)]">
-                    思考过程
-                  </summary>
-                  <p className="mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] leading-5 text-[var(--ink-muted)]">
-                    {thinking}
-                  </p>
-                </details>
-              ) : null}
-              {showTree && digestTree ? (
-                <DigestTreeView
-                  tree={digestTree}
-                  onAddArticle={addScopedArticle}
-                  onAddArticles={addScopedArticles}
+        {summaryError ? <p className="mt-2 text-xs text-red-700">{summaryError}</p> : null}
+      </header>
+
+      <div
+        ref={containerRef}
+        className={`flex min-h-0 flex-1 ${dragging ? "cursor-col-resize select-none" : ""}`}
+      >
+        <section className="flex min-w-0 flex-1 flex-col overflow-hidden border-r border-[var(--rule)] bg-[var(--paper)]">
+          <div ref={overviewScrollRef} className="flex-1 overflow-y-auto">
+            {generating ? (
+              <div className="px-5 pt-5 sm:px-8">
+                <DigestGeneratingPanel
+                  phase={summaryPhase}
+                  message={summarizeStatus}
+                  hasPreview={Boolean(displaySummary || digestTree || thinking)}
                 />
-              ) : displaySummary ? (
-                <div className="summary-markdown-scroll">
-                  <SummaryMarkdown
-                    content={displaySummary}
-                    articleRefs={articleRefs}
-                    className="summary-markdown-nowrap"
+              </div>
+            ) : null}
+            {loadingSummary && !generating && !displaySummary && !digestTree ? (
+              <p className="px-5 pt-5 text-sm text-[var(--ink-muted)] sm:px-8">加载简报…</p>
+            ) : displaySummary || digestTree || thinking ? (
+              showTree && digestTree ? (
+                <>
+                  {thinking && !generating ? (
+                    <details className="mx-auto max-w-[42rem] border-l-2 border-[var(--rule)] px-5 pt-4 pl-[calc(1.25rem+2px)] sm:px-8 sm:pl-[calc(2rem+2px)]">
+                      <summary className="cursor-pointer text-[11px] text-[var(--ink-muted)]">
+                        思考过程
+                      </summary>
+                      <p className="mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] leading-5 text-[var(--ink-muted)]">
+                        {thinking}
+                      </p>
+                    </details>
+                  ) : null}
+                  <DigestTreeView
+                    tree={digestTree}
+                    scrollParentRef={overviewScrollRef}
                     onAddArticle={addScopedArticle}
                     onAddArticles={addScopedArticles}
                   />
+                </>
+              ) : (
+                <div className="mx-auto min-w-0 max-w-[42rem] px-5 py-5 sm:px-8">
+                  {thinking && !generating ? (
+                    <details className="mb-3 border-l-2 border-[var(--rule)] pl-2">
+                      <summary className="cursor-pointer text-[11px] text-[var(--ink-muted)]">
+                        思考过程
+                      </summary>
+                      <p className="mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] leading-5 text-[var(--ink-muted)]">
+                        {thinking}
+                      </p>
+                    </details>
+                  ) : null}
+                  {displaySummary ? (
+                    <div className="summary-markdown-scroll">
+                      <SummaryMarkdown
+                        content={displaySummary}
+                        articleRefs={articleRefs}
+                        className="summary-markdown-readable"
+                        onAddArticle={addScopedArticle}
+                        onAddArticles={addScopedArticles}
+                      />
+                    </div>
+                  ) : null}
+                  {generating && displaySummary ? (
+                    <span className="mt-1 inline-block animate-pulse text-[var(--ink-muted)]">▍</span>
+                  ) : null}
                 </div>
-              ) : null}
-              {generating && displaySummary ? (
-                <span className="mt-1 inline-block animate-pulse text-[var(--ink-muted)]">▍</span>
-              ) : null}
-            </div>
-          ) : !generating ? (
-            <p className="px-1 text-sm leading-6 text-[var(--ink-muted)]">
-              选择分组与时间后点「生成概览」，或从已有目录拖标题到右侧对话。
-            </p>
+              )
+            ) : !generating ? (
+              <div className="mx-auto max-w-[32rem] px-5 py-12 text-center sm:px-8">
+                <h3 className="text-lg font-medium text-[var(--ink)]">还没有这份简报</h3>
+                <p className="mt-2 text-sm leading-6 text-[var(--ink-muted)]">
+                  在上方选择板块与时间范围，点击「生成简报」即可开始阅读。也可从右侧拖入文章生成摘要。
+                </p>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调节简报与提问区宽度"
+          aria-valuemin={22}
+          aria-valuemax={55}
+          aria-valuenow={askPercent}
+          tabIndex={0}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
+          onDoubleClick={resetRatio}
+          onKeyDown={(e) => {
+            const step = e.shiftKey ? 0.05 : 0.02;
+            if (e.key === "ArrowLeft") {
+              nudgeRatio(step);
+              e.preventDefault();
+            } else if (e.key === "ArrowRight") {
+              nudgeRatio(-step);
+              e.preventDefault();
+            } else if (e.key === "Home") {
+              resetRatio();
+              e.preventDefault();
+            }
+          }}
+          className="group relative z-10 w-1.5 shrink-0 cursor-col-resize bg-transparent"
+        >
+          <div
+            className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-[width,background] ${
+              dragging
+                ? "w-0.5 bg-[var(--accent)]"
+                : "bg-[var(--rule)] group-hover:w-0.5 group-hover:bg-[var(--accent)] group-focus-visible:w-0.5 group-focus-visible:bg-[var(--accent)]"
+            }`}
+          />
+          <div className="absolute inset-y-0 -left-1 -right-1" />
+          {dragging ? (
+            <span className="pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-[var(--ink)] px-2 py-0.5 text-[11px] text-[var(--paper-raised)]">
+              简报 {briefPercent}% · 提问 {askPercent}%
+            </span>
           ) : null}
         </div>
-      </aside>
 
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="调整目录栏宽度"
-        onMouseDown={startDrag}
-        className="group relative z-10 w-1 shrink-0 cursor-col-resize bg-[var(--rule)] transition-colors hover:bg-[color-mix(in_srgb,var(--ink)_30%,var(--rule))]"
-      >
-        <div className="absolute inset-y-0 -left-1 -right-1" />
-      </div>
-
-      <div
-        className={`relative flex min-w-0 flex-1 flex-col transition-colors ${
-          dropActive ? "bg-[color-mix(in_srgb,var(--accent-soft)_40%,transparent)]" : ""
-        }`}
-        onDragOver={handleArticleDragOver}
-        onDragLeave={handleArticleDragLeave}
-        onDrop={handleArticleDrop}
-        onClick={handleChatPaneClick}
-      >
+        <aside
+          style={{ width: `${askPercent}%`, minWidth: 240, maxWidth: "55%" }}
+          className={`relative flex min-w-0 shrink-0 flex-col border-l border-[var(--rule)] bg-[var(--paper-raised)] ${
+            dropActive ? "bg-[color-mix(in_srgb,var(--accent-soft)_40%,transparent)]" : ""
+          } ${dragging ? "transition-none" : ""}`}
+          onDragOver={handleArticleDragOver}
+          onDragLeave={handleArticleDragLeave}
+          onDrop={handleArticleDrop}
+          onClick={handleChatPaneClick}
+        >
         {dropActive ? (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-[color-mix(in_srgb,var(--accent)_40%,var(--rule))] bg-[color-mix(in_srgb,var(--accent-soft)_50%,transparent)]">
             <p className="rounded-[var(--radius-control)] bg-[var(--paper-raised)]/90 px-4 py-2 text-sm text-[var(--accent)]">
-              松开以加入对话
+              松开以加入提问
             </p>
           </div>
         ) : null}
 
-        <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-5 py-3">
-          <h1 className="text-base font-semibold tracking-tight text-[var(--ink)]">对话</h1>
-          <p className="mt-0.5 truncate text-xs text-[var(--ink-muted)]">{statusLine}</p>
+        <header className="border-b border-[var(--rule)] px-4 py-3">
+          <h2 className="text-sm font-semibold tracking-tight text-[var(--ink)]">提问</h2>
+          <p className="mt-0.5 text-xs text-[var(--ink-muted)]">
+            可选 · 拖入章节/文章后直接生成摘要
+          </p>
         </header>
 
         {error ? (
@@ -468,23 +605,70 @@ export default function ChatPage() {
 
         <div className="flex-1 overflow-y-auto px-5 py-5">
           {messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-              <p className="text-base font-medium tracking-tight text-[var(--ink)]">开始对话</p>
-              <ol className="mt-4 max-w-sm space-y-2 text-left text-sm leading-6 text-[var(--ink-muted)]">
-                <li>
-                  <span className="mr-2 tabular-nums text-[var(--ink)]">1.</span>
-                  左侧选分组与时间，点「生成概览」
-                </li>
-                <li>
-                  <span className="mr-2 tabular-nums text-[var(--ink)]">2.</span>
-                  拖章节/文章到此处，或直接提问
-                </li>
-                <li>
-                  <span className="mr-2 tabular-nums text-[var(--ink)]">3.</span>
-                  Enter 发送 · Shift+Enter 换行 · 点 [n] 看引用
-                </li>
-              </ol>
-            </div>
+            emptyState?.kind === "no-overview" ? (
+              <div className="flex h-full flex-col items-center justify-center px-4 text-center">
+                <p className="text-sm font-medium tracking-tight text-[var(--ink)]">开始提问</p>
+                <ol className="mt-3 max-w-sm space-y-2 text-left text-xs leading-5 text-[var(--ink-muted)]">
+                  <li>
+                    <span className="mr-1.5 tabular-nums text-[var(--ink)]">1.</span>
+                    上方选板块与范围，点「生成简报」
+                  </li>
+                  <li>
+                    <span className="mr-1.5 tabular-nums text-[var(--ink)]">2.</span>
+                    拖章节/文章到此处，或直接提问
+                  </li>
+                  <li>
+                    <span className="mr-1.5 tabular-nums text-[var(--ink)]">3.</span>
+                    Enter 发送 · 点 [n] 看引用
+                  </li>
+                </ol>
+                <p className="mt-4 text-[11px] text-[var(--ink-muted)]">
+                  自由提问需先在{" "}
+                  <Link to="/sources" className="text-[var(--accent)] hover:underline">
+                    源
+                  </Link>{" "}
+                  建立索引；摘要不需要
+                </p>
+              </div>
+            ) : emptyState?.kind === "generating" ? (
+              <div className="flex h-full items-start justify-center pt-8">
+                <p className="text-sm text-[var(--ink-muted)]">
+                  简报生成中，完成后可拖标题到此处
+                </p>
+              </div>
+            ) : emptyState?.kind === "scoped" ? (
+              <div className="flex h-full items-end justify-center pb-2">
+                  <p className="text-xs text-[var(--ink-muted)]/75">
+                  支持继续从左侧拖入章节或文章
+                </p>
+              </div>
+            ) : emptyState?.kind === "ready" ? (
+              <div className="flex h-full flex-col">
+                <p className="text-sm text-[var(--ink-muted)]">
+                  基于简报与索引提问，或拖入指定文章缩小范围
+                </p>
+                <div className="flex flex-1 items-end justify-center pb-2">
+                  <p className="text-xs text-[var(--ink-muted)]/75">
+                    支持从左侧拖入章节或文章
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex h-full flex-col">
+                <p className="text-sm text-[var(--ink-muted)]">
+                  从左侧拖入章节或文章，或在{" "}
+                  <Link to="/sources" className="text-[var(--accent)] hover:underline">
+                    源
+                  </Link>{" "}
+                  建立索引后提问
+                </p>
+                <div className="flex flex-1 items-end justify-center pb-2">
+                  <p className="text-xs text-[var(--ink-muted)]/75">
+                    支持从左侧拖入章节或文章
+                  </p>
+                </div>
+              </div>
+            )
           ) : (
             <div className="mx-auto flex max-w-[40rem] flex-col gap-4">
               {messages.map((message, index) => (
@@ -636,18 +820,29 @@ export default function ChatPage() {
                     ? `已加入 ${scopedArticles.length} 篇 · Enter 发送`
                     : `已加入 ${scopedArticles.length} 篇 · Enter 生成摘要`
                   : inputEnabled
-                    ? "输入问题…"
+                    ? "输入问题，Enter 发送"
                     : loadingStatus
                       ? "正在同步索引…"
-                      : "输入问题（需先建索引，或从左侧加入文章）"
+                      : hasOverview
+                        ? "拖入左侧标题，或先去源页建立索引"
+                        : "请先建立索引，或从左侧加入文章"
               }
               disabled={sending}
               className="ui-textarea min-h-[2.5rem] max-h-36 min-w-0 flex-1 resize-none py-2 text-sm leading-6 disabled:opacity-50"
             />
             <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
-              {enableDeepThinking ? (
-                <span className="hidden text-[10px] text-[var(--accent)] sm:inline">深度思考</span>
-              ) : null}
+              <button
+                type="button"
+                onClick={() => setEnableDeepThinking(!enableDeepThinking)}
+                title={enableDeepThinking ? "关闭深度思考" : "开启深度思考"}
+                className={`rounded px-2 py-1 text-xs transition-colors ${
+                  enableDeepThinking
+                    ? "bg-[var(--accent-subtle,color-mix(in_srgb,var(--accent)_12%,transparent))] text-[var(--accent)]"
+                    : "text-[var(--ink-muted)] hover:text-[var(--ink)]"
+                }`}
+              >
+                思考
+              </button>
               {composerMenuItems.length > 0 ? (
                 <OverflowMenu
                   items={composerMenuItems}
@@ -690,6 +885,7 @@ export default function ChatPage() {
           onOpenChange={setCitationOpen}
           onSelect={setActiveCitationIndex}
         />
+        </aside>
       </div>
     </div>
   );

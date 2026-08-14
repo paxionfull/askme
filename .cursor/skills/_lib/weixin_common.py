@@ -621,6 +621,43 @@ def normalize_article_body(raw_html: str, *, article_id: str = "") -> str:
     return clean_html_fragment(raw_html or "")
 
 
+def verify_mp_session() -> dict[str, Any]:
+    """校验公众号后台登录态：load session + 轻量 searchbiz。"""
+    result: dict[str, Any] = {
+        "ok": False,
+        "cookie_configured": False,
+        "message": "",
+        "hit_count": 0,
+        "error": "",
+    }
+    try:
+        load_mp_session()
+        result["cookie_configured"] = True
+    except Exception as exc:
+        result["error"] = str(exc)
+        result["message"] = str(exc)
+        return result
+
+    try:
+        # 任意短查询即可验证 token/cookie；不依赖具体已接入账号
+        hits = search_biz("微信", begin=0, count=1)
+        result["ok"] = True
+        result["hit_count"] = len(hits)
+        result["message"] = "微信公众号后台登录有效"
+        return result
+    except WeixinMpRateLimited as exc:
+        # 频控说明会话本身仍可用
+        result["ok"] = True
+        result["message"] = f"微信公众号后台登录有效（接口繁忙：{exc}）"
+        result["error"] = str(exc)
+        return result
+    except Exception as exc:
+        result["ok"] = False
+        result["error"] = str(exc)
+        result["message"] = str(exc)
+        return result
+
+
 def probe_account(fakeid: str, *, nickname_hint: str = "") -> dict[str, Any]:
     """探测列表是否可用；返回 display_name / sample titles。"""
     result: dict[str, Any] = {

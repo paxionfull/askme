@@ -3,8 +3,8 @@ name: jiqizhixin-discovery
 description: >-
   Discovers articles from 机器之心 (jiqizhixin.com) via the official article
   library JSON API. Returns title, URL, publish time, author, tags, and summary.
-  Use when fetching daily updates from jiqizhixin.com, 机器之心, or implementing
-  website-based discovery for this source.
+  Use when fetching updates from jiqizhixin.com or 机器之心 only.
+  Not for onboarding other websites.
 ---
 
 # 机器之心发现层
@@ -87,7 +87,7 @@ fetch_article_detail → normalize_article_body（skill）→ html_to_text → a
 
 机器之心详情 API 返回 HTML 片段，`normalize_article_body` 使用 `_lib/content_utils.clean_html_fragment` 去脚本/样式。
 
-通用逻辑（刷新入库、列表查询、正文缓存、定时任务）在 `backend/website_feed.py` + `backend/feed_client.py` + `backend/article_service.py`。
+通用逻辑（刷新入库、列表查询、正文缓存、定时任务）在 `backend/feed/website_feed.py` + `backend/feed/feed_client.py` + `backend/feed/article_service.py`。
 
 声明式 API 说明见 [source.yaml](source.yaml)。
 

@@ -22,12 +22,10 @@ class ChatMessage(BaseModel):
 
 
 class SummarizeRequest(BaseModel):
-    prompt: str = ""
     days: int = Field(default=1, ge=1, le=30)
     feed_ids: list[str] = Field(default_factory=list)
     group_ids: list[str] = Field(default_factory=list)
     stream: bool = True
-    enable_thinking: bool = False
     llm_config: LlmConfigInput | None = None
     use_cached_context: bool = True
 

@@ -3,25 +3,20 @@
   "input_mode": "titles",
   "focus": {
     "enabled": true,
-    "criteria": "AI 模型发布、重要技术突破；AI 开源项目发布；AI 公司 IPO、上市、财报；AI 应用业绩、暴雷",
-    "max_events": 20,
+    "criteria": "AI模型（仅关注大语言模型，具身智能模型）发布，开源（重点关注openai，anthropic，gemini, grok，kimi，智谱，minimax，qwen）\nAI公司融资，IPO，上市，财报，股价变化\nAI应用发布，开源",
+    "max_events": 10,
     "exclusive": true
   },
   "categories": [
     {
       "id": "model",
       "name": "模型",
-      "criteria": "大模型发布、评测、技术突破、能力更新、训练/推理相关"
+      "criteria": "AI模型（包括但不限于大语言模型，具身智能模型）发布，开源，评测结果，技术突破，能力更新，训练/推理相关，论文发布"
     },
     {
       "id": "app",
       "name": "应用",
       "criteria": "AI 产品、落地应用、业务场景、用户增长、应用业绩"
-    },
-    {
-      "id": "opensource",
-      "name": "开源",
-      "criteria": "开源模型、开源项目、协议、社区与生态发布"
     },
     {
       "id": "funding",

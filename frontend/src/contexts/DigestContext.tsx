@@ -8,15 +8,18 @@ import {
   type ReactNode,
 } from "react";
 import {
+  cancelSummarizeJob,
   fetchBodiesJobStatus,
   fetchCachedSummary,
   fetchFeeds,
   fetchIndexJobStatus,
   fetchRagStatus,
   fetchRecentArticles,
+  fetchSummarizeJobStatus,
   startBodiesJob,
   startIndexJob,
   waitForContentJob,
+  waitForSummarizeJob,
   type ContentJobStatus,
   type Feed,
   type FeedGroup,
@@ -37,6 +40,29 @@ export interface SummaryGroupOption {
 }
 
 const SELECTED_GROUPS_KEY = "askme.digest.selectedGroupIds";
+const SUMMARIZE_JOB_SYNC_KEY = "askme.summarizeJobTick";
+const SUMMARIZE_JOB_CHANNEL = "askme.summarizeJob";
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function notifySummarizeJobSync() {
+  try {
+    localStorage.setItem(SUMMARIZE_JOB_SYNC_KEY, String(Date.now()));
+  } catch {
+    // ignore quota / private mode
+  }
+  try {
+    const channel = new BroadcastChannel(SUMMARIZE_JOB_CHANNEL);
+    channel.postMessage("ping");
+    channel.close();
+  } catch {
+    // ignore unsupported environments
+  }
+}
 
 function buildSummaryGroupOptions(feeds: Feed[], groups: FeedGroup[]): SummaryGroupOption[] {
   const assigned = new Set(groups.flatMap((group) => group.feed_ids));
@@ -139,6 +165,7 @@ interface DigestContextValue {
   } | null>;
   buildIndex: () => Promise<void>;
   startSummarize: () => Promise<void>;
+  stopSummarize: () => void;
   clearErrors: () => void;
 }
 
@@ -179,6 +206,11 @@ export function DigestProvider({ children }: { children: ReactNode }) {
   const summaryRef = useRef("");
   const thinkingRef = useRef("");
   const generatingRef = useRef(false);
+  const summarizeSnapshotRef = useRef("");
+  const summarizeStreamingRef = useRef(false);
+  const summarizeAbortRef = useRef<AbortController | null>(null);
+  const summarizeInFlightRef = useRef(false);
+  const summarizePollGenerationRef = useRef(0);
   const indexBuildInFlightRef = useRef(false);
   const indexBuildGenerationRef = useRef(0);
   const bodiesInFlightRef = useRef(false);
@@ -529,11 +561,145 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     };
   }, [watchBodiesJob, watchIndexJob]);
 
+  const resetSummarizeUi = useCallback(
+    (options?: { restoreSnapshot?: boolean }) => {
+      generatingRef.current = false;
+      summarizeInFlightRef.current = false;
+      summarizeAbortRef.current = null;
+      summarizeStreamingRef.current = false;
+      setGenerating(false);
+      setPhase("idle");
+      setSummaryPhase("idle");
+      setStatusMessage("");
+      setThinking("");
+      thinkingRef.current = "";
+      if (options?.restoreSnapshot) {
+        summaryRef.current = summarizeSnapshotRef.current;
+        setSummary(summarizeSnapshotRef.current);
+      }
+    },
+    [],
+  );
+
+  const applySummarizeJobProgress = useCallback((status: ContentJobStatus) => {
+    setGenerating(true);
+    generatingRef.current = true;
+    if (status.phase) {
+      setSummaryPhase(status.phase);
+      if (
+        status.phase === "generating" ||
+        status.phase === "classify" ||
+        status.phase === "cluster" ||
+        status.phase === "render"
+      ) {
+        setPhase("generating");
+      } else if (status.phase === "loading_articles") {
+        setPhase("loading_articles");
+      }
+    }
+    if (status.message) {
+      setStatusMessage(status.message);
+    }
+  }, []);
+
+  const watchSummarizeJob = useCallback(
+    async (generation: number) => {
+      const finalStatus = await waitForSummarizeJob((status) => {
+        if (generation !== summarizePollGenerationRef.current) return;
+        applySummarizeJobProgress(status);
+      });
+      if (generation !== summarizePollGenerationRef.current) return;
+
+      if (finalStatus.status === "cancelled") {
+        resetSummarizeUi({ restoreSnapshot: true });
+        await loadCachedSummary();
+        return;
+      }
+      if (finalStatus.status === "error") {
+        resetSummarizeUi({ restoreSnapshot: true });
+        setSummaryError(finalStatus.error || finalStatus.message || "概览生成失败");
+        await loadCachedSummary();
+        return;
+      }
+
+      resetSummarizeUi();
+      await loadCachedSummary();
+    },
+    [applySummarizeJobProgress, loadCachedSummary, resetSummarizeUi],
+  );
+
+  const tryAttachSummarizeJob = useCallback(
+    async (options?: { retry?: boolean }) => {
+      if (summarizeInFlightRef.current) {
+        return;
+      }
+
+      const attempt = async (): Promise<boolean> => {
+        if (summarizeInFlightRef.current) {
+          return true;
+        }
+        try {
+          const status = await fetchSummarizeJobStatus();
+          if (status.status !== "running") {
+            return false;
+          }
+          summarizeInFlightRef.current = true;
+          const generation = ++summarizePollGenerationRef.current;
+          applySummarizeJobProgress(status);
+          void watchSummarizeJob(generation);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      if (await attempt()) {
+        return;
+      }
+      if (!options?.retry) {
+        return;
+      }
+
+      for (let index = 0; index < 12; index += 1) {
+        await sleep(250);
+        if (await attempt()) {
+          return;
+        }
+      }
+    },
+    [applySummarizeJobProgress, watchSummarizeJob],
+  );
+
+  const stopSummarize = useCallback(() => {
+    summarizeAbortRef.current?.abort();
+    void cancelSummarizeJob().catch(() => {});
+  }, []);
+
   const startSummarize = useCallback(async () => {
     if (selectedGroupIds.length === 0) {
       setSummaryError("请先选择一个分组");
       return;
     }
+    if (summarizeInFlightRef.current) {
+      return;
+    }
+
+    try {
+      const existing = await fetchSummarizeJobStatus();
+      if (existing.status === "running") {
+        summarizeInFlightRef.current = true;
+        const generation = ++summarizePollGenerationRef.current;
+        applySummarizeJobProgress(existing);
+        await watchSummarizeJob(generation);
+        return;
+      }
+    } catch {
+      // 忽略状态查询失败，继续尝试启动新任务
+    }
+
+    summarizeInFlightRef.current = true;
+    summarizeSnapshotRef.current = summaryRef.current;
+    summarizeStreamingRef.current = false;
 
     setGenerating(true);
     generatingRef.current = true;
@@ -541,45 +707,58 @@ export function DigestProvider({ children }: { children: ReactNode }) {
     setSummaryPhase("start");
     setStatusMessage("正在准备生成概览…");
     setSummaryError("");
-    setSummary("");
     setThinking("");
-    summaryRef.current = "";
     thinkingRef.current = "";
+    notifySummarizeJobSync();
+
+    const controller = new AbortController();
+    summarizeAbortRef.current = controller;
 
     const body: SummarizeBody = {
       group_ids: selectedGroupIds,
       days,
       stream: true,
-      enable_thinking: false,
       use_cached_context: true,
       llm_config: getLlmConfigPayload(),
+    };
+
+    const finishAfterStream = async (restoreSnapshot: boolean) => {
+      resetSummarizeUi({ restoreSnapshot });
+      await loadCachedSummary();
     };
 
     await streamSummarize(
       body,
       (token) => {
+        if (!summarizeStreamingRef.current) {
+          summarizeStreamingRef.current = true;
+          summaryRef.current = "";
+        }
         summaryRef.current += token;
         setSummary(summaryRef.current);
       },
       () => {
-        generatingRef.current = false;
-        setGenerating(false);
-        setPhase("idle");
-        setSummaryPhase("idle");
-        setStatusMessage("");
-        setThinking("");
-        thinkingRef.current = "";
-        void loadCachedSummary();
+        void finishAfterStream(false);
       },
       (message) => {
-        generatingRef.current = false;
-        setSummaryError(message);
-        setGenerating(false);
-        setPhase("idle");
-        setSummaryPhase("idle");
-        setStatusMessage("");
-        setThinking("");
-        thinkingRef.current = "";
+        void (async () => {
+          if (message.includes("已有概览生成任务进行中")) {
+            const generation = ++summarizePollGenerationRef.current;
+            try {
+              const status = await fetchSummarizeJobStatus();
+              if (status.status === "running") {
+                applySummarizeJobProgress(status);
+                await watchSummarizeJob(generation);
+                return;
+              }
+            } catch {
+              // fall through
+            }
+          }
+          resetSummarizeUi({ restoreSnapshot: true });
+          setSummaryError(message);
+          await loadCachedSummary();
+        })();
       },
       (status) => {
         if (status.message) {
@@ -588,7 +767,12 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         if (status.phase) {
           setSummaryPhase(status.phase);
         }
-        if (status.phase === "generating" || status.phase === "classify" || status.phase === "cluster" || status.phase === "render") {
+        if (
+          status.phase === "generating" ||
+          status.phase === "classify" ||
+          status.phase === "cluster" ||
+          status.phase === "render"
+        ) {
           setPhase("generating");
         } else if (status.phase === "loading_articles") {
           setPhase("loading_articles");
@@ -598,12 +782,65 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         thinkingRef.current += chunk;
         setThinking(thinkingRef.current);
       },
+      {
+        signal: controller.signal,
+        onCancelled: () => {
+          void finishAfterStream(true);
+        },
+      },
     );
   }, [
+    applySummarizeJobProgress,
     days,
     loadCachedSummary,
+    resetSummarizeUi,
     selectedGroupIds,
+    watchSummarizeJob,
   ]);
+
+  // 新标签页 / 刷新后恢复概览生成进度；跨标签页即时同步
+  useEffect(() => {
+    void tryAttachSummarizeJob();
+
+    const onSync = () => {
+      void tryAttachSummarizeJob({ retry: true });
+    };
+
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel(SUMMARIZE_JOB_CHANNEL);
+      channel.onmessage = onSync;
+    } catch {
+      // ignore
+    }
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === SUMMARIZE_JOB_SYNC_KEY) {
+        onSync();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void tryAttachSummarizeJob();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    const pollTimer = window.setInterval(() => {
+      if (!summarizeInFlightRef.current && document.visibilityState === "visible") {
+        void tryAttachSummarizeJob();
+      }
+    }, 2000);
+
+    return () => {
+      channel?.close();
+      window.removeEventListener("storage", onStorage);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(pollTimer);
+    };
+  }, [tryAttachSummarizeJob]);
 
   const clearErrors = useCallback(() => {
     setLoadError("");
@@ -647,6 +884,7 @@ export function DigestProvider({ children }: { children: ReactNode }) {
         loadBodies,
         buildIndex,
         startSummarize,
+        stopSummarize,
         clearErrors,
       }}
     >

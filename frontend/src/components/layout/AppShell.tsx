@@ -8,9 +8,8 @@ import { OnboardingProvider, useOnboarding } from "../../contexts/OnboardingCont
 import { isLlmConfigured, useSettings } from "../../hooks/useSettings";
 
 const navItems = [
-  { to: "/", label: "库", end: true },
-  { to: "/chat", label: "对话", end: false },
-  { to: "/skills", label: "Skill", end: false },
+  { to: "/", label: "简报", end: true },
+  { to: "/sources", label: "源", end: false },
   { to: "/settings", label: "设置", end: false },
 ];
 
@@ -66,7 +65,7 @@ function FeedRefreshBanner() {
               </button>
             ) : (
               <NavLink
-                to="/settings"
+                to="/settings?tab=auth"
                 onClick={clearResult}
                 className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
               >
@@ -86,10 +85,39 @@ function DigestJobBanner() {
   const {
     loadingBodies,
     loadingIndex,
+    generating,
+    summaryPhase,
+    statusMessage,
     bodyProgress,
     indexProgress,
     indexStatusMessage,
+    stopSummarize,
   } = useDigest();
+
+  if (generating) {
+    return (
+      <TopJobBanner
+        tone="progress"
+        title="生成简报"
+        message={statusMessage || "正在生成简报…"}
+        indeterminate
+        detail={
+          summaryPhase && summaryPhase !== "idle" && summaryPhase !== "start" ? (
+            <div className="mt-1 text-xs opacity-80">阶段：{summaryPhase}</div>
+          ) : null
+        }
+        actions={
+          <button
+            type="button"
+            onClick={stopSummarize}
+            className="rounded border border-current/20 bg-[var(--paper-raised)]/60 px-2 py-1 text-xs hover:bg-[var(--paper-raised)]"
+          >
+            停止
+          </button>
+        }
+      />
+    );
+  }
 
   if (loadingBodies) {
     return (
@@ -286,10 +314,10 @@ function AppShellContent() {
                 }
               >
                 {item.label}
-                {item.to === "/" && sourcesInProgress && (
+                {item.to === "/" && chatInProgress && (
                   <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
                 )}
-                {item.to === "/chat" && chatInProgress && (
+                {item.to === "/sources" && sourcesInProgress && (
                   <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
                 )}
               </NavLink>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type {
   DigestTree,
   DigestTreeArticle,
@@ -46,7 +46,6 @@ function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
 
 function ArticleRow({
   article,
-  onAddArticle,
 }: {
   article: DigestTreeArticle;
   onAddArticle?: (article: ArticleRef) => void;
@@ -75,16 +74,12 @@ function ArticleRow({
           <span>{title}</span>
         )}
       </span>
-      {onAddArticle ? (
-        <AddButton label="加入对话" onClick={() => onAddArticle(ref)} />
-      ) : null}
     </li>
   );
 }
 
 function EventBlock({
   event,
-  onAddArticle,
   onAddArticles,
 }: {
   event: DigestTreeEvent;
@@ -95,7 +90,7 @@ function EventBlock({
   if (refs.length === 0) return null;
 
   if (refs.length === 1) {
-    return <ArticleRow article={event.articles[0]} onAddArticle={onAddArticle} />;
+    return <ArticleRow article={event.articles[0]} />;
   }
 
   const label = (event.title || "相关报道").trim() || "相关报道";
@@ -125,7 +120,6 @@ function EventBlock({
           <ArticleRow
             key={`${article.feed_id}:${article.article_id}`}
             article={article}
-            onAddArticle={onAddArticle}
           />
         ))}
       </ul>
@@ -137,14 +131,15 @@ function SectionBlock({
   section,
   collapsed,
   onToggle,
-  onAddArticle,
   onAddArticles,
+  sectionRef,
 }: {
   section: DigestTreeSection;
   collapsed: boolean;
   onToggle: () => void;
   onAddArticle?: (article: ArticleRef) => void;
   onAddArticles?: (articles: ArticleRef[]) => void;
+  sectionRef?: (node: HTMLElement | null) => void;
 }) {
   const count = sectionArticleCount(section);
   const isFocus = section.kind === "focus";
@@ -152,15 +147,12 @@ function SectionBlock({
 
   return (
     <section
+      ref={sectionRef}
       className={`mb-4 rounded-[var(--radius-panel)] transition-[background,padding] duration-150 ${
         isFocus ? "bg-[var(--focus-wash)] px-2 py-2" : ""
       }`}
     >
-      <div
-        className={`group/item sticky top-0 z-[1] -mx-1 flex items-center gap-1 px-1 py-1 backdrop-blur-sm ${
-          isFocus ? "bg-[var(--focus-wash)]/95" : "bg-[var(--paper-raised)]/95"
-        }`}
-      >
+      <div className="group/item -mx-1 flex items-center gap-1 px-1 py-1">
         <button
           type="button"
           onClick={onToggle}
@@ -190,7 +182,6 @@ function SectionBlock({
               <EventBlock
                 key={`${section.id}-${index}-${event.title}`}
                 event={event}
-                onAddArticle={onAddArticle}
                 onAddArticles={onAddArticles}
               />
             ))
@@ -211,30 +202,48 @@ function normalizePartitions(tree: DigestTree): DigestTreePartition[] {
   return [];
 }
 
+function findScrollParent(node: HTMLElement | null): HTMLElement | null {
+  let el = node?.parentElement ?? null;
+  while (el) {
+    const { overflowY } = getComputedStyle(el);
+    if (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") {
+      return el;
+    }
+    el = el.parentElement;
+  }
+  return null;
+}
+
 interface DigestTreeViewProps {
   tree: DigestTree;
   onAddArticle?: (article: ArticleRef) => void;
   onAddArticles?: (articles: ArticleRef[]) => void;
   className?: string;
+  /** 简报区滚动容器；不传则自动向上查找 */
+  scrollParentRef?: RefObject<HTMLElement | null>;
 }
 
 export default function DigestTreeView({
   tree,
-  onAddArticle,
   onAddArticles,
   className = "",
+  scrollParentRef,
 }: DigestTreeViewProps) {
   const partitions = useMemo(() => normalizePartitions(tree), [tree]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [activeKey, setActiveKey] = useState<string>("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const tocRef = useRef<HTMLElement>(null);
+  const sectionElsRef = useRef<Map<string, HTMLElement>>(new Map());
+  const lockActiveUntilRef = useRef(0);
 
   const toc = useMemo(() => {
     const items: Array<{ key: string; label: string; count: number; kind: string }> = [];
     for (const partition of partitions) {
-      const prefix = partition.group_name ? `${partition.group_name} · ` : "";
       for (const section of partition.sections || []) {
         items.push({
           key: `${partition.group_id}::${section.id}`,
-          label: `${prefix}${section.name}`,
+          label: section.name,
           count: sectionArticleCount(section),
           kind: section.kind,
         });
@@ -243,59 +252,139 @@ export default function DigestTreeView({
     return items;
   }, [partitions]);
 
+  const hasTocNav = toc.length > 1;
+
+  useEffect(() => {
+    if (!hasTocNav) return;
+    if (!activeKey && toc[0]) setActiveKey(toc[0].key);
+  }, [hasTocNav, toc, activeKey]);
+
+  useEffect(() => {
+    if (!hasTocNav) return;
+    const scroller =
+      scrollParentRef?.current ?? findScrollParent(rootRef.current);
+    const tocEl = tocRef.current;
+    if (!scroller || !tocEl) return;
+
+    const onScroll = () => {
+      if (Date.now() < lockActiveUntilRef.current) return;
+      const offset = tocEl.offsetHeight + 4;
+      const scrollerTop = scroller.getBoundingClientRect().top;
+      let current = toc[0]?.key ?? "";
+      for (const item of toc) {
+        const el = sectionElsRef.current.get(item.key);
+        if (!el) continue;
+        const top = el.getBoundingClientRect().top - scrollerTop;
+        if (top - offset <= 2) current = item.key;
+      }
+      if (current) setActiveKey(current);
+    };
+
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, [hasTocNav, toc, scrollParentRef]);
+
+  function scrollSectionToTop(key: string) {
+    const target = sectionElsRef.current.get(key);
+    const tocEl = tocRef.current;
+    const scroller =
+      scrollParentRef?.current ?? findScrollParent(rootRef.current);
+    if (!target) return;
+    setActiveKey(key);
+    lockActiveUntilRef.current = Date.now() + 700;
+    if (!scroller || !tocEl) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const tocHeight = tocEl.offsetHeight;
+    const delta =
+      target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    const nextTop = scroller.scrollTop + delta - tocHeight;
+    scroller.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+  }
+
   if (partitions.length === 0) {
     return <p className="text-sm text-[var(--ink-muted)]">暂无结构化概览</p>;
   }
 
   return (
-    <div className={className}>
-      {toc.length > 1 && (
-        <nav className="mb-3 flex flex-wrap gap-1.5 border-b border-[var(--rule)] pb-3">
-          {toc.map((item) => (
-            <a
-              key={item.key}
-              href={`#digest-${item.key}`}
-              className={`rounded px-1.5 py-0.5 text-[11px] ${
-                item.kind === "focus"
-                  ? "bg-[var(--accent-soft)] text-[var(--accent)]"
-                  : "bg-[var(--paper)] text-[var(--ink-muted)] hover:bg-[color-mix(in_srgb,var(--paper)_70%,white)]"
-              }`}
-            >
-              {item.label}
-              {item.count > 0 ? ` ${item.count}` : ""}
-            </a>
-          ))}
+    <div ref={rootRef} className={className}>
+      {hasTocNav ? (
+        <nav
+          ref={tocRef}
+          aria-label="简报目录"
+          className="sticky top-0 z-10 border-b border-[var(--rule)] bg-[color-mix(in_srgb,var(--paper)_88%,transparent)] backdrop-blur-[10px]"
+        >
+          <div className="mx-auto flex max-w-[42rem] items-stretch gap-0 overflow-x-auto px-5 pt-1.5 scrollbar-none sm:px-8 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {toc.map((item) => {
+              const isActive = activeKey === item.key;
+              const isFocus = item.kind === "focus";
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => scrollSectionToTop(item.key)}
+                  className={`inline-flex shrink-0 items-baseline gap-1.5 border-0 border-b-2 bg-transparent px-3 pb-2.5 pt-1.5 text-[0.82rem] tracking-[0.01em] whitespace-nowrap transition-[color,border-color] duration-100 ${
+                    isActive
+                      ? isFocus
+                        ? "border-[var(--accent)] font-semibold text-[var(--accent)]"
+                        : "border-[var(--ink)] text-[var(--ink)]"
+                      : isFocus
+                        ? "border-transparent font-semibold text-[var(--accent)] hover:opacity-90"
+                        : "border-transparent text-[var(--ink-muted)] hover:text-[var(--ink)]"
+                  }`}
+                >
+                  {item.label}
+                  <span
+                    className={`text-[0.7rem] font-medium tabular-nums ${
+                      isActive ? "opacity-60" : "text-[color-mix(in_srgb,var(--ink-muted)_75%,transparent)]"
+                    }`}
+                  >
+                    {item.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </nav>
-      )}
+      ) : null}
 
-      {partitions.map((partition) => (
-        <div key={partition.group_id || partition.group_name || "root"}>
-          {partitions.length > 1 && partition.group_name ? (
-            <h2 className="mb-2 text-sm font-semibold text-[var(--ink)]">{partition.group_name}</h2>
-          ) : null}
-          {(partition.sections || []).map((section) => {
-            const key = `${partition.group_id}::${section.id}`;
-            const isCollapsed =
-              collapsed[key] ?? (sectionArticleCount(section) === 0 && section.kind !== "focus");
-            return (
-              <div key={key} id={`digest-${key}`}>
+      <div className="mx-auto min-w-0 max-w-[42rem] px-5 pt-4 pb-5 sm:px-8">
+        {partitions.map((partition) => (
+          <div key={partition.group_id || partition.group_name || "root"}>
+            {partitions.length > 1 && partition.group_name ? (
+              <h2 className="mb-2 text-sm font-semibold text-[var(--ink)]">
+                {partition.group_name}
+              </h2>
+            ) : null}
+            {(partition.sections || []).map((section) => {
+              const key = `${partition.group_id}::${section.id}`;
+              const isCollapsed =
+                collapsed[key] ??
+                (sectionArticleCount(section) === 0 && section.kind !== "focus");
+              return (
                 <SectionBlock
+                  key={key}
                   section={section}
                   collapsed={isCollapsed}
+                  sectionRef={(node) => {
+                    if (node) sectionElsRef.current.set(key, node);
+                    else sectionElsRef.current.delete(key);
+                  }}
                   onToggle={() =>
                     setCollapsed((current) => ({
                       ...current,
                       [key]: !isCollapsed,
                     }))
                   }
-                  onAddArticle={onAddArticle}
                   onAddArticles={onAddArticles}
                 />
-              </div>
-            );
-          })}
-        </div>
-      ))}
+              );
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

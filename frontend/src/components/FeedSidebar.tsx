@@ -29,18 +29,18 @@ interface FeedSidebarProps {
   onSelect: (id: string) => void;
   onRefreshAll: () => void;
   onRefreshGroup?: (groupId: string, groupName: string, feedIds: string[]) => void;
-  onLoadGroupBodies?: (groupId: string, groupName: string, feedIds: string[]) => void;
   refreshingAll: boolean;
   refreshing?: boolean;
   refreshingGroupId?: string | null;
   loadingBodies?: boolean;
   loadingBodiesGroupId?: string | null;
+  sourcesBusy?: boolean;
   onAddSource?: () => void;
   onManageGroups?: () => void;
   onDeleteFeed?: (feedId: string) => void;
   onRenameFeed?: (feedId: string, name: string) => void | Promise<void>;
   onLayoutChange?: (groups: FeedGroup[], groupOrder: string[]) => void | Promise<void>;
-  /** 与库页顶栏时间范围一致，用于「拉取本组正文」说明 */
+  /** 与源页顶栏时间范围一致 */
   days?: DefaultDays;
 }
 
@@ -420,12 +420,12 @@ export default function FeedSidebar({
   onSelect,
   onRefreshAll,
   onRefreshGroup,
-  onLoadGroupBodies,
   refreshingAll,
   refreshing = false,
   refreshingGroupId = null,
   loadingBodies = false,
   loadingBodiesGroupId = null,
+  sourcesBusy = false,
   onAddSource,
   onManageGroups,
   onDeleteFeed,
@@ -433,8 +433,9 @@ export default function FeedSidebar({
   onLayoutChange,
   days = 1,
 }: FeedSidebarProps) {
-  const feedRefreshBusy = refreshing || refreshingAll || Boolean(refreshingGroupId);
+  const feedRefreshBusy = refreshing || refreshingAll || Boolean(refreshingGroupId) || sourcesBusy;
   const groupBodiesBusy = loadingBodies || Boolean(loadingBodiesGroupId);
+  const updateBusy = feedRefreshBusy || groupBodiesBusy;
   const canManageLayout = Boolean(onLayoutChange);
 
   const sections = useMemo(
@@ -579,8 +580,8 @@ export default function FeedSidebar({
       dropTarget?.type === "feed-to-group" && dropTarget.groupId === section.id;
     const isActiveGroup = selectedGroupId === section.id;
     const feedIds = getSectionFeedIds(section.id);
-    const hasGroupActions =
-      feedIds.length > 0 && Boolean(onRefreshGroup || onLoadGroupBodies);
+      const hasGroupActions =
+      feedIds.length > 0 && Boolean(onRefreshGroup);
 
     return (
       <div
@@ -672,34 +673,17 @@ export default function FeedSidebar({
             {hasGroupActions ? (
               <OverflowMenu
                 label="本组操作"
-                disabled={feedRefreshBusy || groupBodiesBusy}
+                disabled={updateBusy}
                 items={[
-                  ...(onRefreshGroup
-                    ? [
-                        {
-                          label:
-                            refreshingGroupId === section.id ? "更新中…" : "更新本组",
-                          hint: "刷新本组各源的文章列表",
-                          disabled: feedRefreshBusy || groupBodiesBusy,
-                          onClick: () =>
-                            onRefreshGroup(section.id, section.name, feedIds),
-                        },
-                      ]
-                    : []),
-                  ...(onLoadGroupBodies
-                    ? [
-                        {
-                          label:
-                            loadingBodiesGroupId === section.id
-                              ? "拉取中…"
-                              : "拉取本组正文",
-                          hint: `当前范围（${formatDaysLabel(days)}）内本组列表文章的正文`,
-                          disabled: feedRefreshBusy || groupBodiesBusy,
-                          onClick: () =>
-                            onLoadGroupBodies(section.id, section.name, feedIds),
-                        },
-                      ]
-                    : []),
+                  {
+                    label:
+                      refreshingGroupId === section.id || loadingBodiesGroupId === section.id
+                        ? "更新中…"
+                        : "更新本组",
+                    hint: `刷新本组列表并拉取正文（${formatDaysLabel(days)}）`,
+                    disabled: updateBusy,
+                    onClick: () => onRefreshGroup?.(section.id, section.name, feedIds),
+                  },
                 ]}
               />
             ) : (
@@ -793,18 +777,10 @@ export default function FeedSidebar({
   }
 
   const libraryMenuItems = [
-    ...(onManageGroups
-      ? [
-          {
-            label: "管理分组",
-            onClick: onManageGroups,
-          },
-        ]
-      : []),
     {
-      label: refreshingAll ? "更新中…" : "更新全部",
-      hint: "刷新所有数据源的文章列表",
-      disabled: feeds.length === 0 || feedRefreshBusy,
+      label: refreshingAll || loadingBodies ? "更新中…" : "更新全部",
+      hint: "刷新所有源的文章列表并拉取正文",
+      disabled: feeds.length === 0 || updateBusy,
       onClick: onRefreshAll,
     },
   ];
@@ -812,38 +788,64 @@ export default function FeedSidebar({
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r border-[var(--rule)] bg-[var(--paper-raised)]">
       <div className="shrink-0 border-b border-[var(--rule)] px-3 py-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <h1 className="text-sm font-semibold tracking-tight text-[var(--ink)]">订阅</h1>
-            <p className="mt-0.5 text-[11px] text-[var(--ink-muted)]">{feeds.length} 个源</p>
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-sm font-semibold tracking-tight text-[var(--ink)]">订阅</h1>
+              {onAddSource ? (
+                <button
+                  type="button"
+                  onClick={onAddSource}
+                  title="添加源"
+                  aria-label="添加源"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper)] text-base leading-none text-[var(--ink)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+                >
+                  +
+                </button>
+              ) : null}
+            </div>
+            <p className="mt-0.5 text-[11px] text-[var(--ink-muted)]">
+              {loading ? "加载中…" : `${feeds.length} 个源`}
+            </p>
           </div>
-          {libraryMenuItems.length > 0 ? <OverflowMenu items={libraryMenuItems} label="库操作" /> : null}
+          {onManageGroups ? (
+            <button
+              type="button"
+              onClick={onManageGroups}
+              className="rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper-raised)] px-2 py-1 text-xs text-[var(--ink-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              管理分组
+            </button>
+          ) : libraryMenuItems.length > 0 ? (
+            <OverflowMenu items={libraryMenuItems} label="订阅操作" />
+          ) : null}
         </div>
 
-        <div className="mt-2.5 flex items-center gap-1.5">
+        <div className="mt-2.5">
           {feeds.length > 0 ? (
             <input
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="搜索…"
-              className="ui-input min-w-0 flex-1 text-xs placeholder:text-[var(--ink-muted)]"
+              className="ui-input w-full text-xs placeholder:text-[var(--ink-muted)]"
             />
           ) : (
-            <span className="min-w-0 flex-1 text-xs text-[var(--ink-muted)]">添加第一个数据源</span>
+            <span className="text-xs text-[var(--ink-muted)]">点击 + 添加第一个数据源</span>
           )}
-          <button
-            type="button"
-            onClick={onAddSource}
-            className="ui-btn ui-btn-accent shrink-0 px-2.5 py-1.5 text-xs font-medium"
-          >
-            添加
-          </button>
         </div>
       </div>
 
       {loading ? (
-        <p className="px-4 py-6 text-sm text-[var(--ink-muted)]">加载中...</p>
+        <div className="space-y-2 px-3 py-4" aria-busy="true" aria-label="加载订阅">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div
+              key={index}
+              className="h-8 animate-pulse rounded-[var(--radius-control)] bg-[color-mix(in_srgb,var(--rule)_70%,white)]"
+              style={{ opacity: 1 - index * 0.08 }}
+            />
+          ))}
+        </div>
       ) : feeds.length === 0 ? (
         <p className="px-4 py-6 text-sm text-[var(--ink-muted)]">暂无数据源，点击上方添加</p>
       ) : filteredSections.length === 0 ? (

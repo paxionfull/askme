@@ -505,7 +505,7 @@ function AddToChatButton({
         event.stopPropagation();
         onClick();
       }}
-      className="ml-1.5 inline-flex shrink-0 items-center rounded border border-[color-mix(in_srgb,var(--accent)_30%,var(--rule))] bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent)] opacity-0 transition-opacity hover:bg-[color-mix(in_srgb,var(--accent-soft)_80%,white)] group/item:opacity-100"
+      className="ml-1.5 inline-flex shrink-0 items-center rounded border border-[color-mix(in_srgb,var(--accent)_30%,var(--rule))] bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent)] opacity-0 transition-opacity hover:bg-[color-mix(in_srgb,var(--accent-soft)_80%,white)] group-hover/item:opacity-100"
     >
       加入对话
     </button>
@@ -560,7 +560,7 @@ function DraggableSectionHeading({
       ? "markdown-body mt-6 mb-3 text-lg font-semibold text-[var(--ink)]"
       : "markdown-body mt-5 mb-2 text-base font-semibold text-[var(--ink)]";
   return (
-    <Tag className={`${baseClass} group/item flex max-w-full items-center gap-1`}>
+    <Tag className={`${baseClass} group/item flex max-w-full flex-wrap items-center gap-1`}>
       <span
         draggable
         title={`拖动到右侧对话区，一次性添加「${label}」下 ${articles.length} 篇文章`}
@@ -585,7 +585,6 @@ function DraggableArticleLink({
   href,
   children,
   articleRef,
-  onAddArticle,
 }: {
   href?: string;
   children?: ReactNode;
@@ -601,27 +600,19 @@ function DraggableArticleLink({
   }
 
   return (
-    <span className="group/item inline-flex max-w-full items-start gap-0.5">
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        draggable
-        title="按住拖动到右侧对话区，可添加文章并生成摘要或限定提问"
-        className="cursor-grab rounded px-0.5 text-[var(--accent)] no-underline hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] active:cursor-grabbing"
-        onDragStart={(event) => {
-          writeArticleDragData(event.dataTransfer, articleRef);
-        }}
-      >
-        {children}
-      </a>
-      {onAddArticle ? (
-        <AddToChatButton
-          label={`将「${articleRef.title || "文章"}」加入对话`}
-          onClick={() => onAddArticle(articleRef)}
-        />
-      ) : null}
-    </span>
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      draggable
+      title="按住拖动到右侧对话区，可添加文章并生成摘要或限定提问"
+      className="cursor-grab rounded px-0.5 text-[var(--accent)] no-underline hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] active:cursor-grabbing"
+      onDragStart={(event) => {
+        writeArticleDragData(event.dataTransfer, articleRef);
+      }}
+    >
+      {children}
+    </a>
   );
 }
 
@@ -629,7 +620,6 @@ export default function SummaryMarkdown({
   content,
   articleRefs = [],
   className = "",
-  onAddArticle,
   onAddArticles,
 }: SummaryMarkdownProps) {
   const resolveRef = useMemo(() => buildRefLookup(articleRefs), [articleRefs]);
@@ -684,12 +674,10 @@ export default function SummaryMarkdown({
         <DraggableArticleLink
           href={href}
           articleRef={resolveRef(href, children)}
-          onAddArticle={onAddArticle}
         >
           {children}
         </DraggableArticleLink>
-      ),
-      h2: ({ children }: { children?: ReactNode }) => {
+      ),      h2: ({ children }: { children?: ReactNode }) => {
         const label = extractLinkText(children);
         headingContextRef.current.h2 = label;
         const articles = sectionByKey.get(sectionKey("", label));
@@ -738,7 +726,7 @@ export default function SummaryMarkdown({
         );
       },
     }),
-    [groupByLabel, onAddArticle, onAddArticles, resolveRef, sectionByKey],
+    [groupByLabel, onAddArticles, resolveRef, sectionByKey],
   );
 
   if (!content) return null;

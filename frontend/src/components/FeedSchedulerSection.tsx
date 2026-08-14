@@ -315,21 +315,34 @@ export default function FeedSchedulerSection() {
             <div className="mt-3 rounded-lg bg-[var(--paper)] px-3 py-2 text-xs text-[var(--ink-muted)]">
               <div>上次执行：{formatLastRun(status.last_run_at)}</div>
               {(status.last_feed_count ?? 0) > 0 && (
-                <div>上次刷新订阅数：{status.last_feed_count}</div>
+                <div>上次刷新成功：{status.last_feed_count} 个源</div>
+              )}
+              {status.last_refresh_message && (
+                <div className="mt-1">{status.last_refresh_message}</div>
               )}
               {status.last_error && (
                 <div className="mt-1 text-red-600">上次错误：{status.last_error}</div>
               )}
-              {(status.last_refresh_failed?.length ?? 0) > 0 && (
-                <div className="mt-1 whitespace-pre-wrap text-[var(--accent)]">
-                  {[
-                    `上次失败 ${status.last_refresh_failed!.length} 个：`,
-                    ...status.last_refresh_failed!.map(
-                      (item) => `· ${item.feed_name || item.feed_id}：${item.error || "未知错误"}`,
-                    ),
-                  ].join("\n")}
-                </div>
-              )}
+            </div>
+          )}
+
+          {(status?.last_refresh_failed?.length ?? 0) > 0 && (
+            <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+              <div className="font-medium">
+                上次有 {status!.last_refresh_failed!.length} 个源失败
+                {status!.last_refresh_failed!.some((item) =>
+                  /授权|登录|会话|ASKME_AUTH|cookie|公众号/i.test(item.error || ""),
+                )
+                  ? "（含授权/登录问题，请到「授权」页检查凭证）"
+                  : ""}
+              </div>
+              <ul className="mt-1.5 max-h-40 space-y-1 overflow-y-auto">
+                {status!.last_refresh_failed!.map((item) => (
+                  <li key={`${item.feed_id}-${item.error}`}>
+                    · {item.feed_name || item.feed_id}：{item.error || "未知错误"}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -342,7 +355,6 @@ export default function FeedSchedulerSection() {
             <p className="mt-3 text-sm text-green-700">{resultMessage}</p>
           )}
           {saved && !isDirty && <p className="mt-3 text-sm text-green-700">定时设置已保存</p>}
-
           <div className="mt-4 flex justify-end">
             <button
               type="button"

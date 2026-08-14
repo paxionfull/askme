@@ -2,7 +2,8 @@
 name: kimi-discovery
 description: >-
   Discovers articles from Kimi Blog (kimi.com/blog) via sitemap-ug-blog.xml
-  and article HTML. Use when fetching updates from kimi.com/blog or Moonshot Kimi.
+  and article HTML. Use when fetching updates from kimi.com/blog or Moonshot Kimi only.
+  Not for onboarding other websites.
 ---
 
 # Kimi Blog 发现层

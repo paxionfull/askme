@@ -33,11 +33,14 @@
   --error-soft: #fef2f2;
   --radius-control: 0.5rem;
   --radius-panel: 0.625rem;
+  --app-content-max-medium: 1200px;
+  --app-content-max-wide: 1500px;
 }
 
 body {
   margin: 0;
   font-family: var(--font-sans);
+  font-size: clamp(15px, 0.2vw + 14px, 18px);
   background: var(--paper);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
@@ -59,8 +62,8 @@ body {
   border: 1px solid var(--rule);
   background: var(--paper-raised);
   color: var(--ink);
-  padding: 0.375rem 0.75rem;
-  font-size: 0.8125rem;
+  padding: 0.45rem 0.85rem;
+  font-size: clamp(0.875rem, 0.18vw + 0.8rem, 0.98rem);
   font-weight: 500;
   transition: background 0.12s ease, border-color 0.12s ease;
 }
@@ -123,8 +126,18 @@ body {
   border: 1px solid var(--rule);
   background: var(--paper-raised);
   color: var(--ink);
-  padding: 0.375rem 0.625rem;
-  font-size: 0.8125rem;
+  padding: 0.45rem 0.7rem;
+  font-size: clamp(0.875rem, 0.16vw + 0.8rem, 0.98rem);
+}
+
+.app-content-medium {
+  width: min(96vw, var(--app-content-max-medium));
+  margin-inline: auto;
+}
+
+.app-content-wide {
+  width: min(97vw, var(--app-content-max-wide));
+  margin-inline: auto;
 }
 
 .ui-textarea {
@@ -501,16 +514,19 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-.summary-markdown-nowrap {
-  width: max-content;
-  min-width: 100%;
+/* 概览正文允许换行；可拖标题仍可横向扫读，不再强制整行 nowrap */
+.summary-markdown-readable {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-.summary-markdown-nowrap h2,
-.summary-markdown-nowrap h3,
-.summary-markdown-nowrap p,
-.summary-markdown-nowrap li,
-.summary-markdown-nowrap a,
-.summary-markdown-nowrap strong {
-  white-space: nowrap;
+.summary-markdown-readable h2,
+.summary-markdown-readable h3 {
+  white-space: normal;
+}
+
+.summary-markdown-readable a,
+.summary-markdown-readable li,
+.summary-markdown-readable p {
+  white-space: normal;
 }

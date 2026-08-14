@@ -154,6 +154,9 @@ export default function DigestProfileModal({
                     className="ui-textarea w-full disabled:opacity-60"
                   />
                 </label>
+                <p className="text-xs text-[var(--ink-muted)]">
+                  聚类时对每个事件标记 focus_score=0/1；取标为 1 的事件作头条，最多取「最多事件数」。
+                </p>
                 <div className="flex flex-wrap items-center gap-4">
                   <label className="flex items-center gap-2 text-xs text-[var(--ink-muted)]">
                     最多事件数
@@ -187,7 +190,7 @@ export default function DigestProfileModal({
                         })
                       }
                     />
-                    重点文章不在分类中重复
+                    重点文章不在分类中重复（按事件整组移除，默认开启）
                   </label>
                 </div>
               </FieldBlock>

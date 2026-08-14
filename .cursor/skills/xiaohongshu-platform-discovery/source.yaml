@@ -1,4 +1,17 @@
 id: xiaohongshu-platform
-name: xiaohongshu
+name: 小红书
+homepage: https://www.xiaohongshu.com
 platform: xiaohongshu
 platform_skill: true
+
+discovery:
+  type: xiaohongshu_ssr_api
+  requires_cookie: true
+  auth_slot: xiaohongshu
+  login_url: https://www.xiaohongshu.com
+  required_token: web_session=
+  cookie_hint: 须真实扫码登录后的 Cookie（访客 web_session 无效）
+
+validation:
+  expected_min_items: 1
+  min_body_chars: 40

@@ -1,7 +1,7 @@
 """Askme 数据源统一 HTTP 策略：超时、重试退避与页间限速。
 
 所有 discovery skill 的对外 HTTP 请求必须通过本模块（禁止直接 urlopen 并自定义 timeout）。
-常量须与 backend/feed_http_policy.py 保持一致。
+常量须与 backend/feed/feed_http_policy.py 保持一致。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import urllib.request
 from email.utils import parsedate_to_datetime
 from typing import Any
 
-# 与 backend/feed_http_policy.py 同步（所有 discovery 必须遵循，禁止覆盖）
+# 与 backend/feed/feed_http_policy.py 同步（所有 discovery 必须遵循，禁止覆盖）
 REQUEST_TIMEOUT_SECONDS = 5
 DEFAULT_RETRIES = 3
 RETRYABLE_HTTP_CODES = frozenset({429, 502, 503})

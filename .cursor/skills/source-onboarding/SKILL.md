@@ -1,183 +1,90 @@
 ---
 name: source-onboarding
 description: >-
-  Onboards a new website into Askme using Cursor SDK Agent (or deterministic
-  scaffold for known platforms). Writes a custom *-discovery skill — not RSS,
-  not template fill. Use when adding a new website data source.
+  Create or repair Askme website discovery skills (*-discovery / *-platform-discovery).
+  ALWAYS use this skill when onboarding a new site from a URL, implementing
+  WebsiteFeedAdapter, writing discover.py / source.yaml / SKILL.md, fixing
+  discovery_validate or refresh failures, login/cookie ASKME_AUTH_REQUIRED, or
+  http_client / hints / list_index rules. Prefer this over any existing
+  *-discovery skill. Do NOT use site-specific *-discovery skills as onboarding
+  guides — those are only for fetching that one site. Not for day-to-day
+  fetching of an already-onboarded source.
 ---
 
-# 数据源接入（Cursor SDK）
+# 数据源接入（source-onboarding）
 
-Askme 通过 **Cursor SDK** 为**具体网站**编写 discovery skill，而不是内部 LLM Agent 或固定模板填充。
+Askme 为**具体网站**编写 discovery skill（Cursor Agent / SDK），不是 RSS，不是模板填空。
+
+**动手前必读契约：** [CONTRACT.md](CONTRACT.md)（接口、HTTP、hints、登录墙）。违反契约则 pipeline 无法复用。
 
 ## 原则
 
-1. **用户只提供网站链接**；名称与 slug 由系统从域名自动推导
-2. **先看网站证据**：入口页、API 响应样本
-3. **再写专属代码**：URL、字段、Referer、分页逻辑必须来自该站
-4. **可参考已有 skill**（jiqizhixin、qbitai、zhihu）的**风格**，不可照搬 URL/字段
-5. **禁止 RSS/Atom**
-6. 验证失败时由 Cursor Agent **自行修复** discover.py 并重跑
+1. 用户通常只提供网站链接；名称与 slug 由系统从域名推导（任务 prompt 会给出最终 slug）
+2. 先看网站证据（入口页、API 样本），再写专属代码；URL/字段/Referer/分页必须来自该站
+3. **参考已有 discovery skill（强制）**：从 `.cursor/skills/*-discovery/` 中自选样例（见下节），学结构与 `_lib` 用法，**不可照搬** URL/字段
+4. **禁止 RSS/Atom**
+5. 验证失败则自行修复并重跑 `discovery_validate.py`
 
-## 自动化流程（UI / API）
+## 如何选参考 skill（强制，至少 2 个）
 
-### 已知平台（知乎、小红书、Reddit、X、微信、金十等）— 平台 skill + 账号配置
+仓库内已有站级 / 平台级 discovery（含内置与用户接入的）都是合法参考；**不要**另找 playbook 目录。
 
-多账号平台：**一平台一个 skill**（`{platform}-platform-discovery`），账号参数写入 `feed_registry.platform_accounts`，不再为每个号生成目录。`auto_repair` 默认开启，修复目标是**平台 skill / `_lib/*_common`**，不是按账号关修复。
+1. 浏览 `.cursor/skills/` 下名称以 `-discovery` 结尾的目录（跳过本 skill `source-onboarding`，跳过无完整 `scripts/discover.py` 的残缺目录）
+2. 根据侦察结果（JSON API / HTML 列表 / sitemap / 需 Cookie 等）选出 **至少 2 个**形态最接近的 skill
+3. 若目标站已有同站或同平台 skill，优先列入参考
+4. 打开其 `scripts/discover.py`、`source.yaml`（必要时 `SKILL.md`），只学：
+   - WebsiteFeedAdapter 组织方式
+   - `http_client` / `detail_hints` / `list_index` / `auth_cookie` 用法
+5. **禁止**复制其 API URL、字段路径、Referer、假数据；字段必须来自目标站证据
 
-```text
-detect_platform（zhihu / xiaohongshu / reddit / x / weixin / jin10 等）
-  → probe API（知乎/小红书/微信需 Cookie）
-  → upsert platform_accounts + 确保平台 skill 存在
-  → validate（绑定账号上下文）
-```
+## 未知站 — 任务步骤
 
-- 知乎 / 微信 / Reddit：ContextVar 绑定账号，共用平台 `discover.py`
-- 小红书 / X：按账号从 `_lib/*_scaffold` **内存编译**适配器；平台目录供 auto_repair 占位
-- 金十：仍为单例经典 skill（`jin10-discovery`）
+1. 用 curl / Python 侦察真实列表与正文 API
+2. 阅读 [CONTRACT.md](CONTRACT.md)
+3. 按上节选 ≥2 个参考 skill 并阅读
+4. 创建 `.cursor/skills/{slug}-discovery/`：
+   - `scripts/discover.py`（完整 WebsiteFeedAdapter）
+   - `source.yaml`、`SKILL.md`（description 只描述本站，勿写成通用接入指南）
+5. 运行：`python .cursor/skills/_lib/discovery_validate.py {slug}`
+6. 失败则按报错修到通过；完成后一句话说明 `feed_id` 与验证结果（若停在 `ASKME_AUTH_REQUIRED`，写出 slot）
 
-微信列表走公众号后台 `list_ex`（设置页「微信」凭证，须【公众号】登录非小程序）；正文走公开文章页。
+IDE 手动接入同样遵循上述步骤；完成后可 `POST /api/feeds/reload-skills`。
 
-Playbook 示例：`data/onboarding-playbooks/zhihu-people-khazix.md`
+## 修复已有 discovery skill
 
+1. 先加载本 skill + [CONTRACT.md](CONTRACT.md)，**不得破坏契约**
+2. 按用户反馈 / 验证报错定位 `discover.py` / `source.yaml`（平台 skill 优先 `_lib/{platform}_common.py`）
+3. 必要时再打开 1～2 个相近 `*-discovery` 对照实现，仍禁止照搬 URL/字段
+4. 站级：只改 `.cursor/skills/{slug}-discovery/`；禁止改 slug、`FEED_ID`、删目录
+5. 平台级（slug 以 `-platform` 结尾）：可改平台 skill 与对应 `_lib`；禁止新建 per-account skill
+6. 跑通 `discovery_validate.py`
 
-### 未知站点 — Cursor SDK Agent
+## 已知平台（系统侧确定性接入）
 
-需在 **设置页** 配置 **Cursor API Key**（`CURSOR_API_KEY` 或 `data/integrations.json`）。
-
-```text
-AsyncClient.launch_bridge(workspace=项目根)
-  → agents.create(model="auto", local.setting_sources=["project"])
-  → agent.send(接入 prompt)
-  → 流式 tool_call / status
-  → run.wait()
-  → discovery_validate.py
-  → reload feeds
-```
-
-接入任务在**后台**运行，可切换 tab；进度显示在顶部横幅，可随时点击「停止」取消（调用 `run.cancel()`）。
-
-### 接入中 / 接入后自动修复
-
-任一步失败且已启用 `auto_repair`（默认 true）时，系统会用 Cursor Agent **按报错迭代修复**：
-
-1. **API 探测失败**（平台脚手架）：登记账号后 repair **平台 skill** → 重探
-2. **discovery_validate 失败**：repair 平台 skill → 再验证（最多数次）
-3. **首拉 refresh 失败**：repair → reload-skills → 再拉一次
-
-平台源默认 **保留** `auto_repair`；修复改平台共享代码，不影响其它账号登记。
-
-仍失败才标记该源接入失败（skill 文件通常保留，可手动「反馈并修复」）。
-
-可通过请求体 `auto_repair: false` 关闭。缺 Cursor API Key 时无法走 Agent 修复（探测/首拉会给出明确提示）。
-
-例外：未配置 `ZHIHU_COOKIE` 属于用户配置问题，不会触发自动修复。
-
-日志写入 `data/onboarding-logs/{job_id}.jsonl`：
-
-- `GET /api/sources/onboard/logs`
-- `GET /api/sources/onboard/logs/{job_id}`
-- `POST /api/sources/onboard/cancel` body: `{ "job_id": "..." }`
-
-### API
-
-```bash
-# SSE 流式（不再需要 llm_config）
-POST /api/sources/onboard
-{
-  "entry_url": "https://example.com/articles",
-  "stream": true
-}
-```
-
-SSE 事件：`status` · `result` · `done` · `error`
-
-Cursor API Key 管理：
-
-- `GET /api/settings/cursor-api-key`
-- `PUT /api/settings/cursor-api-key` body: `{ "api_key": "cur_..." }`
-
-### 验证
-
-```bash
-python .cursor/skills/_lib/discovery_validate.py {slug}
-```
-
-## 在 Cursor IDE 中手动执行（无 UI 时）
-
-1. 阅读用户给的 URL，用浏览器/Network 或 curl 收集列表 API、详情 API、样例 JSON
-2. 阅读 `.cursor/skills/jiqizhixin-discovery/` 等作为参考
-3. 创建 `.cursor/skills/{slug}-discovery/scripts/discover.py`，实现 WebsiteFeedAdapter
-4. 写 `source.yaml`、`SKILL.md`
-5. 运行 `discovery_validate.py`
-6. `POST /api/feeds/reload-skills`
-
-## discover.py 接口
-
-| 符号 | 说明 |
-|------|------|
-| `FEED_ID` | `website:{slug}` |
-| `FEED_META` | mpName、entryUrl 等 |
-| `fetch_list_page` / `list_items` / `has_next_page` | 列表 |
-| `normalize_list_item` | 统一元数据 |
-| `fetch_article_detail` | 含 content_html |
-| `normalize_article_body` | 可选，`_lib/content_utils` |
-
-### HTTP 与反爬（强制，所有分组 / 新数据源统一）
-
-- **所有对外 HTTP 请求**必须通过 `_lib/http_client.py`（`fetch_text` / `fetch_json` / `fetch_bytes` 等）
-- **禁止**在 discover.py 里直接 `urllib.request.urlopen` 或自定义 `timeout=`
-- 统一超时：**5 秒**（`REQUEST_TIMEOUT_SECONDS=5`，http_client 忽略覆盖）；失败自动重试 1 次，对 429/502/503 指数退避
-- 脚本内自行分页循环时，页间应调用 `sleep_between_pages()`
-- `website_feed.refresh_feed` 在分页之间也会自动等待（约 0.8s + 抖动）
-- 验证脚本 `discovery_validate.py` 会拒绝未走 http_client 或自带 timeout 的 skill
-
-```python
-from http_client import fetch_json, fetch_text, sleep_between_pages
-```
-
-## 正文 pipeline
+多账号平台由 backend `detect_platform` + `platform_registry` 走脚手架，**不**为每个号新建目录：
 
 ```text
-fetch_list_page → normalize_list_item（含 url/title/…）
-批量拉正文 → fetch_article_detail(article_id, **hints)  # hints 来自列表元数据
-→ normalize_article_body（skill）→ html_to_text → cache
+detect → 缺 Cookie 则 ASKME_AUTH_REQUIRED → probe → platform_accounts + 平台 skill → validate
 ```
 
-### fetch_article_detail 与 hints（强制）
+- 一平台一个 skill：`.cursor/skills/{platform}-platform-discovery/`
+- 同构：`SKILL.md` + `source.yaml`（`platform_skill: true`）+ 真实 `discover.py`（`require_account()` + `boundPlatformAdapter`）
+- 金十仍为单例 `jin10-discovery`
+- 缺 Cookie **不**触发 auto_repair；须用户授权
 
-批量拉正文时，backend 会把列表里已有的 `url` / `title` / `published_at` / `author` / `image` / `summary` 作为 `**hints` 传入：
+平台 skill 文件要求与运行时约定亦须满足 [CONTRACT.md](CONTRACT.md) 的接口/HTTP/鉴权规则。
 
-```python
-from detail_hints import pick_hints, resolve_detail_url
+## 自动化与 API（产品说明）
 
-def fetch_article_detail(article_id: str, **hints) -> dict:
-    meta = pick_hints(**hints)
-    url = resolve_detail_url(article_id, **hints) or ...  # 有 hints.url 时禁止再拉整表列表
+需配置 Cursor API Key（`CURSOR_API_KEY` 或 `data/integrations.json`）。SDK 使用 `local.setting_sources=["project"]`，以便发现本 skill。
+
+```text
+agents.create → agent.send(短任务 prompt，须遵循本 skill)
+  → discovery_validate → reload feeds
 ```
 
-- 签名必须包含 `**hints`（或 `**kwargs`）
-- **禁止**在 `fetch_article_detail` 里为查 url/title 而重复请求整页列表 API，或对 sitemap 全量做线性扫描
-- **禁止**仅靠首页/第一页列表做 `nid -> path` 映射；批量拉正文时 backend 会传入列表已入库的 `url`
-- `discovery_validate.py` 会对有 `url` 的列表项用 hints 实测 `fetch_article_detail`；内联 `fetch_list_page` 且未用 hints 会直接报错
-- 大列表 / sitemap：用 `_lib/list_index.py` 的 `ListByIdIndex` 在 `_collect_items` 时建 O(1) 索引
-- 快讯 API（如金十）：在 `_request_list` 时把条目写入 `id -> item` 内存索引，详情优先读索引，必要时再分页查找
+失败且 `auto_repair` 时按报错迭代修平台/站级 skill；`ASKME_AUTH_REQUIRED` 不走自动修复。
 
-backend 通用逻辑：`website_feed.py` · `feed_client.py`
-
-## 后端实现
-
-- `backend/source_onboarding_cursor.py` — Cursor SDK 接入入口
-- `backend/source_platform_onboard.py` — 已知平台脚手架
-- `backend/source_platform_scaffold.py` — 平台探测与模板
-
-安装依赖：
-
-```bash
-cd backend && pip install --only-binary=cursor-sdk "cursor-sdk>=0.1.0"
-```
-
-## 不支持自动接入的场景
-
-- 需 Cookie/复杂签名（知乎）→ 设置页配置 Cookie + 脚手架
-- 强反爬需浏览器渲染 → 需人工介入
+- `POST /api/sources/onboard`（SSE）
+- 日志：`data/onboarding-logs/{job_id}.jsonl`
+- 后端入口：`backend/onboarding/source_onboarding_cursor.py`、`source_platform_onboard.py`、`platform_registry.py`

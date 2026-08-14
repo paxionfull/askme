@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""X (Twitter) 用户时间线发现层适配器（脚手架模板）。
+"""X 脚手架模板（占位符替换）；运行时以 x-platform-discovery 为准。
 
-占位符由 scaffold_x_files 替换：
-  __ASKME_SCREEN_NAME__ / __ASKME_FEED_ID__ / __ASKME_DISPLAY_NAME__
+占位：__ASKME_SCREEN_NAME__ / __ASKME_FEED_ID__ / __ASKME_DISPLAY_NAME__
 """
 
 from __future__ import annotations

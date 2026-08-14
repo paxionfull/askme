@@ -14,6 +14,7 @@ import {
   type FeedGroup,
 } from "../api";
 import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
+import { WEIXIN_SOURCE_ENABLED } from "../utils/featureFlags";
 import { useOnboarding } from "../contexts/OnboardingContext";
 import AuthHandoffPanel from "./AuthHandoffPanel";
 
@@ -150,9 +151,9 @@ export default function AddSourceModal({
     };
   }, [open, tab, parsedUrls]);
 
-  // 微信 Tab：固定预检公众号后台凭证
+  // 微信 Tab：固定预检公众号后台凭证（功能关闭时不跑）
   useEffect(() => {
-    if (!open || tab !== "weixin") return;
+    if (!WEIXIN_SOURCE_ENABLED || !open || tab !== "weixin") return;
     let cancelled = false;
     setPrecheckLoading(true);
     void precheckSourceAuth([WEIXIN_PRECHECK_URL])
@@ -199,6 +200,10 @@ export default function AddSourceModal({
       setLocalError(`单次最多 ${ONBOARD_BATCH_MAX_SIZE} 个链接`);
       return;
     }
+    if (!WEIXIN_SOURCE_ENABLED && urls.some((url) => looksLikeWeixinUrl(url))) {
+      setLocalError("微信公众号接入已暂时关闭，请去掉 mp.weixin.qq.com 相关链接");
+      return;
+    }
     if (busy) {
       setLocalError("已有接入或修复任务在后台运行");
       return;
@@ -222,6 +227,10 @@ export default function AddSourceModal({
   }
 
   async function handleStartWeixin() {
+    if (!WEIXIN_SOURCE_ENABLED) {
+      setLocalError("微信公众号接入已暂时关闭");
+      return;
+    }
     const names = parseWeixinNames(weixinNamesText);
     if (names.length === 0) {
       setLocalError("请填写至少一个公众号名称或文章链接");
@@ -327,7 +336,9 @@ export default function AddSourceModal({
     busy ||
     blockedByAuth ||
     precheckLoading ||
-    (tab === "url" ? parsedUrls.length === 0 : parsedWeixinNames.length === 0);
+    (!WEIXIN_SOURCE_ENABLED || tab === "url"
+      ? parsedUrls.length === 0
+      : parsedWeixinNames.length === 0);
 
   return (
     <div className="ui-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-source-title">
@@ -338,7 +349,7 @@ export default function AddSourceModal({
           </h2>
           <p className="ui-modal-desc">
             {tab === "url"
-              ? `每行一个链接，或用逗号分隔；最多 ${ONBOARD_BATCH_MAX_SIZE} 个。需要登录的站点会引导完成授权。微信公众号可直接粘贴文章链接（mp.weixin.qq.com/s/...），无需搜索。`
+              ? `每行一个链接，或用逗号分隔；最多 ${ONBOARD_BATCH_MAX_SIZE} 个。需要登录的站点会引导完成授权。`
               : `每行一个公众号名称或文章链接，可混输；最多 ${ONBOARD_BATCH_MAX_SIZE} 个。名称会走搜索（有间隔与缓存）；链接直接解析 __biz，不触发 searchbiz。需先登录【公众号】后台（不要选小程序）。`}
           </p>
         </div>
@@ -360,42 +371,44 @@ export default function AddSourceModal({
             </select>
           </label>
 
-          <div className="flex gap-1 border-b border-[var(--line)] pb-0" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "url"}
-              className={`px-3 py-2 text-sm ${
-                tab === "url"
-                  ? "border-b-2 border-[var(--ink)] font-medium text-[var(--ink)]"
-                  : "text-[var(--ink-muted)]"
-              }`}
-              onClick={() => {
-                setTab("url");
-                setLocalError("");
-              }}
-            >
-              链接
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "weixin"}
-              className={`px-3 py-2 text-sm ${
-                tab === "weixin"
-                  ? "border-b-2 border-[var(--ink)] font-medium text-[var(--ink)]"
-                  : "text-[var(--ink-muted)]"
-              }`}
-              onClick={() => {
-                setTab("weixin");
-                setLocalError("");
-              }}
-            >
-              微信公众号
-            </button>
-          </div>
+          {WEIXIN_SOURCE_ENABLED ? (
+            <div className="flex gap-1 border-b border-[var(--line)] pb-0" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "url"}
+                className={`px-3 py-2 text-sm ${
+                  tab === "url"
+                    ? "border-b-2 border-[var(--ink)] font-medium text-[var(--ink)]"
+                    : "text-[var(--ink-muted)]"
+                }`}
+                onClick={() => {
+                  setTab("url");
+                  setLocalError("");
+                }}
+              >
+                链接
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "weixin"}
+                className={`px-3 py-2 text-sm ${
+                  tab === "weixin"
+                    ? "border-b-2 border-[var(--ink)] font-medium text-[var(--ink)]"
+                    : "text-[var(--ink-muted)]"
+                }`}
+                onClick={() => {
+                  setTab("weixin");
+                  setLocalError("");
+                }}
+              >
+                微信公众号
+              </button>
+            </div>
+          ) : null}
 
-          {tab === "url" ? (
+          {tab === "url" || !WEIXIN_SOURCE_ENABLED ? (
             <>
               <label className="ui-field">
                 <span className="ui-field-label">网站链接</span>
@@ -405,7 +418,7 @@ export default function AddSourceModal({
                   rows={5}
                   className="ui-textarea w-full"
                   placeholder={
-                    "https://www.xiaohongshu.com/user/profile/...\nhttps://www.zhihu.com/people/example\nhttps://www.reddit.com/r/indiehackers\nhttps://x.com/elonmusk\nhttps://mp.weixin.qq.com/s/..."
+                    "https://www.xiaohongshu.com/user/profile/...\nhttps://www.zhihu.com/people/example\nhttps://www.reddit.com/r/indiehackers\nhttps://x.com/elonmusk"
                   }
                 />
               </label>
@@ -490,7 +503,13 @@ export default function AddSourceModal({
           <button
             type="button"
             disabled={primaryDisabled}
-            onClick={() => void (tab === "url" ? handleStartUrl() : handleStartWeixin())}
+            onClick={() =>
+              void (
+                WEIXIN_SOURCE_ENABLED && tab === "weixin"
+                  ? handleStartWeixin()
+                  : handleStartUrl()
+              )
+            }
             className="ui-btn ui-btn-primary"
           >
             {blockedByAuth

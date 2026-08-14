@@ -1,0 +1,2037 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Askme · 简报页原型（可切换）</title>
+  <style>
+    :root {
+      --paper: #f7f3ec;
+      --paper-raised: #fffcf7;
+      --ink: #1c1917;
+      --ink-muted: #78716c;
+      --rule: #e7e0d5;
+      --accent: #b45309;
+      --accent-soft: #fff7ed;
+      --success: #3f6212;
+      --success-soft: #f7fee7;
+      --warning-soft: #fffbeb;
+      --error-soft: #fef2f2;
+      --radius: 0.5rem;
+      --font: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: #d6d0c6;
+      color: var(--ink);
+      min-height: 100vh;
+    }
+    .stage {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 0;
+      min-height: 100vh;
+    }
+
+    /* —— 左侧：原型控制台 —— */
+    .controls {
+      background: #1c1917;
+      color: #e7e0d5;
+      padding: 1.25rem 1rem 2rem;
+      overflow-y: auto;
+      font-size: 13px;
+    }
+    .controls h1 {
+      margin: 0 0 0.35rem;
+      font-size: 15px;
+      font-weight: 600;
+      color: #fffcf7;
+    }
+    .controls .sub {
+      color: #a8a29e;
+      margin-bottom: 1.25rem;
+      line-height: 1.45;
+    }
+    .ctrl-group {
+      margin-bottom: 1.1rem;
+      padding-bottom: 1.1rem;
+      border-bottom: 1px solid #44403c;
+    }
+    .ctrl-group:last-child { border-bottom: 0; }
+    .ctrl-group label.title {
+      display: block;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #a8a29e;
+      margin-bottom: 0.55rem;
+    }
+    .ctrl-group button,
+    .ctrl-group .opt {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 1px solid #44403c;
+      background: #292524;
+      color: #e7e0d5;
+      border-radius: 6px;
+      padding: 0.55rem 0.7rem;
+      margin-bottom: 0.35rem;
+      cursor: pointer;
+      font: inherit;
+      line-height: 1.35;
+    }
+    .ctrl-group button:hover,
+    .ctrl-group .opt:hover { border-color: #78716c; }
+    .ctrl-group button.active,
+    .ctrl-group .opt.active {
+      background: #b45309;
+      border-color: #b45309;
+      color: #fff;
+    }
+    .opt small { display: block; color: #a8a29e; margin-top: 0.2rem; font-size: 11px; }
+    .opt.active small { color: rgba(255,255,255,0.75); }
+    .hint {
+      background: #292524;
+      border-radius: 6px;
+      padding: 0.65rem 0.75rem;
+      color: #a8a29e;
+      line-height: 1.45;
+      font-size: 12px;
+    }
+
+    /* —— 右侧：App 预览框 —— */
+    .preview-wrap {
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    .preview-label {
+      font-size: 12px;
+      color: #57534e;
+      margin-bottom: 0.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .preview-label code {
+      background: #fff;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    .app {
+      flex: 1;
+      display: flex;
+      background: var(--paper);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(28, 25, 23, 0.18);
+      min-height: 0;
+      height: calc(100vh - 3rem);
+    }
+
+    /* 左导航 */
+    .nav {
+      width: 4.5rem;
+      background: var(--paper-raised);
+      border-right: 1px solid var(--rule);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .nav .brand {
+      text-align: center;
+      padding: 1rem 0.4rem;
+      border-bottom: 1px solid var(--rule);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .nav button {
+      margin: 0.25rem;
+      border: 0;
+      background: transparent;
+      border-radius: 6px;
+      padding: 0.65rem 0.25rem;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--ink-muted);
+      cursor: pointer;
+      position: relative;
+    }
+    .nav button:hover { background: var(--paper); color: var(--ink); }
+    .nav button.active {
+      background: var(--paper);
+      color: var(--ink);
+      font-weight: 600;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .nav button .dot {
+      position: absolute;
+      top: 0.4rem;
+      right: 0.4rem;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: none;
+    }
+    .nav button.has-job .dot { display: block; }
+
+    .main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--paper);
+    }
+
+    /* 顶栏进度 */
+    .job-banner {
+      display: none;
+      padding: 0.55rem 1rem;
+      font-size: 13px;
+      border-bottom: 1px solid var(--rule);
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .job-banner.show { display: flex; }
+    .job-banner.progress { background: var(--accent-soft); color: var(--accent); }
+    .job-banner.success { background: var(--success-soft); color: var(--success); }
+    .job-banner.error { background: var(--error-soft); color: #991b1b; }
+    .job-banner .bar {
+      flex: 1;
+      height: 4px;
+      background: color-mix(in srgb, currentColor 18%, transparent);
+      border-radius: 2px;
+      overflow: hidden;
+      max-width: 180px;
+    }
+    .job-banner .bar > i {
+      display: block;
+      height: 100%;
+      width: 62%;
+      background: currentColor;
+      border-radius: 2px;
+    }
+    .job-banner.progress.indeterminate .bar > i {
+      width: 40%;
+      animation: slide 1.2s ease-in-out infinite;
+    }
+    @keyframes slide {
+      0% { transform: translateX(-20%); }
+      100% { transform: translateX(180%); }
+    }
+    .job-banner .actions { margin-left: auto; display: flex; gap: 0.4rem; }
+    .job-banner button {
+      border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+      background: var(--paper-raised);
+      border-radius: 4px;
+      padding: 0.2rem 0.55rem;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      color: inherit;
+    }
+
+    /* 简报页 */
+    .page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .page-header {
+      padding: 1.1rem 1.5rem 1rem;
+      border-bottom: 1px solid var(--rule);
+      background: var(--paper-raised);
+    }
+    .page-header-top {
+      margin-bottom: 0.85rem;
+    }
+    .today-date {
+      margin: 0;
+      font-size: 1.45rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+    .today-date .weekday {
+      font-weight: 500;
+      color: var(--ink-muted);
+      font-size: 0.95rem;
+      margin-left: 0.35rem;
+    }
+    .today-date .label {
+      display: block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.2rem;
+    }
+    .today-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem 0.65rem;
+      padding: 0.65rem 0.85rem;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      background: var(--paper);
+    }
+    .gen-btn-ready {
+      min-width: 5.5rem;
+    }
+    .gen-btn-ready[data-ready="1"]::before {
+      content: "已生成";
+    }
+    .gen-btn-ready[data-ready="1"]:hover::before,
+    .gen-btn-ready[data-ready="1"]:focus-visible::before {
+      content: "重新生成";
+    }
+    .today-toolbar.onboarding {
+      justify-content: space-between;
+    }
+    .toolbar-field {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.85rem;
+    }
+    .toolbar-field .field-k {
+      color: var(--ink-muted);
+      font-size: 0.75rem;
+      white-space: nowrap;
+    }
+    .toolbar-field select {
+      border: 1px solid var(--rule);
+      background: var(--paper-raised);
+      border-radius: var(--radius);
+      padding: 0.35rem 0.55rem;
+      font: inherit;
+      font-size: 0.85rem;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .toolbar-field select:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .toolbar-sep {
+      color: var(--rule);
+      user-select: none;
+    }
+    .toolbar-status {
+      font-size: 0.85rem;
+      color: var(--ink-muted);
+      white-space: nowrap;
+    }
+    .toolbar-status.ok { color: var(--success); }
+    .toolbar-status.warn { color: var(--accent); }
+    .toolbar-actions {
+      display: flex;
+      gap: 0.4rem;
+      margin-left: auto;
+    }
+    .toolbar-sub {
+      width: 100%;
+      margin: 0.5rem 0 0;
+      font-size: 0.82rem;
+      color: var(--ink-muted);
+      line-height: 1.4;
+    }
+    .chip, .btn {
+      border: 1px solid var(--rule);
+      background: var(--paper-raised);
+      border-radius: var(--radius);
+      padding: 0.4rem 0.7rem;
+      font: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+      color: var(--ink);
+    }
+    .btn-primary {
+      background: var(--ink);
+      color: var(--paper-raised);
+      border-color: var(--ink);
+    }
+    .btn-ghost {
+      background: transparent;
+      color: var(--ink-muted);
+    }
+
+    .page-hint {
+      display: none;
+      padding: 0.45rem 1.5rem;
+      font-size: 0.85rem;
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent-soft) 70%, var(--paper));
+      border-bottom: 1px solid var(--rule);
+    }
+    .page-hint.show { display: block; }
+
+    .today-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      --ask-pct: 32%;
+    }
+    .today-body.is-resizing {
+      cursor: col-resize;
+      user-select: none;
+    }
+    .today-body.is-resizing * {
+      cursor: col-resize !important;
+      user-select: none !important;
+    }
+    .overview {
+      flex: 1;
+      min-width: 0;
+      overflow-y: auto;
+      padding: 0 0 3rem;
+    }
+    .ask-split {
+      flex: 0 0 6px;
+      width: 6px;
+      margin: 0 -1px;
+      position: relative;
+      z-index: 2;
+      cursor: col-resize;
+      background: transparent;
+      touch-action: none;
+    }
+    .ask-split::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 2px;
+      width: 1px;
+      background: var(--rule);
+      transition: background 0.15s ease, width 0.15s ease, left 0.15s ease;
+    }
+    .ask-split:hover::before,
+    .ask-split:focus-visible::before,
+    .today-body.is-resizing .ask-split::before {
+      left: 1px;
+      width: 3px;
+      background: var(--accent);
+    }
+    .ask-split:focus-visible {
+      outline: none;
+    }
+    .ask-ratio-badge {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 3;
+      padding: 0.25rem 0.5rem;
+      border-radius: 999px;
+      background: #1c1917;
+      color: #f5f5f4;
+      font-size: 11px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s ease;
+    }
+    .today-body.is-resizing .ask-ratio-badge {
+      opacity: 1;
+    }
+    .app[data-ask="collapsed"] .ask-split {
+      display: none;
+    }
+    .overview article {
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 1.15rem clamp(1.25rem, 3vw, 2.75rem) 0;
+    }
+    .overview .empty {
+      max-width: 32rem;
+      margin: 3rem auto;
+      text-align: center;
+      padding: 0 clamp(1.25rem, 3vw, 2.75rem);
+    }
+    .overview .empty h3 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+    .overview .empty p { color: var(--ink-muted); margin: 0 0 1.25rem; line-height: 1.55; }
+
+    /* 简报目录：置顶文字轨，不用碎标签 */
+    .overview-toc {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: color-mix(in srgb, var(--paper) 88%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--rule);
+    }
+    .overview-toc-inner {
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 0.55rem clamp(1rem, 2.5vw, 2.5rem) 0;
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .overview-toc-inner::-webkit-scrollbar { display: none; }
+    .overview-toc a {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0.3rem;
+      padding: 0.45rem 0.75rem 0.55rem;
+      margin: 0;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--ink-muted);
+      font: inherit;
+      font-size: 0.82rem;
+      letter-spacing: 0.01em;
+      text-decoration: none !important;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: color 0.12s ease, border-color 0.12s ease;
+    }
+    .overview-toc a:hover {
+      color: var(--ink);
+    }
+    .overview-toc a[data-kind="focus"] {
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .overview-toc a.is-active {
+      color: var(--ink);
+      border-bottom-color: var(--ink);
+    }
+    .overview-toc a[data-kind="focus"].is-active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .overview-toc a .n {
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: color-mix(in srgb, var(--ink-muted) 75%, transparent);
+      font-variant-numeric: tabular-nums;
+    }
+    .overview-toc a.is-active .n,
+    .overview-toc a:hover .n {
+      color: inherit;
+      opacity: 0.6;
+    }
+
+    .guide-steps {
+      text-align: left;
+      margin: 1.5rem auto 0;
+      max-width: 22rem;
+      padding: 0;
+      list-style: none;
+      counter-reset: guide;
+    }
+    .guide-steps li {
+      counter-increment: guide;
+      position: relative;
+      padding: 0.65rem 0 0.65rem 2rem;
+      border-bottom: 1px solid var(--rule);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+    .guide-steps li:last-child { border-bottom: 0; }
+    .guide-steps li::before {
+      content: counter(guide);
+      position: absolute;
+      left: 0;
+      top: 0.65rem;
+      width: 1.35rem;
+      height: 1.35rem;
+      border-radius: 50%;
+      background: var(--paper-raised);
+      border: 1px solid var(--rule);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--ink-muted);
+    }
+    .guide-steps li strong { display: block; color: var(--ink); font-weight: 600; }
+    .guide-steps li span { color: var(--ink-muted); font-size: 0.82rem; }
+    .overview h3.sec {
+      margin: 1.75rem 0 0.65rem;
+      font-size: 1.05rem;
+      cursor: pointer;
+      border-radius: 4px;
+      padding: 0.35rem 0.25rem;
+      margin-left: -0.25rem;
+      scroll-margin-top: 0;
+    }
+    .overview h3.sec:hover { background: var(--accent-soft); color: var(--accent); }
+    .overview h3.sec:first-of-type { margin-top: 0.35rem; }
+    .overview h3.sec.focus {
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent-soft) 65%, transparent);
+      padding: 0.45rem 0.55rem;
+      margin-left: -0.55rem;
+      margin-right: -0.55rem;
+    }
+    .overview ul { margin: 0; padding-left: 1.1rem; }
+    .overview article ul ul {
+      margin: 0.35rem 0 0.55rem;
+      padding-left: 1rem;
+    }
+    .overview article li {
+      margin-bottom: 0.55rem;
+      line-height: 1.55;
+      font-size: 0.95rem;
+    }
+    .overview article a {
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      cursor: grab;
+    }
+    .overview .lead {
+      color: var(--ink-muted);
+      font-size: 0.95rem;
+      margin: 0 0 1.25rem;
+      line-height: 1.5;
+    }
+
+    /* 提问侧栏 */
+    .ask {
+      width: var(--ask-pct);
+      min-width: 240px;
+      max-width: 55%;
+      flex-shrink: 0;
+      border-left: 1px solid var(--rule);
+      background: var(--paper-raised);
+      display: flex;
+      flex-direction: column;
+      transition: width 0.2s ease, opacity 0.2s ease, min-width 0.2s ease, max-width 0.2s ease;
+    }
+    .today-body.is-resizing .ask {
+      transition: none;
+    }
+    .app[data-ask="collapsed"] .ask {
+      width: 48px;
+      min-width: 48px;
+      max-width: 48px;
+    }
+    .app[data-ask="collapsed"] .ask .ask-full { display: none; }
+    .app[data-ask="collapsed"] .ask .ask-rail {
+      display: flex;
+      flex: 1;
+      writing-mode: vertical-rl;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      color: var(--ink-muted);
+      font-size: 12px;
+      cursor: pointer;
+      letter-spacing: 0.12em;
+    }
+    .ask-rail { display: none; }
+    .ask-head {
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--rule);
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .ask-head span {
+      display: block;
+      font-weight: 400;
+      font-size: 0.75rem;
+      color: var(--ink-muted);
+      margin-top: 0.2rem;
+    }
+    .ask-msgs {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      color: var(--ink-muted);
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+    .ask-msgs .bubble {
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      margin-bottom: 0.6rem;
+      color: var(--ink);
+    }
+    .ask-msgs .bubble.user { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, var(--rule)); }
+    .ask-input {
+      padding: 0.75rem;
+      border-top: 1px solid var(--rule);
+    }
+    .ask-input textarea {
+      width: 100%;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      padding: 0.55rem 0.7rem;
+      font: inherit;
+      font-size: 0.85rem;
+      resize: none;
+      min-height: 2.6rem;
+      background: var(--paper);
+    }
+    .ask-input .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 0.4rem;
+      font-size: 11px;
+      color: var(--ink-muted);
+    }
+
+    /* 源页 */
+    .sources {
+      display: none;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+    }
+    .app[data-page="sources"] .today { display: none; }
+    .app[data-page="sources"] .sources { display: flex; }
+    .app[data-page="settings"] .today,
+    .app[data-page="settings"] .sources { display: none; }
+    .settings-stub {
+      display: none;
+      flex: 1;
+      align-items: center;
+      justify-content: center;
+      color: var(--ink-muted);
+    }
+    .app[data-page="settings"] .settings-stub { display: flex; }
+
+    .prep {
+      display: none;
+    }
+    .sources-toolbar-wrap .today-toolbar {
+      margin-top: 0;
+    }
+    .sources-toolbar-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem 0.55rem;
+      min-width: 0;
+    }
+    .sources-toolbar-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+      margin-top: 0.65rem;
+    }
+    .btn-tip {
+      position: relative;
+    }
+    .btn-tip::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 0;
+      bottom: calc(100% + 0.45rem);
+      z-index: 20;
+      width: max-content;
+      max-width: 16.5rem;
+      padding: 0.55rem 0.7rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--rule);
+      background: #1c1917;
+      color: #f5f5f4;
+      font-size: 0.75rem;
+      font-weight: 400;
+      line-height: 1.45;
+      white-space: pre-line;
+      text-align: left;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(4px);
+      transition: opacity 0.12s ease, transform 0.12s ease;
+      box-shadow: 0 8px 24px rgba(28, 25, 23, 0.18);
+    }
+    .btn-tip:hover::after,
+    .btn-tip:focus-visible::after {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .sources-empty-main {
+      flex: 1;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      text-align: center;
+    }
+    .sources-empty-main.show { display: flex; }
+    .sources-empty-main h3 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+    .sources-empty-main p { margin: 0 0 1rem; color: var(--ink-muted); line-height: 1.55; max-width: 22rem; }
+    .sources-main.hidden { display: none; }
+    .sources-main {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+    .feed-side {
+      width: 18rem;
+      flex-shrink: 0;
+      border-right: 1px solid var(--rule);
+      background: var(--paper-raised);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .feed-side-head {
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--rule);
+      padding: 0.75rem;
+    }
+    .feed-side-head-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .feed-side-title {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      min-width: 0;
+    }
+    .feed-side-title h2 {
+      margin: 0;
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+    .feed-add-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.5rem;
+      height: 1.5rem;
+      padding: 0;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      background: var(--paper);
+      color: var(--ink);
+      font-size: 1rem;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .feed-add-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .feed-side-head .sub {
+      margin-top: 0.15rem;
+      font-size: 11px;
+      color: var(--ink-muted);
+    }
+    .feed-side-search {
+      margin-top: 0.65rem;
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+    }
+    .feed-side-search input {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      padding: 0.4rem 0.55rem;
+      font: inherit;
+      font-size: 12px;
+      background: var(--paper);
+    }
+    .feed-side-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem;
+    }
+    .feed-side-hint {
+      margin: 0 0.5rem 0.5rem;
+      font-size: 10px;
+      color: var(--ink-muted);
+    }
+    .feed-group {
+      border-radius: var(--radius);
+      margin-bottom: 0.15rem;
+    }
+    .feed-group-head {
+      display: flex;
+      align-items: center;
+      gap: 0.15rem;
+      padding: 0.15rem 0.25rem;
+      border-radius: var(--radius);
+    }
+    .feed-group-head:hover { background: color-mix(in srgb, var(--paper) 70%, transparent); }
+    .feed-group-head.expanded { background: color-mix(in srgb, var(--paper) 70%, transparent); }
+    .feed-group-toggle {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      border: 0;
+      background: transparent;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      text-align: left;
+      padding: 0.35rem 0.25rem;
+      cursor: pointer;
+      color: var(--ink);
+    }
+    .feed-group-toggle .chev {
+      font-size: 10px;
+      color: var(--ink-muted);
+      width: 0.75rem;
+      flex-shrink: 0;
+    }
+    .feed-group-toggle.expanded .chev { color: var(--accent); }
+    .feed-group-count {
+      font-size: 11px;
+      color: var(--ink-muted);
+      font-variant-numeric: tabular-nums;
+      width: 1.25rem;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .feed-group-menu {
+      border: 0;
+      background: transparent;
+      color: var(--ink-muted);
+      padding: 0.2rem 0.35rem;
+      cursor: pointer;
+      font-size: 12px;
+      opacity: 0;
+    }
+    .feed-group-head:hover .feed-group-menu,
+    .feed-group-head.expanded .feed-group-menu { opacity: 1; }
+    .feed-group-list {
+      list-style: none;
+      margin: 0 0 0.35rem 0.75rem;
+      padding: 0 0 0 0.5rem;
+      border-left: 1px solid var(--rule);
+    }
+    .feed-group-list li { margin-bottom: 0.15rem; }
+    .feed-row {
+      display: block;
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      border-radius: 6px;
+      padding: 0.4rem 0.55rem;
+      cursor: pointer;
+      font: inherit;
+    }
+    .feed-row:hover { background: var(--paper); }
+    .feed-row.on {
+      background: var(--accent-soft);
+      font-weight: 500;
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+    .feed-row .name {
+      display: block;
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .feed-row .sync {
+      display: block;
+      margin-top: 0.1rem;
+      font-size: 11px;
+      color: var(--ink-muted);
+    }
+    .feed-empty {
+      padding: 1.5rem 0.75rem;
+      font-size: 13px;
+      color: var(--ink-muted);
+    }
+    .feed-list {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .feed-list-head {
+      flex-shrink: 0;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--rule);
+      background: var(--paper-raised);
+    }
+    .feed-list-head h3 {
+      margin: 0;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    .feed-list-head p {
+      margin: 0.2rem 0 0;
+      font-size: 12px;
+      color: var(--ink-muted);
+    }
+    .feed-list-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem 1rem;
+    }
+    .feed-list .item {
+      padding: 0.65rem 0;
+      border-bottom: 1px solid var(--rule);
+      font-size: 0.9rem;
+    }
+    .feed-list .item small { color: var(--ink-muted); }
+    .menu-pop {
+      position: relative;
+      display: inline-block;
+    }
+    .menu-pop-panel {
+      display: none;
+      position: absolute;
+      right: 0;
+      top: 100%;
+      margin-top: 0.25rem;
+      min-width: 9rem;
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      background: var(--paper-raised);
+      box-shadow: 0 8px 24px rgba(28, 25, 23, 0.12);
+      z-index: 20;
+      padding: 0.25rem 0;
+    }
+    .menu-pop.open .menu-pop-panel { display: block; }
+    .menu-pop-panel button {
+      display: block;
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      padding: 0.45rem 0.75rem;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .menu-pop-panel button:hover { background: var(--paper); }
+
+    .proto-badge {
+      position: absolute;
+      bottom: 1.25rem;
+      right: 1.5rem;
+      background: #1c1917;
+      color: #fffcf7;
+      font-size: 11px;
+      padding: 0.35rem 0.6rem;
+      border-radius: 999px;
+      opacity: 0.7;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .preview-frame { position: relative; flex: 1; min-height: 0; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <aside class="controls">
+      <h1>Askme UI 原型</h1>
+      <p class="sub">假数据、可切换。用来拍板「简报」主次与进度形态，不接后端。已有简报态含<strong>置顶目录轨</strong>草案。</p>
+
+      <div class="ctrl-group">
+        <label class="title">当前页面</label>
+        <button type="button" class="active" data-set="page" data-value="today">简报（首页）</button>
+        <button type="button" data-set="page" data-value="sources">源（原「库」）</button>
+        <button type="button" data-set="page" data-value="settings">设置</button>
+      </div>
+
+      <div class="ctrl-group">
+        <label class="title">简报状态</label>
+        <button type="button" class="active" data-set="overview" data-value="ready">已有简报（阅读态）</button>
+        <button type="button" data-set="overview" data-value="empty">有源 · 尚未生成简报</button>
+        <button type="button" data-set="overview" data-value="onboarding">新用户 · 还没有源</button>
+      </div>
+
+      <div class="ctrl-group">
+        <label class="title">提问区</label>
+        <button type="button" class="opt active" data-set="ask" data-value="open">
+          右侧窄栏常驻
+          <small>提问为辅，但不藏起来</small>
+        </button>
+        <button type="button" class="opt" data-set="ask" data-value="collapsed">
+          默认收起竖条
+          <small>点章节后再展开（点左侧标题试）</small>
+        </button>
+      </div>
+
+      <div class="ctrl-group">
+        <label class="title">长任务进度</label>
+        <button type="button" class="opt active" data-set="job" data-value="none">
+          无任务
+        </button>
+        <button type="button" class="opt" data-set="job" data-value="banner">
+          A · 仅顶栏 Banner
+          <small>进行中：更新源信息 3/7</small>
+        </button>
+        <button type="button" class="opt" data-set="job" data-value="combo">
+          C · 顶栏 + 简报页一行弱提示
+          <small>推荐对比项</small>
+        </button>
+        <button type="button" class="opt" data-set="job" data-value="summarize">
+          生成简报中（不定进度）
+        </button>
+        <button type="button" class="opt" data-set="job" data-value="done">
+          刚完成（成功可关闭）
+        </button>
+        <button type="button" class="opt" data-set="job" data-value="fail">
+          失败（带下一步）
+        </button>
+      </div>
+
+      <div class="ctrl-group">
+        <label class="title">源页状态</label>
+        <button type="button" data-set="sourcesPhase" data-value="empty">无源（新用户）</button>
+        <button type="button" class="active" data-set="sourcesPhase" data-value="ready">已有源</button>
+      </div>
+
+      <div class="hint">
+        简报页：拖动中间分隔条可调节「简报 : 提问」宽度比（默认约 68:32，双击还原）；源页已去掉检查/正文/索引流水线。
+      </div>
+    </aside>
+
+    <div class="preview-wrap">
+      <div class="preview-label">
+        <span>应用预览</span>
+        <code id="stateLabel">简报 · 阅读 · 提问常驻 · 无任务</code>
+      </div>
+      <div class="preview-frame">
+        <div class="app" id="app" data-page="today" data-ask="open" data-overview="ready" data-job="none">
+          <aside class="nav">
+            <div class="brand">Askme</div>
+            <button type="button" class="active" data-nav="today">简报<span class="dot"></span></button>
+            <button type="button" data-nav="sources">源<span class="dot"></span></button>
+            <button type="button" data-nav="settings">设置<span class="dot"></span></button>
+          </aside>
+
+          <div class="main">
+            <div class="job-banner" id="jobBanner">
+              <strong id="jobTitle">更新源信息</strong>
+              <span id="jobMsg">正在刷新文章列表… 3 / 7</span>
+              <div class="bar" id="jobBar"><i></i></div>
+              <div class="actions" id="jobActions"></div>
+            </div>
+
+            <!-- 简报 -->
+            <div class="page today" id="todayPage">
+              <header class="page-header">
+                <div class="page-header-top">
+                  <p class="today-date">
+                    <span class="label">简报</span>
+                    <span id="todayDateText">7 月 29 日</span>
+                    <span class="weekday" id="todayWeekday">· 星期三</span>
+                  </p>
+                </div>
+                <div id="todayToolbarWrap">
+                  <div class="today-toolbar" id="todayToolbarConfigured">
+                    <label class="toolbar-field">
+                      <span class="field-k">板块</span>
+                      <select id="groupSelect" aria-label="板块">
+                        <option>AI 技术</option>
+                        <option>财经快讯</option>
+                      </select>
+                    </label>
+                    <label class="toolbar-field">
+                      <span class="field-k">范围</span>
+                      <select id="rangeSelect" aria-label="范围">
+                        <option value="3">近 3 天</option>
+                        <option value="1">今天</option>
+                      </select>
+                    </label>
+                    <button type="button" class="btn btn-ghost gen-btn-ready" id="genBtn" data-ready="1" aria-label="重新生成"></button>
+                    <span class="toolbar-sep">·</span>
+                    <span class="toolbar-status" id="toolbarStatus">14 个要点</span>
+                  </div>
+                  <p class="toolbar-sub" id="toolbarSub">覆盖 7/27–7/29 · 生成于今天 14:32</p>
+                  <div class="today-toolbar onboarding" id="todayToolbarOnboarding" style="display:none">
+                    <span class="toolbar-status warn">还没有数据源</span>
+                    <div class="toolbar-actions">
+                      <button type="button" class="btn btn-primary" data-nav="sources">去添加源</button>
+                      <button type="button" class="btn btn-ghost" data-nav="settings">配置模型</button>
+                    </div>
+                  </div>
+                  <p class="toolbar-sub" id="toolbarSubOnboarding" style="display:none">
+                    添加源并配置模型后，即可生成按板块分类的简报。
+                  </p>
+                </div>
+              </header>
+              <div class="page-hint" id="pageHint">正在更新源信息，完成后可重新生成简报。</div>
+
+              <div class="today-body" id="todayBody">
+                <section class="overview" id="overviewReady">
+                  <nav class="overview-toc" id="overviewToc" aria-label="简报目录">
+                    <div class="overview-toc-inner">
+                      <a href="#sec-focus" data-kind="focus" class="is-active">重点关注<span class="n">2</span></a>
+                      <a href="#sec-model">模型发布<span class="n">2</span></a>
+                      <a href="#sec-oss">开源与生态<span class="n">2</span></a>
+                      <a href="#sec-biz">产业与资本<span class="n">2</span></a>
+                      <a href="#sec-gov">安全与治理<span class="n">1</span></a>
+                      <a href="#sec-other">其他<span class="n">0</span></a>
+                    </div>
+                  </nav>
+                  <article>
+                    <p class="lead">点章节标题可聚焦提问；拖入章节或文章到右侧将直接生成摘要。拖动中间分隔条可调节简报与提问宽度。</p>
+
+                    <h3 class="sec focus" id="sec-focus" data-topic="重点关注">重点关注</h3>
+                    <ul>
+                      <li><strong>新一代长上下文模型上线</strong>（2 篇）
+                        <ul>
+                          <li>OpenAI 发布新模型更新，强调长上下文与工具调用稳定性。 <a href="#">原文</a></li>
+                          <li>评测指出工具调用在复杂任务上仍有波动。 <a href="#">原文</a></li>
+                        </ul>
+                      </li>
+                    </ul>
+
+                    <h3 class="sec" id="sec-model" data-topic="模型发布">模型发布</h3>
+                    <ul>
+                      <li>OpenAI 发布新模型更新，强调长上下文与工具调用稳定性。 <a href="#">原文</a></li>
+                      <li>Anthropic 研究博客讨论可解释性新方法。 <a href="#">原文</a></li>
+                    </ul>
+
+                    <h3 class="sec" id="sec-oss" data-topic="开源与生态">开源与生态</h3>
+                    <ul>
+                      <li>国内团队开源推理框架更新，吞吐提升显著。 <a href="#">原文</a></li>
+                      <li>多篇评测对比主流开源权重在中文任务上的表现。 <a href="#">原文</a></li>
+                    </ul>
+
+                    <h3 class="sec" id="sec-biz" data-topic="产业与资本">产业与资本</h3>
+                    <ul>
+                      <li>云厂商下调推理单价，企业侧采购节奏加快。 <a href="#">原文</a></li>
+                      <li>两家应用层公司披露 ARR 与留存数据。 <a href="#">原文</a></li>
+                    </ul>
+
+                    <h3 class="sec" id="sec-gov" data-topic="安全与治理">安全与治理</h3>
+                    <ul>
+                      <li>欧盟 AI 合规指引补充条款引发业界讨论。 <a href="#">原文</a></li>
+                    </ul>
+
+                    <h3 class="sec" id="sec-other" data-topic="其他">其他</h3>
+                    <ul>
+                      <li style="color:var(--ink-muted);font-size:0.85rem;list-style:none;margin-left:-1.1rem">暂无</li>
+                    </ul>
+                  </article>
+                </section>
+
+                <section class="overview" id="overviewEmpty" style="display:none">
+                  <div class="empty" id="emptyHasSources">
+                    <h3>还没有这份简报</h3>
+                    <p>在上方选择板块与时间范围，点击「生成简报」即可开始阅读。</p>
+                  </div>
+                  <div class="empty" id="emptyOnboarding" style="display:none">
+                    <h3>从这里开始</h3>
+                    <p>Askme 会把订阅源整理成可读的分类简报。先完成下面三步。</p>
+                    <ol class="guide-steps">
+                      <li>
+                        <strong>添加数据源</strong>
+                        <span>在「源」页接入网站或公众号</span>
+                      </li>
+                      <li>
+                        <strong>更新源信息</strong>
+                        <span>刷新文章列表；进度在顶部可见</span>
+                      </li>
+                      <li>
+                        <strong>生成简报</strong>
+                        <span>回到简报页，按板块浏览要点</span>
+                      </li>
+                    </ol>
+                    <div style="margin-top:1.25rem;display:flex;gap:0.5rem;justify-content:center;flex-wrap:wrap">
+                      <button type="button" class="btn btn-primary" data-nav="sources">去添加源</button>
+                      <button type="button" class="btn btn-ghost" data-nav="settings">配置模型</button>
+                    </div>
+                  </div>
+                </section>
+
+                <div
+                  class="ask-split"
+                  id="askSplit"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="调节简报与提问区宽度"
+                  aria-valuemin="22"
+                  aria-valuemax="55"
+                  aria-valuenow="32"
+                  tabindex="0"
+                >
+                  <span class="ask-ratio-badge" id="askRatioBadge">简报 68% · 提问 32%</span>
+                </div>
+
+                <aside class="ask" id="askPanel">
+                  <div class="ask-rail" id="askRail">提问 · 拖入生成摘要</div>
+                  <div class="ask-full" style="display:flex;flex-direction:column;height:100%">
+                    <div class="ask-head">
+                      提问
+                      <span id="askHint">可选 · 拖入章节/文章后直接生成摘要</span>
+                    </div>
+                    <div class="ask-msgs" id="askMsgs">
+                      <p>拖入左侧章节或文章链接，将直接发送并生成摘要；也可输入问题后 Enter 发送。</p>
+                    </div>
+                    <div class="ask-input">
+                      <textarea id="askInput" placeholder="拖入左侧内容生成摘要，或输入问题…" rows="2"></textarea>
+                      <div class="row">
+                        <span id="askInputHint">拖入即发送 · Enter 生成摘要或发送问题</span>
+                        <button type="button" class="btn btn-primary" style="padding:0.3rem 0.65rem;font-size:12px">发送</button>
+                      </div>
+                    </div>
+                  </div>
+                </aside>
+              </div>
+            </div>
+
+            <!-- 源 -->
+            <div class="sources" id="sourcesPage">
+              <header class="page-header">
+                <div class="page-header-top">
+                  <p class="today-date" style="font-size:1.35rem">源</p>
+                </div>
+                <div class="sources-toolbar-wrap" id="sourcesToolbarWrap">
+                  <div class="sources-toolbar-meta" id="sourcesPrepBar">
+                    <label class="toolbar-field" id="sourcesRangeField">
+                      <span class="field-k">范围</span>
+                      <select id="sourcesRangeSelect" aria-label="时间范围">
+                        <option value="3">近 3 天</option>
+                        <option value="1">今天</option>
+                      </select>
+                    </label>
+                    <span class="toolbar-sep" id="sourcesStatusSep">·</span>
+                    <span class="toolbar-status" id="sourcesReadiness">7 个源 · 上次更新 2 小时前</span>
+                  </div>
+                  <div class="sources-toolbar-actions" id="sourcesToolbarActions">
+                    <button
+                      type="button"
+                      class="btn btn-primary btn-tip"
+                      id="sourcesUpdateBtn"
+                      data-tip="刷新各源在选定范围内的文章列表。&#10;生成简报、做摘要只需更新列表，不需要建立索引。"
+                    >更新源信息</button>
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-tip"
+                      id="sourcesIndexBtn"
+                      data-tip="为已有正文建立检索索引，仅自由提问时需要。&#10;生成简报或对选定文章做摘要不需要索引，可跳过以节省 token。"
+                    >建立索引</button>
+                  </div>
+                  <p class="toolbar-sub" id="sourcesNextHint">更新源信息后即可生成简报；建立索引仅在提问时需要。</p>
+                </div>
+              </header>
+              <div class="sources-empty-main" id="sourcesEmptyMain">
+                <div>
+                  <h3>先添加数据源</h3>
+                  <p>接入网站或公众号后，更新源信息即可在简报页生成按板块分类的简报。</p>
+                  <button type="button" class="btn btn-primary" id="sourcesAddFirstBtn">添加第一个源</button>
+                </div>
+              </div>
+              <div class="sources-main" id="sourcesMain">
+                <aside class="feed-side">
+                  <div class="feed-side-head">
+                    <div class="feed-side-head-top">
+                      <div>
+                        <div class="feed-side-title">
+                          <h2>订阅</h2>
+                          <button type="button" class="feed-add-btn" id="sourcesAddBtn" title="添加源" aria-label="添加源">+</button>
+                        </div>
+                        <p class="sub" id="feedCountLabel">7 个源</p>
+                      </div>
+                      <button type="button" class="btn btn-ghost" id="sourcesManageGroupsBtn" style="padding:0.3rem 0.55rem;font-size:12px">管理分组</button>
+                    </div>
+                    <div class="feed-side-search">
+                      <input type="search" id="feedSearch" placeholder="搜索…" aria-label="搜索数据源" />
+                    </div>
+                  </div>
+                  <p class="feed-side-hint" id="feedSideHint">拖动分组排序 · 拖动源到其他组</p>
+                  <div class="feed-side-body" id="feedGroupsRoot"></div>
+                </aside>
+                <section class="feed-list">
+                  <div class="feed-list-head">
+                    <h3 id="articleFeedName">机器之心</h3>
+                    <p id="articleFeedMeta">近 3 天 · 3 篇列表</p>
+                  </div>
+                  <div class="feed-list-body" id="articleList"></div>
+                </section>
+              </div>
+            </div>
+
+            <div class="settings-stub">设置页（原型略）· Skill / 模型 / 授权</div>
+          </div>
+        </div>
+        <div class="proto-badge">PROTOTYPE · 非真实应用</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const app = document.getElementById("app");
+    const state = {
+      page: "today",
+      ask: "open",
+      overview: "ready",
+      job: "none",
+      sourcesPhase: "ready",
+    };
+
+    function syncControls() {
+      document.querySelectorAll("[data-set]").forEach((el) => {
+        const key = el.dataset.set;
+        el.classList.toggle("active", el.dataset.value === state[key]);
+      });
+    }
+
+    function applyJob() {
+      const banner = document.getElementById("jobBanner");
+      const title = document.getElementById("jobTitle");
+      const msg = document.getElementById("jobMsg");
+      const bar = document.getElementById("jobBar");
+      const actions = document.getElementById("jobActions");
+      const hint = document.getElementById("pageHint");
+      const navBtns = document.querySelectorAll(".nav button");
+
+      banner.className = "job-banner";
+      bar.classList.remove("indeterminate");
+      hint.classList.remove("show");
+      navBtns.forEach((b) => b.classList.remove("has-job"));
+      actions.innerHTML = "";
+
+      const showBanner = (tone, t, m, opts = {}) => {
+        banner.classList.add("show", tone);
+        if (opts.indeterminate) banner.classList.add("indeterminate");
+        title.textContent = t;
+        msg.textContent = m;
+        bar.style.display = opts.hideBar ? "none" : "block";
+        if (opts.stop) {
+          actions.innerHTML = `<button type="button">停止</button>`;
+        }
+        if (opts.close) {
+          actions.innerHTML = `<button type="button" id="closeJob">关闭</button>`;
+          document.getElementById("closeJob").onclick = () => setState("job", "none");
+        }
+        if (opts.retry) {
+          actions.innerHTML = `<button type="button">去授权</button><button type="button" id="closeJob">关闭</button>`;
+          document.getElementById("closeJob").onclick = () => setState("job", "none");
+        }
+      };
+
+      switch (state.job) {
+        case "none":
+          break;
+        case "banner":
+          showBanner("progress", "更新源信息", "正在刷新文章列表… 3 / 7", { stop: true });
+          document.querySelector('[data-nav="sources"]').classList.add("has-job");
+          break;
+        case "combo":
+          showBanner("progress", "更新源信息", "正在刷新文章列表… 3 / 7", { stop: true });
+          hint.textContent = "正在更新源信息，完成后可重新生成简报。";
+          hint.classList.add("show");
+          document.querySelector('[data-nav="sources"]').classList.add("has-job");
+          break;
+        case "summarize":
+          showBanner("progress", "生成简报", "正在整理「AI 技术」近 3 天要点…", {
+            indeterminate: true,
+            stop: true,
+          });
+          hint.textContent = "正在生成你正在看的分组简报。";
+          hint.classList.add("show");
+          document.querySelector('[data-nav="today"]').classList.add("has-job");
+          break;
+        case "done":
+          showBanner("success", "简报已更新", "AI 技术 · 近 3 天 · 14 个要点", {
+            hideBar: true,
+            close: true,
+          });
+          break;
+        case "fail":
+          showBanner("error", "刷新失败", "知乎 Cookie 失效，部分源未更新", {
+            hideBar: true,
+            retry: true,
+          });
+          break;
+      }
+    }
+
+    function renderTodayToolbar() {
+      const toolbarConfigured = document.getElementById("todayToolbarConfigured");
+      const toolbarOnboarding = document.getElementById("todayToolbarOnboarding");
+      const toolbarSub = document.getElementById("toolbarSub");
+      const toolbarSubOnboarding = document.getElementById("toolbarSubOnboarding");
+      const status = document.getElementById("toolbarStatus");
+      const groupSelect = document.getElementById("groupSelect");
+      const rangeSelect = document.getElementById("rangeSelect");
+      const rangeDetail = rangeSelect.value === "1" ? "仅 7/29" : "7/27–7/29";
+
+      if (state.overview === "onboarding") {
+        toolbarConfigured.style.display = "none";
+        toolbarSub.style.display = "none";
+        toolbarOnboarding.style.display = "";
+        toolbarSubOnboarding.style.display = "";
+        return;
+      }
+
+      toolbarConfigured.style.display = "";
+      toolbarOnboarding.style.display = "none";
+      toolbarSubOnboarding.style.display = "none";
+      toolbarSub.style.display = "";
+
+      if (state.overview === "ready") {
+        status.textContent = "14 个要点";
+        status.className = "toolbar-status ok";
+        toolbarSub.textContent = `覆盖 ${rangeDetail} · 生成于今天 14:32`;
+      } else {
+        status.textContent = "尚未生成";
+        status.className = "toolbar-status warn";
+        toolbarSub.textContent = `源已就绪，覆盖 ${rangeDetail}`;
+      }
+    }
+
+    function applyOverview() {
+      const ready = document.getElementById("overviewReady");
+      const empty = document.getElementById("overviewEmpty");
+      const emptyHasSources = document.getElementById("emptyHasSources");
+      const emptyOnboarding = document.getElementById("emptyOnboarding");
+      const genBtn = document.getElementById("genBtn");
+      const groupSelect = document.getElementById("groupSelect");
+      const rangeSelect = document.getElementById("rangeSelect");
+
+      if (state.overview === "ready") {
+        ready.style.display = "";
+        empty.style.display = "none";
+        genBtn.style.display = "";
+        groupSelect.disabled = false;
+        rangeSelect.disabled = false;
+        genBtn.textContent = "";
+        genBtn.className = "btn btn-ghost gen-btn-ready";
+        genBtn.dataset.ready = "1";
+        genBtn.setAttribute("aria-label", "重新生成");
+        genBtn.style.marginLeft = "";
+      } else if (state.overview === "empty") {
+        ready.style.display = "none";
+        empty.style.display = "";
+        emptyHasSources.style.display = "";
+        emptyOnboarding.style.display = "none";
+        genBtn.style.display = "";
+        groupSelect.disabled = false;
+        rangeSelect.disabled = false;
+        genBtn.textContent = "生成简报";
+        genBtn.className = "btn btn-primary";
+        genBtn.dataset.ready = "0";
+        genBtn.setAttribute("aria-label", "生成简报");
+        genBtn.style.marginLeft = "";
+      } else {
+        ready.style.display = "none";
+        empty.style.display = "";
+        emptyHasSources.style.display = "none";
+        emptyOnboarding.style.display = "";
+      }
+
+      renderTodayToolbar();
+    }
+
+    function applyAsk() {
+      app.dataset.ask = state.ask;
+      if (state.ask === "collapsed") {
+        document.getElementById("askHint").textContent = "已收起 · 拖入或点章节展开";
+      } else {
+        document.getElementById("askHint").textContent = "可选 · 拖入章节/文章后直接生成摘要 · 拖分隔条调宽度";
+      }
+    }
+
+    // —— 简报 / 提问宽度比（可拖拽，localStorage 持久化）——
+    const ASK_RATIO_KEY = "askme.proto.askRatio";
+    const ASK_RATIO_MIN = 0.22;
+    const ASK_RATIO_MAX = 0.55;
+    const ASK_RATIO_DEFAULT = 0.32;
+
+    function clampAskRatio(value) {
+      return Math.min(ASK_RATIO_MAX, Math.max(ASK_RATIO_MIN, value));
+    }
+
+    function readAskRatio() {
+      try {
+        const raw = localStorage.getItem(ASK_RATIO_KEY);
+        if (!raw) return ASK_RATIO_DEFAULT;
+        const value = Number(raw);
+        return Number.isFinite(value) ? clampAskRatio(value) : ASK_RATIO_DEFAULT;
+      } catch {
+        return ASK_RATIO_DEFAULT;
+      }
+    }
+
+    let askRatio = readAskRatio();
+
+    function applyAskRatio(ratio = askRatio) {
+      askRatio = clampAskRatio(ratio);
+      const pct = Math.round(askRatio * 100);
+      const briefPct = 100 - pct;
+      const body = document.getElementById("todayBody");
+      const split = document.getElementById("askSplit");
+      const badge = document.getElementById("askRatioBadge");
+      if (body) body.style.setProperty("--ask-pct", `${askRatio * 100}%`);
+      if (split) split.setAttribute("aria-valuenow", String(pct));
+      if (badge) badge.textContent = `简报 ${briefPct}% · 提问 ${pct}%`;
+    }
+
+    function persistAskRatio() {
+      try {
+        localStorage.setItem(ASK_RATIO_KEY, String(askRatio));
+      } catch {
+        // ignore
+      }
+    }
+
+    function bindAskSplit() {
+      const body = document.getElementById("todayBody");
+      const split = document.getElementById("askSplit");
+      if (!body || !split) return;
+
+      let dragging = false;
+      let startX = 0;
+      let startRatio = askRatio;
+
+      const onMove = (clientX) => {
+        const width = body.getBoundingClientRect().width;
+        if (width <= 0) return;
+        // 分隔条左移 → 提问区变宽
+        const delta = (startX - clientX) / width;
+        applyAskRatio(startRatio + delta);
+      };
+
+      split.addEventListener("pointerdown", (e) => {
+        if (state.ask === "collapsed") return;
+        dragging = true;
+        startX = e.clientX;
+        startRatio = askRatio;
+        body.classList.add("is-resizing");
+        split.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      });
+
+      split.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        onMove(e.clientX);
+      });
+
+      const endDrag = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        body.classList.remove("is-resizing");
+        if (e && split.hasPointerCapture?.(e.pointerId)) {
+          split.releasePointerCapture(e.pointerId);
+        }
+        persistAskRatio();
+      };
+
+      split.addEventListener("pointerup", endDrag);
+      split.addEventListener("pointercancel", endDrag);
+
+      split.addEventListener("keydown", (e) => {
+        if (state.ask === "collapsed") return;
+        const step = e.shiftKey ? 0.05 : 0.02;
+        if (e.key === "ArrowLeft") {
+          applyAskRatio(askRatio + step);
+          persistAskRatio();
+          e.preventDefault();
+        } else if (e.key === "ArrowRight") {
+          applyAskRatio(askRatio - step);
+          persistAskRatio();
+          e.preventDefault();
+        } else if (e.key === "Home") {
+          applyAskRatio(ASK_RATIO_DEFAULT);
+          persistAskRatio();
+          e.preventDefault();
+        }
+      });
+
+      split.addEventListener("dblclick", () => {
+        if (state.ask === "collapsed") return;
+        applyAskRatio(ASK_RATIO_DEFAULT);
+        persistAskRatio();
+      });
+    }
+
+    function applyPage() {
+      app.dataset.page = state.page;
+      document.querySelectorAll(".nav button").forEach((b) => {
+        b.classList.toggle("active", b.dataset.nav === state.page);
+      });
+    }
+
+    function updateLabel() {
+      const pageMap = { today: "简报", sources: "源", settings: "设置" };
+      const ovMap = { ready: "阅读", empty: "无简报", onboarding: "新用户" };
+      const ov = ovMap[state.overview] || state.overview;
+      const ask = state.ask === "open" ? "提问常驻" : "提问收起";
+      const phaseMap = {
+        empty: "无源",
+        ready: "已有源",
+      };
+      const jobMap = {
+        none: "无任务",
+        banner: "进度A顶栏",
+        combo: "进度C组合",
+        summarize: "生成中",
+        done: "刚完成",
+        fail: "失败",
+      };
+      const phase =
+        state.page === "sources" ? ` · ${phaseMap[state.sourcesPhase]}` : "";
+      document.getElementById("stateLabel").textContent =
+        `${pageMap[state.page]}${phase} · ${ov} · ${ask} · ${jobMap[state.job]}`;
+    }
+
+    function setState(key, value) {
+      state[key] = value;
+      if (key === "page") applyPage();
+      if (key === "ask") applyAsk();
+      if (key === "overview") applyOverview();
+      if (key === "job") applyJob();
+      if (key === "sourcesPhase") renderSourcesPage();
+      applyPage();
+      applyAsk();
+      applyOverview();
+      applyJob();
+      if (key !== "sourcesPhase") renderSourcesPage();
+      syncControls();
+      updateLabel();
+    }
+
+    document.querySelectorAll("[data-set]").forEach((el) => {
+      el.addEventListener("click", () => setState(el.dataset.set, el.dataset.value));
+    });
+
+    document.querySelectorAll("[data-nav]").forEach((el) => {
+      el.addEventListener("click", () => setState("page", el.dataset.nav));
+    });
+
+    document.getElementById("askRail").addEventListener("click", () => setState("ask", "open"));
+
+    document.querySelectorAll("h3.sec").forEach((h) => {
+      h.addEventListener("click", () => {
+        if (state.ask === "collapsed") setState("ask", "open");
+        const topic = h.dataset.topic;
+        const box = document.getElementById("askMsgs");
+        const input = document.getElementById("askInput");
+        const inputHint = document.getElementById("askInputHint");
+        box.innerHTML = `
+          <div class="bubble user">已拖入「${topic}」</div>
+          <div class="bubble">（原型）拖入后将直接发送并生成该章节摘要。</div>
+        `;
+        input.placeholder = "已加入章节 · Enter 生成摘要";
+        inputHint.textContent = "Enter 生成摘要 · Shift+Enter 换行";
+      });
+    });
+
+    function initOverviewToc() {
+      const scroller = document.getElementById("overviewReady");
+      const toc = document.getElementById("overviewToc");
+      if (!scroller || !toc) return;
+      const links = [...toc.querySelectorAll("a[href^='#']")];
+      const sections = links
+        .map((link) => document.getElementById(link.getAttribute("href").slice(1)))
+        .filter(Boolean);
+      let lockActiveUntil = 0;
+
+      function setActive(id) {
+        links.forEach((link) => {
+          const active = link.getAttribute("href") === `#${id}`;
+          link.classList.toggle("is-active", active);
+        });
+      }
+
+      /** 把目标标题滚到可见区第一行（紧贴置顶目录下方） */
+      function scrollSectionToTop(target) {
+        const tocHeight = toc.offsetHeight;
+        const delta =
+          target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        const nextTop = scroller.scrollTop + delta - tocHeight;
+        scroller.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+      }
+
+      links.forEach((link) => {
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          const target = document.getElementById(link.getAttribute("href").slice(1));
+          if (!target) return;
+          setActive(target.id);
+          lockActiveUntil = Date.now() + 700;
+          scrollSectionToTop(target);
+        });
+      });
+
+      scroller.addEventListener(
+        "scroll",
+        () => {
+          if (Date.now() < lockActiveUntil) return;
+          const offset = toc.offsetHeight + 4;
+          let current = sections[0]?.id;
+          for (const section of sections) {
+            const top =
+              section.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+            if (top - offset <= 2) current = section.id;
+          }
+          if (current) setActive(current);
+        },
+        { passive: true },
+      );
+    }
+
+    initOverviewToc();
+
+    document.getElementById("genBtn").addEventListener("click", () => setState("job", "summarize"));
+    document.getElementById("groupSelect").addEventListener("change", renderTodayToolbar);
+    document.getElementById("rangeSelect").addEventListener("change", renderTodayToolbar);
+
+    // —— 源页：对齐现有 FeedSidebar ——
+    const FEED_GROUPS = [
+      {
+        id: "ai",
+        name: "AI 技术",
+        expanded: true,
+        feeds: [
+          { id: "jiqizhixin", name: "机器之心", sync: "2 小时前", articles: [
+            { title: "开源吞吐基准出炉", time: "昨天" },
+            { title: "多模态评测框架更新", time: "5h" },
+            { title: "推理框架 v2 发布", time: "2h" },
+          ]},
+          { id: "openai", name: "OpenAI", sync: "3 小时前", articles: [
+            { title: "OpenAI 发布模型更新", time: "2h" },
+            { title: "工具调用稳定性说明", time: "昨天" },
+          ]},
+          { id: "anthropic", name: "Anthropic", sync: "昨天", articles: [
+            { title: "可解释性新方法", time: "昨天" },
+          ]},
+        ],
+      },
+      {
+        id: "finance",
+        name: "财经快讯",
+        expanded: false,
+        feeds: [
+          { id: "cls", name: "财联社", sync: "1 小时前", articles: [
+            { title: "央行公开市场操作", time: "1h" },
+            { title: "A股午盘综述", time: "3h" },
+          ]},
+          { id: "36kr", name: "36氪", sync: "5 小时前", articles: [
+            { title: "推理成本再降一轮", time: "5h" },
+          ]},
+          { id: "jin10", name: "金十数据", sync: "30 分钟前", articles: [
+            { title: "美元指数短线波动", time: "30m" },
+          ]},
+        ],
+      },
+      {
+        id: "__ungrouped__",
+        name: "未分组",
+        expanded: false,
+        system: true,
+        feeds: [
+          { id: "reuters", name: "Reuters", sync: "昨天", articles: [
+            { title: "欧盟补充合规指引", time: "昨天" },
+          ]},
+        ],
+      },
+    ];
+
+    let selectedFeedId = "jiqizhixin";
+    let expandedGroupIds = new Set(["ai"]);
+
+    function allFeeds() {
+      return FEED_GROUPS.flatMap((g) => g.feeds);
+    }
+
+    function selectedFeed() {
+      return allFeeds().find((f) => f.id === selectedFeedId) ?? allFeeds()[0];
+    }
+
+    function toggleMenu(id) {
+      document.querySelectorAll(".menu-pop.open").forEach((el) => {
+        if (el.id !== id) el.classList.remove("open");
+      });
+      document.getElementById(id)?.classList.toggle("open");
+    }
+    window.toggleMenu = toggleMenu;
+
+    document.addEventListener("click", (e) => {
+      if (!(e.target instanceof Element)) return;
+      if (!e.target.closest(".menu-pop")) {
+        document.querySelectorAll(".menu-pop.open").forEach((el) => el.classList.remove("open"));
+      }
+    });
+
+    function renderSourcesPage() {
+      const phase = state.sourcesPhase;
+      const rangeSelect = document.getElementById("sourcesRangeSelect");
+      const rangeField = document.getElementById("sourcesRangeField");
+      const statusSep = document.getElementById("sourcesStatusSep");
+      const range = rangeSelect.value === "1" ? "今天" : "近 3 天";
+      const detail = rangeSelect.value === "1" ? "7/29" : "7/27–7/29";
+      const readiness = document.getElementById("sourcesReadiness");
+      const hint = document.getElementById("sourcesNextHint");
+      const updateBtn = document.getElementById("sourcesUpdateBtn");
+      const actionsRow = document.getElementById("sourcesToolbarActions");
+      const emptyMain = document.getElementById("sourcesEmptyMain");
+      const main = document.getElementById("sourcesMain");
+      const feedSideHint = document.getElementById("feedSideHint");
+
+      emptyMain.classList.toggle("show", phase === "empty");
+      main.classList.toggle("hidden", phase === "empty");
+      rangeField.style.display = phase === "empty" ? "none" : "";
+      statusSep.style.display = phase === "empty" ? "none" : "";
+      feedSideHint.style.display = phase === "empty" ? "none" : "";
+      actionsRow.style.display = phase === "empty" ? "none" : "";
+      updateBtn.style.display = "";
+
+      if (phase === "empty") {
+        readiness.textContent = "还没有数据源";
+        readiness.className = "toolbar-status warn";
+        hint.textContent = "接入网站或公众号后，即可在简报页生成按板块分类的简报。";
+        return;
+      }
+
+      const feedCount = allFeeds().length;
+      readiness.textContent = `${feedCount} 个源 · ${range}（${detail}）· 上次更新 2 小时前`;
+      readiness.className = "toolbar-status ok";
+      hint.textContent = "更新源信息后即可生成简报；建立索引仅在提问时需要。";
+      updateBtn.textContent = "更新源信息";
+      updateBtn.className = "btn btn-primary btn-tip";
+
+      const feed = selectedFeed();
+      if (feed) {
+        document.getElementById("articleFeedMeta").textContent = `${range} · ${feed.articles.length} 篇列表`;
+      }
+    }
+
+    function handleSourcesAdd() {
+      alert("（原型）打开添加源");
+    }
+
+    function handleManageGroups() {
+      alert("（原型）打开管理分组");
+    }
+
+    function handleSourcesUpdate() {
+      setState("job", "banner");
+      const title = document.getElementById("jobTitle");
+      const msg = document.getElementById("jobMsg");
+      title.textContent = "更新源信息";
+      msg.textContent = "正在刷新文章列表… 3 / 7";
+    }
+
+    function handleSourcesIndex() {
+      setState("job", "combo");
+      const title = document.getElementById("jobTitle");
+      const msg = document.getElementById("jobMsg");
+      title.textContent = "建立索引";
+      msg.textContent = "正在为正文建立检索索引…";
+    }
+
+    function renderFeedGroups() {
+      const root = document.getElementById("feedGroupsRoot");
+      const q = document.getElementById("feedSearch").value.trim().toLowerCase();
+      root.innerHTML = "";
+
+      const groups = FEED_GROUPS.map((group) => ({
+        ...group,
+        feeds: group.feeds.filter((feed) => !q || feed.name.toLowerCase().includes(q)),
+      })).filter((group) => group.feeds.length > 0);
+
+      if (groups.length === 0) {
+        root.innerHTML = '<p class="feed-empty">没有匹配的数据源</p>';
+        return;
+      }
+
+      if (q && groups.length > 0) {
+        expandedGroupIds = new Set([groups[0].id]);
+      }
+
+      groups.forEach((group) => {
+        const expanded = expandedGroupIds.has(group.id);
+        const wrap = document.createElement("div");
+        wrap.className = "feed-group";
+        wrap.innerHTML = `
+          <div class="feed-group-head ${expanded ? "expanded" : ""}">
+            ${group.system ? '<span style="width:1rem"></span>' : '<span style="width:1rem;color:var(--ink-muted);opacity:0;group-hover:opacity:1">⠿</span>'}
+            <button type="button" class="feed-group-toggle ${expanded ? "expanded" : ""}" data-group="${group.id}">
+              <span class="chev">${expanded ? "▾" : "▸"}</span>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${group.name}</span>
+            </button>
+            <span class="feed-group-count">${group.feeds.length}</span>
+            <div class="menu-pop" id="groupMenu-${group.id}">
+              <button type="button" class="feed-group-menu" onclick="event.stopPropagation();toggleMenu('groupMenu-${group.id}')">⋯</button>
+              <div class="menu-pop-panel">
+                <button type="button">更新本组</button>
+              </div>
+            </div>
+          </div>
+        `;
+        wrap.querySelector(".feed-group-toggle").addEventListener("click", () => {
+          if (expandedGroupIds.has(group.id)) expandedGroupIds.delete(group.id);
+          else expandedGroupIds.add(group.id);
+          renderFeedGroups();
+        });
+
+        if (expanded) {
+          const ul = document.createElement("ul");
+          ul.className = "feed-group-list";
+          group.feeds.forEach((feed) => {
+            const li = document.createElement("li");
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = `feed-row${feed.id === selectedFeedId ? " on" : ""}`;
+            btn.innerHTML = `<span class="name">${feed.name}</span><span class="sync">${feed.sync}</span>`;
+            btn.addEventListener("click", () => {
+              selectedFeedId = feed.id;
+              renderFeedGroups();
+              renderArticles();
+              renderSourcesPage();
+            });
+            li.appendChild(btn);
+            ul.appendChild(li);
+          });
+          wrap.appendChild(ul);
+        }
+
+        root.appendChild(wrap);
+      });
+
+      document.getElementById("feedCountLabel").textContent = `${allFeeds().length} 个源`;
+    }
+
+    function renderArticles() {
+      const feed = selectedFeed();
+      document.getElementById("articleFeedName").textContent = feed?.name ?? "";
+      const list = document.getElementById("articleList");
+      list.innerHTML = (feed?.articles ?? [])
+        .map((a) => `<div class="item">${a.title}<small> · ${a.time}</small></div>`)
+        .join("");
+    }
+
+    document.getElementById("sourcesRangeSelect").addEventListener("change", renderSourcesPage);
+    document.getElementById("feedSearch").addEventListener("input", renderFeedGroups);
+    document.getElementById("sourcesAddBtn").addEventListener("click", handleSourcesAdd);
+    document.getElementById("sourcesUpdateBtn").addEventListener("click", handleSourcesUpdate);
+    document.getElementById("sourcesIndexBtn").addEventListener("click", handleSourcesIndex);
+    document.getElementById("sourcesManageGroupsBtn").addEventListener("click", handleManageGroups);
+    document.getElementById("sourcesAddFirstBtn").addEventListener("click", handleSourcesAdd);
+    applyAskRatio();
+    bindAskSplit();
+    renderFeedGroups();
+    renderArticles();
+    renderSourcesPage();
+
+    setState("page", "today");
+  </script>
+</body>
+</html>

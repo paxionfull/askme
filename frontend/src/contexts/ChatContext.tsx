@@ -249,9 +249,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const wasGenerating = prevDigestGeneratingRef.current;
     prevDigestGeneratingRef.current = digestGenerating;
-    if (digestGenerating && !wasGenerating) {
-      setDigestTree(null);
-    }
     if (wasGenerating && !digestGenerating) {
       void loadPanelSummary();
     }

@@ -14,6 +14,12 @@ interface AuthHandoffPanelProps {
   onCookieChange: (value: string) => void;
   onSaved: () => void;
   saving?: boolean;
+  /** 挂载后自动打开系统登录窗口（用于授权失效后立刻重登） */
+  autoStart?: boolean;
+  /** 覆盖默认标题 */
+  title?: string;
+  /** 提供后显示「取消」：关闭登录会话并回调（如收起重新授权面板） */
+  onCancel?: () => void;
 }
 
 export default function AuthHandoffPanel({
@@ -22,6 +28,9 @@ export default function AuthHandoffPanel({
   onCookieChange,
   onSaved,
   saving = false,
+  autoStart = false,
+  title,
+  onCancel,
 }: AuthHandoffPanelProps) {
   const slot = item.slot || "";
   const [session, setSession] = useState<LoginSessionStatus | null>(null);
@@ -29,6 +38,12 @@ export default function AuthHandoffPanel({
   const [error, setError] = useState("");
   const [iframeBlocked, setIframeBlocked] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoStartedRef = useRef(false);
+  const sessionRef = useRef<LoginSessionStatus | null>(null);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
 
   useEffect(() => {
     return () => {
@@ -87,14 +102,30 @@ export default function AuthHandoffPanel({
     }
   }
 
+  useEffect(() => {
+    if (!autoStart || autoStartedRef.current || !slot) return;
+    autoStartedRef.current = true;
+    void handleOpenLoginWindow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only auto-start once per mount
+  }, [autoStart, slot]);
+
   async function handleCancelSession() {
-    if (!session) return;
+    const current = sessionRef.current;
+    if (!current || current.done) {
+      setSession(null);
+      return;
+    }
     try {
-      const stopped = await cancelCredentialLoginSession(session.session_id);
+      const stopped = await cancelCredentialLoginSession(current.session_id);
       setSession(stopped);
     } catch {
       setSession(null);
     }
+  }
+
+  async function handleCancelAll() {
+    await handleCancelSession();
+    onCancel?.();
   }
 
   async function handlePasteSave() {
@@ -119,13 +150,26 @@ export default function AuthHandoffPanel({
 
   return (
     <div className="border-l-2 border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-3">
-      <p className="text-sm font-medium text-[var(--accent)]">
-        需要登录授权：{item.slot_label || item.slot}
-      </p>
-      <p className="mt-1 text-xs text-[var(--ink-muted)]">
-        {item.cookie_hint ||
-          "请在登录窗口完成登录；系统会自动读取 Cookie。若窗口无法打开，可改用粘贴。"}
-      </p>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-[var(--accent)]">
+            {title || `需要登录授权：${item.slot_label || item.slot}`}
+          </p>
+          <p className="mt-1 text-xs text-[var(--ink-muted)]">
+            {item.cookie_hint ||
+              "请在登录窗口完成登录；系统会自动读取 Cookie。若窗口无法打开，可改用粘贴。"}
+          </p>
+        </div>
+        {onCancel ? (
+          <button
+            type="button"
+            onClick={() => void handleCancelAll()}
+            className="ui-btn shrink-0 text-xs"
+          >
+            取消
+          </button>
+        ) : null}
+      </div>
 
       <div className="mt-3 overflow-hidden rounded-[var(--radius-control)] border border-[var(--rule)] bg-[var(--paper-raised)]">
         <div className="flex items-center justify-between border-b border-[var(--rule)] px-2 py-1.5 text-xs text-[var(--ink-muted)]">

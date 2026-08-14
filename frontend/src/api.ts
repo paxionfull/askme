@@ -305,7 +305,8 @@ export function streamFetchRecentArticles(
 export interface ContentJobStatus {
   job_id?: string | null;
   kind?: string;
-  status: "idle" | "running" | "done" | "error" | string;
+  status: "idle" | "running" | "done" | "error" | "cancelled" | string;
+  phase?: string;
   current?: number;
   total?: number;
   message?: string;
@@ -354,6 +355,21 @@ export function startIndexJob(days: number, llmConfig: LlmConfigPayload, feedIds
 
 export function fetchIndexJobStatus() {
   return request<ContentJobStatus>("/api/rag/index/jobs/current");
+}
+
+export function fetchSummarizeJobStatus() {
+  return request<ContentJobStatus>("/api/summarize/jobs/current");
+}
+
+export function cancelSummarizeJob() {
+  return request<{ ok: boolean }>("/api/summarize/jobs/cancel", { method: "POST" });
+}
+
+export async function waitForSummarizeJob(
+  onProgress?: (status: ContentJobStatus) => void | Promise<void>,
+  pollIntervalMs = 800,
+): Promise<ContentJobStatus> {
+  return waitForContentJob(fetchSummarizeJobStatus, onProgress, pollIntervalMs);
 }
 
 export async function waitForContentJob(
@@ -428,12 +444,10 @@ export function fetchStoredArticleBody(feedId: string, articleId: string, fetch 
 }
 
 export interface SummarizeBody {
-  prompt?: string;
   days: number;
   feed_ids?: string[];
   group_ids?: string[];
   stream?: boolean;
-  enable_thinking?: boolean;
   llm_config?: LlmConfigPayload;
   use_cached_context?: boolean;
 }
@@ -803,6 +817,39 @@ export function saveCursorApiKey(apiKey: string) {
   );
 }
 
+export interface LlmSettingsResponse {
+  configured: boolean;
+  model: string;
+  embedding_model: string;
+  api_key: string;
+  api_base: string;
+  max_tokens: number;
+  source?: string;
+  thinking_style: string;
+  embedding_api_key: string;
+  embedding_api_base: string;
+}
+
+export function fetchLlmSettings() {
+  return request<LlmSettingsResponse>("/api/settings/llm");
+}
+
+export function saveLlmSettings(payload: {
+  model: string;
+  embedding_model: string;
+  api_key: string;
+  api_base: string;
+  max_tokens: number;
+  thinking_style: string;
+  embedding_api_key: string;
+  embedding_api_base: string;
+}) {
+  return request<LlmSettingsResponse & { ok: boolean }>("/api/settings/llm", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function streamSummarize(
   body: SummarizeBody,
   onToken: (content: string) => void,
@@ -810,6 +857,7 @@ export function streamSummarize(
   onError: (message: string) => void,
   onStatus?: (status: SseStatus) => void,
   onThinking?: (content: string) => void,
+  options?: { signal?: AbortSignal; onCancelled?: (detail: string) => void },
 ) {
   return streamPost(
     "/api/summarize",
@@ -819,6 +867,12 @@ export function streamSummarize(
     onError,
     onStatus,
     onThinking,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    options?.onCancelled,
+    options?.signal,
   );
 }
 
@@ -903,6 +957,8 @@ export interface OnboardBatchItem {
   job_id?: string | null;
   skip_reason?: string | null;
   auth_slot?: string | null;
+  login_url?: string | null;
+  cookie_hint?: string | null;
 }
 
 export interface OnboardBatchStatus {

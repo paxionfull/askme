@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { fetchLlmSettings, saveLlmSettings } from "../api";
 
 export type DefaultDays = 1 | 3;
 
@@ -19,6 +20,9 @@ export interface AppSettings {
   llmApiKey: string;
   llmApiBase: string;
   llmMaxTokens: number;
+  thinkingStyle: string;
+  embeddingApiKey: string;
+  embeddingApiBase: string;
 }
 
 export interface LlmConfigPayload {
@@ -27,13 +31,16 @@ export interface LlmConfigPayload {
   api_key: string;
   api_base: string;
   max_tokens: number;
+  thinking_style: string;
+  embedding_api_key: string;
+  embedding_api_base: string;
 }
 
 const STORAGE_KEY = "askme.settings";
 
 export const DEFAULT_LLM_MODEL = "openai/gpt-4o-mini";
-export const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
-export const DEFAULT_LLM_MAX_TOKENS = 8192;
+export const DEFAULT_EMBEDDING_MODEL = "";
+export const DEFAULT_LLM_MAX_TOKENS = 32768;
 export const MIN_LLM_MAX_TOKENS = 256;
 export const MAX_LLM_MAX_TOKENS = 128000;
 
@@ -71,6 +78,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   llmApiKey: "",
   llmApiBase: "",
   llmMaxTokens: DEFAULT_LLM_MAX_TOKENS,
+  thinkingStyle: "",
+  embeddingApiKey: "",
+  embeddingApiBase: "",
 };
 
 function migrateSummaryPrompt(prompt: string | undefined): string {
@@ -109,10 +119,44 @@ function loadSettings(): AppSettings {
       llmMaxTokens: normalizeLlmMaxTokens(
         parsed.llmMaxTokens ?? DEFAULT_SETTINGS.llmMaxTokens,
       ),
+      thinkingStyle: parsed.thinkingStyle ?? DEFAULT_SETTINGS.thinkingStyle,
+      embeddingApiKey: parsed.embeddingApiKey ?? DEFAULT_SETTINGS.embeddingApiKey,
+      embeddingApiBase: parsed.embeddingApiBase ?? DEFAULT_SETTINGS.embeddingApiBase,
     };
   } catch {
     return DEFAULT_SETTINGS;
   }
+}
+
+function persistLocal(settings: AppSettings) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  window.dispatchEvent(new Event("askme:settings-updated"));
+}
+
+function applyServerLlm(
+  current: AppSettings,
+  server: {
+    model: string;
+    embedding_model: string;
+    api_key: string;
+    api_base: string;
+    max_tokens: number;
+    thinking_style: string;
+    embedding_api_key: string;
+    embedding_api_base: string;
+  },
+): AppSettings {
+  return {
+    ...current,
+    llmModel: server.model || current.llmModel,
+    embeddingModel: server.embedding_model || current.embeddingModel,
+    llmApiKey: server.api_key || current.llmApiKey,
+    llmApiBase: server.api_base || current.llmApiBase,
+    llmMaxTokens: normalizeLlmMaxTokens(server.max_tokens || current.llmMaxTokens),
+    thinkingStyle: server.thinking_style ?? current.thinkingStyle,
+    embeddingApiKey: server.embedding_api_key ?? current.embeddingApiKey,
+    embeddingApiBase: server.embedding_api_base ?? current.embeddingApiBase,
+  };
 }
 
 export function readStoredSettings(): AppSettings {
@@ -128,6 +172,9 @@ export function getLlmConfigPayload(settings?: AppSettings): LlmConfigPayload {
     api_key: current.llmApiKey.trim(),
     api_base: current.llmApiBase.trim(),
     max_tokens: normalizeLlmMaxTokens(current.llmMaxTokens),
+    thinking_style: current.thinkingStyle ?? "",
+    embedding_api_key: current.embeddingApiKey?.trim() ?? "",
+    embedding_api_base: current.embeddingApiBase?.trim() ?? "",
   };
 }
 
@@ -142,6 +189,7 @@ export function filterEmbeddingModels(models: string[]): string[] {
 
 export function useSettings() {
   const [settings, setSettingsState] = useState<AppSettings>(loadSettings);
+  const [llmHydrated, setLlmHydrated] = useState(false);
 
   const setSettings = useCallback((patch: Partial<AppSettings>) => {
     setSettingsState((current) => {
@@ -159,10 +207,26 @@ export function useSettings() {
         };
       }
       const next = { ...current, ...normalizedPatch };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      window.dispatchEvent(new Event("askme:settings-updated"));
+      persistLocal(next);
       return next;
     });
+  }, []);
+
+  const saveLlmToServer = useCallback(async (next: AppSettings) => {
+    const saved = await saveLlmSettings({
+      model: next.llmModel.trim(),
+      embedding_model: next.embeddingModel.trim(),
+      api_key: next.llmApiKey.trim(),
+      api_base: next.llmApiBase.trim(),
+      max_tokens: normalizeLlmMaxTokens(next.llmMaxTokens),
+      thinking_style: next.thinkingStyle ?? "",
+      embedding_api_key: next.embeddingApiKey?.trim() ?? "",
+      embedding_api_base: next.embeddingApiBase?.trim() ?? "",
+    });
+    const merged = applyServerLlm(next, saved);
+    persistLocal(merged);
+    setSettingsState(merged);
+    return merged;
   }, []);
 
   const resetSummaryPrompt = useCallback(() => {
@@ -185,13 +249,48 @@ export function useSettings() {
     };
   }, []);
 
+  // 从服务端拉取 LLM 配置，保证 Cursor 内置浏览器与外部浏览器共用
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-  }, [settings]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const local = loadSettings();
+        const server = await fetchLlmSettings();
+        if (cancelled) return;
+
+        if (server.configured) {
+          const merged = applyServerLlm(local, server);
+          persistLocal(merged);
+          setSettingsState(merged);
+        } else if (isLlmConfigured(local)) {
+          // 一次性迁移：本浏览器已有配置、服务端还没有
+          await saveLlmSettings({
+            model: local.llmModel.trim(),
+            embedding_model: local.embeddingModel.trim(),
+            api_key: local.llmApiKey.trim(),
+            api_base: local.llmApiBase.trim(),
+            max_tokens: normalizeLlmMaxTokens(local.llmMaxTokens),
+            thinking_style: local.thinkingStyle ?? "",
+            embedding_api_key: local.embeddingApiKey?.trim() ?? "",
+            embedding_api_base: local.embeddingApiBase?.trim() ?? "",
+          });
+        }
+      } catch {
+        // 后端不可用时仍使用 localStorage
+      } finally {
+        if (!cancelled) setLlmHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return {
     settings,
     setSettings,
+    saveLlmToServer,
+    llmHydrated,
     resetSummaryPrompt,
     resetChatPrompt,
   };

@@ -6,6 +6,8 @@ platform_skill: true
 
 discovery:
   type: reddit_html
+  requires_cookie: false
 
 validation:
   expected_min_items: 1
+  min_body_chars: 40

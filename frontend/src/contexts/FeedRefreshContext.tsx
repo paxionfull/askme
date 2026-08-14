@@ -34,8 +34,37 @@ export function isRefreshAuthError(message: string): boolean {
     text.includes("askme_auth_required") ||
     text.includes("需要登录") ||
     text.includes("重新登录授权") ||
+    text.includes("重新登录") ||
+    text.includes("会话失效") ||
+    text.includes("公众号后台") ||
+    text.includes("slave_sid") ||
     (text.includes("cookie") && (text.includes("授权") || text.includes("访客")))
   );
+}
+
+const DISMISSED_REFRESH_KEY = "askme.refreshResult.dismissedRunAt";
+
+function readDismissedRunAt(): number | null {
+  try {
+    const raw = sessionStorage.getItem(DISMISSED_REFRESH_KEY);
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDismissedRunAt(runAt: number | null | undefined) {
+  try {
+    if (runAt == null) {
+      sessionStorage.removeItem(DISMISSED_REFRESH_KEY);
+      return;
+    }
+    sessionStorage.setItem(DISMISSED_REFRESH_KEY, String(runAt));
+  } catch {
+    // ignore
+  }
 }
 
 function formatProgressMessage(status: FeedSchedulerConfig): string {
@@ -95,6 +124,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
 
   const jobInFlightRef = useRef(false);
   const generationRef = useRef(0);
+  const lastShownRunAtRef = useRef<number | null>(null);
   const applyFinishedStatusRef = useRef<(status: FeedSchedulerConfig, fallback: string) => void>(
     () => {},
   );
@@ -118,6 +148,7 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
       setProgress(status.refresh_progress ?? null);
       setFailures(nextFailures);
       markFeedsNeedReload();
+      lastShownRunAtRef.current = status.last_run_at ?? null;
 
       const failureDetail =
         nextFailures.length > 0 ? formatFailures(nextFailures) : "";
@@ -293,45 +324,64 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
     setStatusMessage("");
     setAuthFailureUrls([]);
     setAuthFailureDetected(false);
+    writeDismissedRunAt(lastShownRunAtRef.current);
   }, []);
 
-  // 刷新后 / 挂载时恢复「更新全部 / 分组」进度（单源刷新为同步请求，仅靠 App 级 Context 存活）
+  // 刷新后 / 挂载时恢复「更新全部 / 分组」进度；并展示未关闭的定时失败结果
   useEffect(() => {
     let alive = true;
 
     async function resumeIfRunning() {
       try {
         const status = await fetchFeedSchedulerConfig();
-        if (!alive || !status.refresh_running) return;
+        if (!alive) return;
+
+        if (status.refresh_running) {
+          if (jobInFlightRef.current) return;
+
+          const generation = ++generationRef.current;
+          jobInFlightRef.current = true;
+          const progressItem = status.refresh_progress;
+          if (progressItem?.scope === "group" && progressItem.group_id) {
+            setRefreshingGroupId(progressItem.group_id);
+            setRefreshingAll(false);
+            setBannerTitle("更新分组");
+          } else {
+            setRefreshingGroupId(null);
+            setRefreshingAll(true);
+            setBannerTitle("更新全部");
+          }
+          setRefreshingFeedId(null);
+          setProgress(progressItem ?? null);
+          setStatusMessage(formatProgressMessage(status));
+          setError("");
+          setResultMessage("");
+
+          try {
+            await watchUntilComplete(formatProgressMessage(status), generation);
+          } finally {
+            if (generation === generationRef.current) {
+              setRefreshingAll(false);
+              setRefreshingGroupId(null);
+              jobInFlightRef.current = false;
+            }
+          }
+          return;
+        }
+
+        // 定时任务结束后：把失败结果带到横幅（同一轮关闭后不再弹）
+        const failed = status.last_refresh_failed ?? [];
+        const runAt = status.last_run_at ?? null;
+        const dismissed = readDismissedRunAt();
+        if (failed.length === 0) return;
+        if (runAt != null && dismissed != null && Math.abs(dismissed - runAt) < 1) return;
         if (jobInFlightRef.current) return;
 
-        const generation = ++generationRef.current;
-        jobInFlightRef.current = true;
-        const progressItem = status.refresh_progress;
-        if (progressItem?.scope === "group" && progressItem.group_id) {
-          setRefreshingGroupId(progressItem.group_id);
-          setRefreshingAll(false);
-          setBannerTitle("更新分组");
-        } else {
-          setRefreshingGroupId(null);
-          setRefreshingAll(true);
-          setBannerTitle("更新全部");
-        }
-        setRefreshingFeedId(null);
-        setProgress(progressItem ?? null);
-        setStatusMessage(formatProgressMessage(status));
-        setError("");
-        setResultMessage("");
-
-        try {
-          await watchUntilComplete(formatProgressMessage(status), generation);
-        } finally {
-          if (generation === generationRef.current) {
-            setRefreshingAll(false);
-            setRefreshingGroupId(null);
-            jobInFlightRef.current = false;
-          }
-        }
+        setBannerTitle("定时更新有失败");
+        applyFinishedStatusRef.current(
+          status,
+          status.last_refresh_message || "上次定时更新有失败",
+        );
       } catch {
         // ignore
       }
@@ -343,7 +393,6 @@ export function FeedRefreshProvider({ children }: { children: ReactNode }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only resume
   }, []);
-
   return (
     <FeedRefreshContext.Provider
       value={{

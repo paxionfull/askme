@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""微信公众号发现层适配器（脚手架模板）。
+"""微信公众号脚手架模板（占位符替换）；运行时以 weixin-platform-discovery 为准。
 
-占位符由 scaffold_weixin_files 替换：
-  __ASKME_FAKEID__ / __ASKME_FEED_ID__ / __ASKME_DISPLAY_NAME__ / __ASKME_ENTRY_URL__
+占位：__ASKME_FAKEID__ / __ASKME_FEED_ID__ / __ASKME_DISPLAY_NAME__ / __ASKME_ENTRY_URL__
 """
 
 from __future__ import annotations

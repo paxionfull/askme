@@ -292,8 +292,8 @@ export default function ArticleList({
             disabled={refreshing}
             items={[
               {
-                label: refreshing ? "刷新中…" : "刷新列表",
-                hint: "重新抓取该源文章列表",
+                label: refreshing ? "更新中…" : "更新源信息",
+                hint: "刷新该源文章列表并拉取正文",
                 disabled: refreshing,
                 onClick: onRefresh,
               },

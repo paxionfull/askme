@@ -200,7 +200,36 @@ function Section({
   );
 }
 
-export default function SkillsPage() {
+function SkillsCatalogSkeleton() {
+  return (
+    <div className="space-y-10" aria-busy="true" aria-label="加载 Skill 目录">
+      {["概览", "数据源 Discovery", "对话与其他"].map((label) => (
+        <div key={label} className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-2">
+              <div className="h-4 w-24 animate-pulse rounded bg-[color-mix(in_srgb,var(--rule)_70%,white)]" />
+              <div className="h-3 w-56 animate-pulse rounded bg-[color-mix(in_srgb,var(--rule)_55%,white)]" />
+            </div>
+            <div className="h-7 w-14 animate-pulse rounded-[var(--radius-control)] bg-[color-mix(in_srgb,var(--rule)_70%,white)]" />
+          </div>
+          <ul className="divide-y divide-[var(--rule)]">
+            {Array.from({ length: label === "数据源 Discovery" ? 5 : 3 }).map((_, index) => (
+              <li key={index} className="py-3">
+                <div
+                  className="h-4 animate-pulse rounded bg-[color-mix(in_srgb,var(--rule)_70%,white)]"
+                  style={{ width: `${68 - index * 8}%` }}
+                />
+                <div className="mt-2 h-3 max-w-xs animate-pulse rounded bg-[color-mix(in_srgb,var(--rule)_55%,white)]" />
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function SkillsPanel({ embedded = false }: { embedded?: boolean }) {
   const { job: onboardJob, startSkillRepair } = useOnboarding();
   const [catalog, setCatalog] = useState<SkillsCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -264,8 +293,10 @@ export default function SkillsPage() {
     });
   }, [catalog?.discovery, discoveryQuery]);
 
-  const loadCatalog = useCallback(async () => {
-    setLoading(true);
+  const loadCatalog = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setLoading(true);
+    }
     setError("");
     try {
       const data = await fetchSkillsCatalog();
@@ -273,7 +304,9 @@ export default function SkillsPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载失败");
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -565,26 +598,40 @@ description: ${desc}
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-[var(--paper)]">
-      <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-6 py-4">
-        <h1 className="text-base font-semibold tracking-tight text-[var(--ink)]">Skill</h1>
-        <p className="mt-1 text-sm text-[var(--ink-muted)]">
-          管理抓取、概览与对话 Skill。分组可在「库 → 管理分组」绑定概览 Skill。
-        </p>
-      </header>
+    <div className={embedded ? "space-y-4" : "h-full overflow-y-auto bg-[var(--paper)]"}>
+      {!embedded ? (
+        <header className="border-b border-[var(--rule)] bg-[var(--paper-raised)] px-6 py-4">
+          <h1 className="text-lg font-semibold tracking-tight text-[var(--ink)]">Skill</h1>
+          <p className="mt-1 text-[clamp(0.92rem,0.15vw+0.86rem,1rem)] text-[var(--ink-muted)]">
+            管理抓取、概览与对话 Skill。分组可在「源 → 管理分组」绑定概览 Skill。
+          </p>
+        </header>
+      ) : null}
 
-      <div className="mx-auto max-w-3xl space-y-10 px-6 py-8">
-        {loading ? <p className="text-sm text-[var(--ink-muted)]">加载中…</p> : null}
-        {error ? <p className="text-sm text-red-800">{error}</p> : null}
+      <div className={embedded ? "space-y-10" : "app-content-wide space-y-10 px-6 py-8"}>
+        {error ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-red-800">{error}</p>
+            <button
+              type="button"
+              onClick={() => void loadCatalog()}
+              className="ui-btn text-xs"
+            >
+              重试
+            </button>
+          </div>
+        ) : null}
         {message ? <p className="text-sm text-[var(--success)]">{message}</p> : null}
+
+        {loading && !catalog ? <SkillsCatalogSkeleton /> : null}
 
         {catalog ? (
           <>
             <Section
               title="概览"
-              description="定义分类与重点关注规则，用于对话页目录生成。"
+              description="定义分类与重点关注规则，用于简报页目录生成。"
               action={
-                <button type="button" onClick={() => void openDigestEditor()} className="ui-btn ui-btn-primary text-xs">
+                <button type="button" onClick={() => void openDigestEditor()} className="ui-btn ui-btn-primary text-sm">
                   新建
                 </button>
               }
@@ -654,12 +701,12 @@ description: ${desc}
                   onChange={(e) => setDiscoveryQuery(e.target.value)}
                   placeholder="搜索…"
                   aria-label="搜索抓取 Skill"
-                  className="ui-input w-40 text-xs sm:w-48"
+                  className="ui-input w-52 text-sm sm:w-60"
                 />
               }
             >
               {filteredDiscovery.length === 0 ? (
-                <p className="border-t border-[var(--rule)] py-8 text-center text-xs text-[var(--ink-muted)]">
+                <p className="border-t border-[var(--rule)] py-8 text-center text-sm text-[var(--ink-muted)]">
                   {discoveryQuery.trim()
                     ? `没有匹配「${discoveryQuery.trim()}」的 Skill`
                     : "暂无抓取 Skill"}
