@@ -1,5 +1,6 @@
 import { streamPost, type SseCitationItem, type SseStatus } from "./utils/sse";
 import { UNGROUPED_GROUP_ID } from "./utils/feedLayout";
+import { appFetch } from "./demo/demoTransport";
 
 export const FEEDS_NEED_RELOAD_KEY = "askme.feedsNeedReload";
 
@@ -101,7 +102,7 @@ export interface ChatMessagePayload {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await appFetch(path, {
     cache: "no-store",
     headers: { "Content-Type": "application/json" },
     ...options,

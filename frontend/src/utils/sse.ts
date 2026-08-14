@@ -1,3 +1,5 @@
+import { appFetch } from "../demo/demoTransport";
+
 export interface SseStatus {
   phase?: string;
   message?: string;
@@ -56,7 +58,7 @@ export async function streamPost(
   onCancelled?: (detail: string, jobId?: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(path, {
+  const response = await appFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

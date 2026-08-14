@@ -4,6 +4,9 @@ export type MessageKey = keyof typeof en;
 
 const en = {
   appName: "Askme",
+  demoBanner: "Guided demo · Sample data · No API key required",
+  demoRunPrivate: "Run Askme privately →",
+  demoQuestionHint: "Try a suggested question",
   skipToMain: "Skip to main content",
   navMainLabel: "Main navigation",
   navBrief: "Brief",
@@ -740,6 +743,9 @@ const en = {
 
 const zh: Record<MessageKey, string> = {
   appName: "Askme",
+  demoBanner: "引导式演示 · 示例数据 · 无需 API Key",
+  demoRunPrivate: "在本机私密运行 Askme →",
+  demoQuestionHint: "试试下面的推荐问题",
   skipToMain: "跳到主内容",
   navMainLabel: "主导航",
   navBrief: "简报",
