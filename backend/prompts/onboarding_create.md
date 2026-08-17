@@ -23,4 +23,5 @@ $catalog_md
 - 在动手写代码前，先明确写出所选 ≥2 个参考 skill 的 name 与 path
 - `python skills/discovery/_lib/discovery_validate.py $slug` 必须通过
 - 可用 `$project_root/backend/.venv/bin/python` 或 `python3`
+- **难站 / 反爬**：仍须写完整 skill（列表可用 sitemap/公开 API；详情缺 Cookie 则 `ASKME_AUTH_REQUIRED` + `source.yaml` requires_cookie）。禁止只写 yaml 就结束
 - 完成后一句话说明 feed_id、所选参考 skill、与验证结果（若停在 ASKME_AUTH_REQUIRED，写出 slot）

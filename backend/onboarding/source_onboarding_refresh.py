@@ -9,7 +9,7 @@ from typing import Any
 from auth.auth_signals import auth_error_should_skip_repair, account_missing_should_skip_repair
 from feed.feed_errors import FeedError
 from core.llm import LLMError
-from onboarding.source_onboarding_cursor import load_cursor_api_key
+from onboarding.agent import has_agent_credentials
 from onboarding.source_onboarding_log import OnboardingCancelled, OnboardingSession
 from onboarding.source_skill_repair import (
     build_refresh_failure_feedback,
@@ -151,9 +151,9 @@ async def refresh_with_auto_repair(
             raise
         if not auto_repair:
             raise
-        if not load_cursor_api_key():
+        if not has_agent_credentials(getattr(session, "llm_config", None) if session else None):
             raise FeedError(
-                f"skill 已写入，但拉取失败（未配置 Cursor API Key，无法自动修复）: {first_error}",
+                f"skill 已写入，但拉取失败（未配置对话模型或 Cursor API Key，无法自动修复）: {first_error}",
                 status_code=getattr(first_exc, "status_code", 502) or 502,
             ) from first_exc
 

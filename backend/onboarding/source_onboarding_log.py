@@ -49,6 +49,7 @@ class OnboardingSession:
         self.files_written = False
         self.completed = False
         self.started_at = _now_iso()
+        self.llm_config: dict[str, Any] | None = None
         self._last_status_key: tuple[str, str] | None = None
         self._pending_tools: dict[str, bool] = {}
         self.tools_logged = 0

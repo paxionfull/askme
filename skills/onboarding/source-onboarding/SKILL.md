@@ -13,7 +13,7 @@ description: >-
 
 # 数据源接入（source-onboarding）
 
-Askme 为**具体网站**编写 discovery skill（Cursor Agent / SDK），不是 RSS，不是模板填空。
+Askme 为**具体网站**编写 discovery skill（Askme Agent / Cursor Agent），不是 RSS，不是模板填空。
 
 **动手前必读契约：** [CONTRACT.md](CONTRACT.md)（接口、HTTP、hints、登录墙）。违反契约则 pipeline 无法复用。
 
@@ -78,17 +78,20 @@ detect → 缺 Cookie 则 ASKME_AUTH_REQUIRED → probe → platform_accounts + 
 
 ## 自动化与 API（产品说明）
 
-需配置 Cursor API Key（`CURSOR_API_KEY` 或 `data/integrations.json`）。SDK 使用 `local.setting_sources=["project"]`，以便发现本 skill。
+需配置**对话模型 API Key**（设置页 LLM，Askme Agent）或 **Cursor API Key**（Cursor SDK）。优先使用已配置的用户 LLM。
 
 接入任务 prompt 会注入动态 catalog（并刷新 `_lib/DISCOVERY_SKILL_CATALOG.md`）。
 
 ```text
-agents.create → agent.send(短任务 prompt + catalog，须遵循本 skill)
+resolve_engine(askme|cursor) → agent（Askme：recon→select→implement→validate）
   → discovery_validate → reload feeds
 ```
+
+Askme Agent 与 Cursor 同一收口：写完整 skill → `discovery_validate`；
+撞 `ASKME_AUTH_REQUIRED` 则为半成功（`needs_auth`，等 Cookie），禁止只写 yaml 早停。
 
 失败且 `auto_repair` 时按报错迭代修平台/站级 skill；`ASKME_AUTH_REQUIRED` 不走自动修复。
 
 - `POST /api/sources/onboard`（SSE）
 - 日志：`data/onboarding-logs/{job_id}.jsonl`
-- 后端入口：`backend/onboarding/source_onboarding_cursor.py`、`source_platform_onboard.py`、`platform_registry.py`
+- 后端入口：`backend/onboarding/source_onboarding_cursor.py`、`onboarding/agent/`、`source_platform_onboard.py`、`platform_registry.py`

@@ -1,4 +1,4 @@
-"""修复已有 discovery skill（Cursor SDK）。"""
+"""修复已有 discovery skill（Askme / Cursor Agent）。"""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ from onboarding.onboarding_prompt_config import (
     PROMPT_REPAIR_SKILL_MD_MAX_CHARS,
     PROMPT_REPAIR_YAML_MAX_CHARS,
 )
-from onboarding.source_onboarding_cursor import _emit_status, run_cursor_skill_task
+from onboarding.agent import emit_status, has_agent_credentials, run_skill_task
 from onboarding.source_onboarding_log import OnboardingSession
 from onboarding.source_skill_writer import skill_dir_for, validate_slug
 from skills.skill_validate import run_validation
+
+_emit_status = emit_status
 
 ISSUE_TYPE_LABELS = {
     "empty_list": "列表为空或文章过少",
@@ -150,16 +152,18 @@ async def iter_auto_repair_agent(
     sample_url: str = "",
     auto_validate: bool = True,
     session: OnboardingSession | None = None,
+    llm_config: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """运行 Cursor 修复 Agent，向外抛出便于 UI 展示的 status 事件。
+    """运行修复 Agent，向外抛出便于 UI 展示的 status 事件。
 
     成功时最后 yield {{"event": "auto_repair_succeeded"}}；失败则抛 LLMError。
     """
-    from onboarding.source_onboarding_cursor import load_cursor_api_key
-
-    if not load_cursor_api_key():
+    cfg = llm_config
+    if cfg is None and session is not None:
+        cfg = getattr(session, "llm_config", None)
+    if not has_agent_credentials(cfg):
         raise LLMError(
-            f"失败且未配置 Cursor API Key，无法自动修复: {error or feedback[:200]}",
+            f"失败且未配置对话模型或 Cursor API Key，无法自动修复: {error or feedback[:200]}",
             status_code=400,
         )
 
@@ -187,6 +191,7 @@ async def iter_auto_repair_agent(
             sample_url=sample,
             auto_validate=auto_validate,
             session=session,
+            llm_config=cfg,
         ):
             kind = event.get("event", "status")
             if kind == "result":
@@ -339,6 +344,7 @@ async def run_skill_repair_agent(
     sample_url: str = "",
     auto_validate: bool = True,
     session: OnboardingSession | None = None,
+    llm_config: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     safe_slug = validate_slug(slug)
     skill_dir = skill_dir_for(safe_slug)
@@ -348,6 +354,12 @@ async def run_skill_repair_agent(
     discover_path = skill_dir / "scripts" / "discover.py"
     if not discover_path.is_file():
         raise LLMError(f"缺少 discover.py: {discover_path}", status_code=400)
+
+    cfg = llm_config
+    if cfg is None and session is not None:
+        cfg = getattr(session, "llm_config", None)
+    if session is not None and cfg is not None:
+        session.llm_config = cfg
 
     name = safe_slug.replace("-", " ").title()
     skill_md_path = skill_dir / "SKILL.md"
@@ -366,7 +378,7 @@ async def run_skill_repair_agent(
             issue_types=issue_types or [],
         )
 
-    yield _emit_status(session, phase="repair", message="正在准备修复任务…")
+    yield emit_status(session, phase="repair", message="正在准备修复任务…")
 
     prompt = build_repair_prompt(
         slug=safe_slug,
@@ -377,16 +389,23 @@ async def run_skill_repair_agent(
         sample_url=sample_url,
     )
 
-    async for event in run_cursor_skill_task(
+    async for event in run_skill_task(
         slug=safe_slug,
         prompt=prompt,
         auto_validate=auto_validate,
         session=session,
-        result_engine="cursor_sdk_repair",
         mark_files_written=False,
+        llm_config=cfg,
     ):
         if event.get("event") == "result":
             data = event.get("data") or {}
             data["repaired"] = True
+            analysis = data.get("analysis") if isinstance(data.get("analysis"), dict) else {}
+            if isinstance(analysis, dict):
+                engine = str(analysis.get("engine") or "")
+                if engine == "askme":
+                    analysis["engine"] = "askme_repair"
+                elif engine in {"cursor_sdk", "cursor"}:
+                    analysis["engine"] = "cursor_sdk_repair"
             event = {**event, "data": data}
         yield event

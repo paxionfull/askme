@@ -13,7 +13,8 @@ from core.llm import LLMError, sse_event
 from feed.feed_errors import FeedError
 from feed.feed_registry import UNGROUPED_GROUP_ID, feed_registry
 from onboarding.source_onboarding_batch import cancel_batch, get_batch, start_batch
-from onboarding.source_onboarding_cursor import cancel_cursor_run, run_onboarding_agent
+from onboarding.agent import cancel_agent_run
+from onboarding.source_onboarding_cursor import run_onboarding_agent
 from onboarding.source_onboarding_log import (
     OnboardingCancelled,
     cancel_job,
@@ -70,6 +71,7 @@ async def _sse_onboard_stream(body: OnboardSourceRequest, request: Request):
         session = create_session(entry_url=entry_url, slug=slug, name=name)
         watcher = asyncio.create_task(_watch_onboard_disconnect(request, session))
         llm_config = body.llm_config.model_dump() if body.llm_config else None
+        session.llm_config = llm_config
         target_group_id = _resolve_onboard_group_id(body.group_id)
         onboard_days = max(1, min(30, int(body.days)))
         result_data: dict | None = None
@@ -78,7 +80,7 @@ async def _sse_onboard_stream(body: OnboardSourceRequest, request: Request):
             "status",
             {
                 "phase": "start",
-                "message": "Cursor 接入已启动",
+                "message": "数据源接入已启动",
                 "job_id": session.job_id,
                 "slug": slug,
                 "entry_url": entry_url,
@@ -105,6 +107,28 @@ async def _sse_onboard_stream(body: OnboardSourceRequest, request: Request):
                     feed_client.reload_skills()
                     result_data["feed_count"] = len(await feed_client.list_feeds())
                 feed_id = str(result_data.get("feed_id") or "").strip()
+
+                # 与 batch 对齐：完整 skill + 需 Cookie → 半成功，不首拉
+                if result_data.get("needs_auth"):
+                    if target_group_id and feed_id:
+                        feed_registry.assign_feed_to_group(feed_id, target_group_id)
+                    result_data["job_id"] = session.job_id
+                    session.finish(success=True, detail=result_data)
+                    yield sse_event(
+                        "status",
+                        {
+                            "phase": "needs_auth",
+                            "message": str(
+                                result_data.get("auth_error")
+                                or "Skill 已写入，请配置 Cookie 后验证/刷新"
+                            ),
+                            "job_id": session.job_id,
+                            "feed_id": feed_id,
+                        },
+                    )
+                    yield sse_event("result", result_data)
+                    continue
+
                 if feed_id:
                     yield sse_event(
                         "status",
@@ -249,7 +273,7 @@ async def _sse_repair_stream(slug: str, body: RepairSourceRequest, request: Requ
             "status",
             {
                 "phase": "start",
-                "message": "Cursor 修复任务已启动",
+                "message": "Skill 修复任务已启动",
                 "job_id": session.job_id,
                 "slug": safe_slug,
             },
@@ -374,7 +398,7 @@ async def onboard_source(body: OnboardSourceRequest, request: Request):
 
 @router.post("/api/sources/onboard/cancel")
 async def cancel_onboard_source(body: CancelOnboardRequest):
-    await cancel_cursor_run(body.job_id)
+    await cancel_agent_run(body.job_id)
     if cancel_job(body.job_id):
         return {"ok": True, "job_id": body.job_id}
     raise HTTPException(status_code=404, detail="任务不存在或已结束")

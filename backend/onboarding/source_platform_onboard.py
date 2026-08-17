@@ -1,4 +1,4 @@
-"""已知平台的确定性接入（不走从零写代码）；失败时用 Cursor Agent 按报错迭代修复。"""
+"""已知平台的确定性接入（不走从零写代码）；失败时用 Agent 按报错迭代修复。"""
 
 from __future__ import annotations
 
@@ -36,10 +36,11 @@ def _raise_if_auth_gate(detail: str, *, slot: str) -> None:
     )
 
 
-def _has_cursor_api_key() -> bool:
-    from onboarding.source_onboarding_cursor import load_cursor_api_key
+def _has_agent_credentials(session: OnboardingSession | None = None) -> bool:
+    from onboarding.agent import has_agent_credentials
 
-    return bool(load_cursor_api_key())
+    cfg = getattr(session, "llm_config", None) if session else None
+    return has_agent_credentials(cfg)
 
 
 def _emit_status(
@@ -114,7 +115,7 @@ async def _repair_probe_failure(
     if not auto_repair:
         raise LLMError(f"{spec.label}探测失败: {detail}", status_code=502)
 
-    if not _has_cursor_api_key():
+    if not _has_agent_credentials(session):
         if soft_without_key:
             yield _emit_status(
                 session,
@@ -124,7 +125,7 @@ async def _repair_probe_failure(
             yield ("done", probe)
             return
         raise LLMError(
-            f"{spec.label} API 探测失败（未配置 Cursor API Key，无法自动修复）: {detail}",
+            f"{spec.label} API 探测失败（未配置对话模型或 Cursor API Key，无法自动修复）: {detail}",
             status_code=502,
         )
 
@@ -393,7 +394,7 @@ async def run_platform_onboarding(
                             f"skill 验证失败: {last_error}",
                             status_code=502,
                         ) from exc
-                    if not auto_repair or not _has_cursor_api_key():
+                    if not auto_repair or not _has_agent_credentials(session):
                         _ensure_platform_registered(platform, display_name=display_name)
                         continue
                     repair_slug = _platform_repair_slug(platform)

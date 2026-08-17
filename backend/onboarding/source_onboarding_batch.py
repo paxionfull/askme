@@ -18,7 +18,8 @@ from auth.auth_signals import (
 )
 from feed.feed_errors import FeedError
 from core.llm import LLMError
-from onboarding.source_onboarding_cursor import cancel_cursor_run, load_cursor_api_key, run_onboarding_agent
+from onboarding.agent import cancel_agent_run, has_agent_credentials
+from onboarding.source_onboarding_cursor import run_onboarding_agent
 from onboarding.source_onboarding_log import (
     OnboardingCancelled,
     create_session,
@@ -718,8 +719,11 @@ def _prepare_item(entry_url: str, seen_slugs: set[str]) -> BatchItem:
     return item
 
 
-def _needs_cursor_agent(entry_url: str) -> bool:
+def _needs_coding_agent(entry_url: str) -> bool:
     return detect_platform(entry_url.strip()) is None
+
+
+_needs_cursor_agent = _needs_coding_agent
 
 
 async def _schedule_reload(feed_client) -> None:
@@ -884,6 +888,22 @@ async def _run_item(
                 if kind == "result":
                     data = event.get("data") or {}
                     item.feed_id = str(data.get("feed_id") or f"website:{item.slug}")
+
+                    # runtime 已判定半成功：跳过首拉，与单次接入一致
+                    if data.get("needs_auth"):
+                        _mark_needs_auth(
+                            item,
+                            str(data.get("auth_error") or "需要登录授权"),
+                        )
+                        _assign_item_group(item, batch)
+                        session.finish(
+                            success=True,
+                            detail={**data, "needs_auth": True},
+                        )
+                        if batch.reload:
+                            await _schedule_reload(feed_client)
+                        break
+
                     try:
                         refresh_result: dict[str, Any] | None = None
                         async for refresh_event in refresh_with_auto_repair(
@@ -1174,15 +1194,15 @@ async def append_to_batch(
                 existing_keys.add(item.entry_url)
         batch.items.append(item)
 
-    needs_cursor = any(
+    needs_agent = any(
         item.status == "queued"
         and not item.reuse_existing
-        and _needs_cursor_agent(item.entry_url)
+        and _needs_coding_agent(item.entry_url)
         for item in batch.items
     )
-    if needs_cursor and not load_cursor_api_key():
+    if needs_agent and not has_agent_credentials():
         raise LLMError(
-            "请先在设置页配置 Cursor API Key（Dashboard → Integrations）",
+            "请先在设置页配置对话模型 API Key，或配置 Cursor API Key（未知站接入需要其一）",
             status_code=400,
         )
 
@@ -1229,11 +1249,11 @@ async def start_batch(
         item.group_id = gid
     queued = [item for item in items if item.status == "queued"]
 
-    if queued and not load_cursor_api_key():
-        needs_cursor = any(_needs_cursor_agent(item.entry_url) for item in queued)
-        if needs_cursor:
+    if queued and not has_agent_credentials():
+        needs_agent = any(_needs_coding_agent(item.entry_url) for item in queued)
+        if needs_agent:
             raise LLMError(
-                "请先在设置页配置 Cursor API Key（Dashboard → Integrations）",
+                "请先在设置页配置对话模型 API Key，或配置 Cursor API Key（未知站接入需要其一）",
                 status_code=400,
             )
 
@@ -1280,7 +1300,7 @@ async def cancel_batch(batch_id: str) -> bool:
             item.status = "cancelled"
             item.message = "已取消"
         elif item.status == "running" and item.job_id:
-            await cancel_cursor_run(item.job_id)
+            await cancel_agent_run(item.job_id)
             from onboarding.source_onboarding_log import cancel_job
 
             cancel_job(item.job_id)
