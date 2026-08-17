@@ -12,7 +12,6 @@ import { useLocale } from "../../i18n/LocaleContext";
 import { formatMessage } from "../../i18n/messages";
 import { isLlmConfigured, useSettings } from "../../hooks/useSettings";
 import { settingsAuthPath } from "../../utils/authSlot";
-import { isDemoMode } from "../../demo/demoMode";
 
 const navItems = [
   { to: "/", labelKey: "navBrief" as const, end: true, Icon: IconBrief },
@@ -318,8 +317,6 @@ function AppShellContent() {
   const { refreshBusy } = useFeedRefresh();
   const [helpOpen, setHelpOpen] = useState(false);
   const llmConfigured = isLlmConfigured(settings);
-  const demoMode = isDemoMode();
-  const visibleNavItems = demoMode ? navItems.filter((item) => item.to === "/") : navItems;
   const sourcesInProgress =
     loadingBodies ||
     loadingIndex ||
@@ -347,20 +344,6 @@ function AppShellContent() {
         />
       )}
 
-      {demoMode ? (
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-1.5 border-b border-[var(--rule)] bg-[var(--accent-soft)] px-4 py-2 text-xs leading-5 text-[var(--accent)] sm:gap-3 sm:px-5">
-          <span>{t("demoBanner")}</span>
-          <a
-            href="https://github.com/paxionfull/askme"
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium hover:underline"
-          >
-            {t("demoRunPrivate")}
-          </a>
-        </div>
-      ) : null}
-
       <OnboardingBanner />
       <FeedRefreshBanner />
       <DigestJobBanner />
@@ -371,7 +354,7 @@ function AppShellContent() {
             <img src="/logo.svg" alt={t("appName")} width={28} height={28} />
           </div>
           <nav className="flex flex-1 flex-col py-2" aria-label={t("navMainLabel")}>
-            {visibleNavItems.map(({ to, labelKey, end, Icon }) => (
+            {navItems.map(({ to, labelKey, end, Icon }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -407,7 +390,7 @@ function AppShellContent() {
       </div>
 
       <nav className="app-bottom-nav" aria-label={t("navMainLabel")}>
-        {visibleNavItems.map(({ to, labelKey, end, Icon }) => (
+        {navItems.map(({ to, labelKey, end, Icon }) => (
           <NavLink
             key={to}
             to={to}

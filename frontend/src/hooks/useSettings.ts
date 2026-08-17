@@ -4,7 +4,6 @@ import { clearLlmSettings, fetchLlmSettings, saveLlmSettings } from "../api";
 import type { Locale } from "../i18n/locale";
 import { readStoredLocale } from "../i18n/locale";
 import { formatMessage } from "../i18n/messages";
-import { isDemoMode } from "../demo/demoMode";
 
 export type DefaultDays = 1 | 3;
 
@@ -142,7 +141,6 @@ export function getLlmConfigPayload(settings?: AppSettings): LlmConfigPayload {
 }
 
 export function isLlmConfigured(settings: AppSettings): boolean {
-  if (isDemoMode()) return true;
   return settings.llmApiKey.trim().length > 0 && settings.llmModel.trim().length > 0;
 }
 

@@ -28,8 +28,6 @@ import { formatDaysLabel, isLlmConfigured, useSettings } from "../hooks/useSetti
 import { useLocale } from "../i18n/LocaleContext";
 import { formatMessage, type MessageKey } from "../i18n/messages";
 import { UNGROUPED_GROUP_ID } from "../utils/feedLayout";
-import { isDemoMode } from "../demo/demoMode";
-import { demoQuestions } from "../demo/demoFixtures";
 import {
   buildDigestExportFilename,
   buildDigestMarkdownFromText,
@@ -1134,23 +1132,6 @@ export default function ChatPage() {
             ) : (
               <div className="mx-auto max-w-[40rem]">
                 <p className="text-sm font-medium tracking-tight text-[var(--ink)]">{t("chatHowToUse")}</p>
-                {isDemoMode() ? (
-                  <div className="mt-4">
-                    <p className="text-xs text-[var(--ink-muted)]">{t("demoQuestionHint")}</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {demoQuestions.map((question) => (
-                        <button
-                          key={question}
-                          type="button"
-                          className="ui-btn ui-btn-accent text-left text-xs"
-                          onClick={() => void sendMessage(question)}
-                        >
-                          {question}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
                 <ul className="mt-3 list-none space-y-2 text-xs leading-5 text-[var(--ink-muted)]">
                   <li>
                     <span className="font-medium text-[var(--ink)]">{t("chatSummaryLabel")}</span>

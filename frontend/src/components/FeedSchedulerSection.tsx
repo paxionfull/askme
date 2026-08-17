@@ -13,7 +13,6 @@ import {
   SCHEDULES_UPDATED_EVENT,
   clampEveryHours,
   formatScheduleSummary,
-  mergeDrafts,
   notifySchedulesUpdated,
   parseDrafts,
   schedulesEqual,
@@ -186,27 +185,43 @@ export default function FeedSchedulerSection() {
 
   function updateDraft(id: string, patch: Partial<ScheduleTime>) {
     setDrafts((current) =>
-      mergeDrafts(current.map((item) => (item.id === id ? { ...item, ...patch } : item))),
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
     );
     setSaved(false);
   }
 
+  function nextDailySlot(current: ScheduleDraft[]): { hour: number; minute: number } {
+    const used = new Set(
+      current
+        .filter((item) => item.kind !== "interval")
+        .map((item) => `${item.hour}:${item.minute}`),
+    );
+    for (let hour = 8; hour < 24; hour += 1) {
+      if (!used.has(`${hour}:0`)) return { hour, minute: 0 };
+    }
+    for (let minute = 15; minute < 60; minute += 15) {
+      if (!used.has(`8:${minute}`)) return { hour: 8, minute };
+    }
+    return { hour: 8, minute: 0 };
+  }
+
   function handleAddSchedule() {
     const defaultGroupId = groupOptions[0]?.id;
-    setDrafts((current) =>
-      mergeDrafts([
+    setDrafts((current) => {
+      const slot = nextDailySlot(current);
+      return [
         ...current,
         {
           id: `new-${Date.now()}`,
           kind: "daily",
-          hour: 8,
-          minute: 0,
+          hour: slot.hour,
+          minute: slot.minute,
           second: 0,
           every_hours: 6,
           group_ids: defaultGroupId ? [defaultGroupId] : [],
         },
-      ]),
-    );
+      ];
+    });
     setSaved(false);
   }
 
