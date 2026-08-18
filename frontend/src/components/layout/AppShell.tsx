@@ -351,7 +351,8 @@ function AppShellContent() {
       <div className="flex min-h-0 flex-1 bg-[var(--surface)]">
         <aside className="app-sidebar" aria-label={t("appName")}>
           <div className="app-sidebar-brand">
-            <img src="/logo.svg" alt={t("appName")} width={28} height={28} />
+            <img src="/logo.svg" alt="" width={24} height={24} />
+            <span className="app-sidebar-wordmark">{t("appName")}</span>
           </div>
           <nav className="flex flex-1 flex-col py-2" aria-label={t("navMainLabel")}>
             {navItems.map(({ to, labelKey, end, Icon }) => (
@@ -359,11 +360,9 @@ function AppShellContent() {
                 key={to}
                 to={to}
                 end={end}
-                title={t(labelKey)}
-                aria-label={t(labelKey)}
                 className={({ isActive }) => `app-nav-link${isActive ? " is-active" : ""}`}
               >
-                <Icon className="h-5 w-5 shrink-0" />
+                <Icon className="h-4 w-4 shrink-0" />
                 <span className="app-nav-label">{t(labelKey)}</span>
                 {to === "/" && chatInProgress && <span className="app-nav-dot" aria-hidden="true" />}
                 {to === "/sources" && sourcesInProgress && <span className="app-nav-dot" aria-hidden="true" />}
@@ -373,11 +372,9 @@ function AppShellContent() {
             <button
               type="button"
               onClick={() => setHelpOpen(true)}
-              className="app-nav-link mx-auto"
-              title={t("navHelp")}
-              aria-label={t("navHelp")}
+              className="app-nav-link"
             >
-              <IconHelp className="h-5 w-5 shrink-0" />
+              <IconHelp className="h-4 w-4 shrink-0" />
               <span className="app-nav-label">{t("navHelp")}</span>
             </button>
             <LanguageToggle />

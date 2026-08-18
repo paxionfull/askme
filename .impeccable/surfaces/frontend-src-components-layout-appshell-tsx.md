@@ -31,4 +31,5 @@ Power users triaging source updates: scan digest first, ask follow-ups without l
 
 ## Status
 
-- Direction approved 2026-08-08; build in progress from Comp C
+- Direction approved 2026-08-08
+- Layout pass 2026-08-18: ~10rem text nav, Brief-full stage, Ask as bottom dock + on-demand drawer; header collapsed to one toolbar row

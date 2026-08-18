@@ -22,7 +22,6 @@ import SummaryMarkdown, {
 } from "../components/SummaryMarkdown";
 import { useChat } from "../contexts/ChatContext";
 import { useDigest } from "../contexts/DigestContext";
-import { useResizableRatio } from "../hooks/useResizableRatio";
 import { useIndexBuildConfirm } from "../hooks/useIndexBuildConfirm";
 import { formatDaysLabel, isLlmConfigured, useSettings } from "../hooks/useSettings";
 import { useLocale } from "../i18n/LocaleContext";
@@ -193,29 +192,12 @@ export default function ChatPage() {
   const [showPromptPreview, setShowPromptPreview] = useState(false);
   const [exportDone, setExportDone] = useState(false);
   const [regenConfirmOpen, setRegenConfirmOpen] = useState(false);
-  const [mobilePane, setMobilePane] = useState<"brief" | "ask">("brief");
+  const [askDrawerOpen, setAskDrawerOpen] = useState(false);
   const exportResetTimerRef = useRef<number | null>(null);
   const displaySummary = generating ? summary : chatSummary;
   const showTree = Boolean(!generating && digestTree);
   const hasOverview = Boolean(displaySummary || digestTree || generating);
 
-  const {
-    containerRef,
-    askPercent,
-    briefPercent,
-    dragging,
-    onPointerDown,
-    onPointerMove,
-    onPointerUp,
-    onPointerCancel,
-    resetRatio,
-    nudgeRatio,
-  } = useResizableRatio({
-    storageKey: "askme.brief.askPaneRatio",
-    defaultRatio: 0.32,
-    minRatio: 0.22,
-    maxRatio: 0.55,
-  });
   const todayLabel = (() => {
     const now = new Date();
     if (locale === "zh") {
@@ -436,6 +418,10 @@ export default function ChatPage() {
       needIndex: !effectiveRagReady,
     };
   })();
+
+  useEffect(() => {
+    if (messages.length > 0) setAskDrawerOpen(true);
+  }, [messages.length]);
 
   const focusChatInput = useCallback(() => {
     const el = chatInputRef.current;
@@ -747,178 +733,149 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full flex-col bg-[var(--paper)]">
-      <header className="app-page-header px-5 pb-3 pt-4 sm:px-6">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1.5">
-          <h1 className="app-page-title min-w-0 text-[var(--ink)]">
+      <header className="app-page-header">
+        <div className="brief-home-bar">
+          <h1 className="app-page-title brief-home-date min-w-0 text-[var(--ink)]">
             {todayLabel.date}
-            <span className="ml-1.5 text-[0.9375rem] font-medium text-[var(--ink-muted)]">
-              · {todayLabel.weekday}
-            </span>
+            <span className="brief-home-weekday"> · {todayLabel.weekday}</span>
           </h1>
-          {hasOverview && !generating ? (
-            <button
-              type="button"
-              onClick={handleExportMarkdown}
-              title={exportDone ? t("briefExportedTitle") : t("briefExportTitle")}
-              className="brief-export-btn ui-btn ui-btn-ghost"
-            >
-              {exportDone ? t("briefExported") : t("briefExportMd")}
-            </button>
-          ) : null}
-        </div>
-
-        <div className="brief-toolbar" role="group" aria-label={t("briefScope")}>
-          <div className="brief-toolbar-fields">
-            <label className="brief-toolbar-field">
-              <span>{t("briefGroup")}</span>
-              <select
-                value={selectedGroupId ?? ""}
-                onChange={(e) => setSelectedSummaryGroup(e.target.value)}
-                disabled={summaryGroupOptions.length === 0 || digestBusy}
-                className="ui-select min-w-0 truncate disabled:opacity-50"
-                aria-label={t("briefSelectGroup")}
-              >
-                {summaryGroupOptions.length === 0 ? (
-                  <option value="">{t("briefNoGroups")}</option>
-                ) : (
-                  summaryGroupOptions.map((group) => (
-                    <option key={group.id} value={group.id}>
-                      {group.name}
-                    </option>
-                  ))
-                )}
-              </select>
-            </label>
-            <label className="brief-toolbar-field">
-              <span>{t("briefRange")}</span>
-              <DaysRangeSelect
-                value={days}
-                onChange={setDays}
-                disabled={digestBusy}
-                size="sm"
-                className="shrink-0"
-              />
-            </label>
-            {selectedGroupId && !isUngrouped ? (
-              <label className={`brief-toolbar-field ${hasRuleBound ? "" : "is-unset"}`}>
-                <span>{t("briefRule")}</span>
+          <div className="brief-toolbar" role="group" aria-label={t("briefScope")}>
+            <div className="brief-toolbar-fields">
+              <label className="brief-toolbar-field">
+                <span>{t("briefGroup")}</span>
                 <select
-                  value={selectedGroup?.digestSkillId ?? ""}
-                  onChange={(e) => void bindRuleToSelectedGroup(e.target.value)}
-                  disabled={digestBusy || savingRule || digestSkills.length === 0}
+                  value={selectedGroupId ?? ""}
+                  onChange={(e) => setSelectedSummaryGroup(e.target.value)}
+                  disabled={summaryGroupOptions.length === 0 || digestBusy}
                   className="ui-select min-w-0 truncate disabled:opacity-50"
-                  aria-label={t("briefSelectRule")}
-                  title={hasRuleBound ? boundRuleName : t("briefRuleRequiredTitle")}
+                  aria-label={t("briefSelectGroup")}
                 >
-                  <option value="">{t("briefUnset")}</option>
-                  {digestSkills.map((skill) => (
-                    <option key={skill.id} value={skill.id}>
-                      {skill.name || skill.id}
-                    </option>
-                  ))}
+                  {summaryGroupOptions.length === 0 ? (
+                    <option value="">{t("briefNoGroups")}</option>
+                  ) : (
+                    summaryGroupOptions.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.name}
+                      </option>
+                    ))
+                  )}
                 </select>
               </label>
+              <label className="brief-toolbar-field">
+                <span>{t("briefRange")}</span>
+                <DaysRangeSelect
+                  value={days}
+                  onChange={setDays}
+                  disabled={digestBusy}
+                  size="sm"
+                  className="shrink-0"
+                />
+              </label>
+              {selectedGroupId && !isUngrouped ? (
+                <label className={`brief-toolbar-field ${hasRuleBound ? "" : "is-unset"}`}>
+                  <span>{t("briefRule")}</span>
+                  <select
+                    value={selectedGroup?.digestSkillId ?? ""}
+                    onChange={(e) => void bindRuleToSelectedGroup(e.target.value)}
+                    disabled={digestBusy || savingRule || digestSkills.length === 0}
+                    className="ui-select min-w-0 truncate disabled:opacity-50"
+                    aria-label={t("briefSelectRule")}
+                    title={hasRuleBound ? boundRuleName : t("briefRuleRequiredTitle")}
+                  >
+                    <option value="">{t("briefUnset")}</option>
+                    {digestSkills.map((skill) => (
+                      <option key={skill.id} value={skill.id}>
+                        {skill.name || skill.id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </div>
+
+            <div className="brief-toolbar-actions">
+              {generating || !hasOverview ? (
+                <button
+                  type="button"
+                  disabled={
+                    generating
+                      ? false
+                      : digestBusy ||
+                        !isLlmConfigured(settings) ||
+                        !selectedGroupId ||
+                        !hasRuleBound
+                  }
+                  onClick={() => {
+                    if (generating) {
+                      void stopSummarize();
+                      return;
+                    }
+                    void startSummarize();
+                  }}
+                  className={generating ? "ui-btn" : "ui-btn ui-btn-primary"}
+                  title={
+                    generating
+                      ? t("briefStopTitle")
+                      : !hasRuleBound
+                        ? t("briefNeedRuleTitle")
+                        : t("briefGenerateTitle")
+                  }
+                >
+                  {generating ? t("briefStopGenerate") : t("briefGenerate")}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={digestBusy || !isLlmConfigured(settings) || !selectedGroupId || !hasRuleBound}
+                  onClick={() => setRegenConfirmOpen(true)}
+                  className="ui-btn"
+                  title={t("briefRegenTitle")}
+                >
+                  {t("briefRegenerate")}
+                </button>
+              )}
+              {hasOverview && !generating ? (
+                <button
+                  type="button"
+                  onClick={handleExportMarkdown}
+                  title={exportDone ? t("briefExportedTitle") : t("briefExportTitle")}
+                  className="brief-export-btn ui-btn ui-btn-ghost"
+                >
+                  {exportDone ? t("briefExported") : t("briefExportMd")}
+                </button>
+              ) : null}
+            </div>
+
+            {hasOverview && !generating ? (
+              <span className="brief-toolbar-status is-ok">{t("briefReady")}</span>
+            ) : statusLine ? (
+              <span
+                className={`brief-toolbar-status ${
+                  statusLine === t("briefNoIndexStatus") || statusLine === t("briefNeedRuleStatus")
+                    ? ""
+                    : "is-warn"
+                }`}
+              >
+                {statusLine}
+              </span>
             ) : null}
           </div>
-
-          <div className="brief-toolbar-actions">
-            {generating || !hasOverview ? (
-              <button
-                type="button"
-                disabled={
-                  generating
-                    ? false
-                    : digestBusy ||
-                      !isLlmConfigured(settings) ||
-                      !selectedGroupId ||
-                      !hasRuleBound
-                }
-                onClick={() => {
-                  if (generating) {
-                    void stopSummarize();
-                    return;
-                  }
-                  void startSummarize();
-                }}
-                className={generating ? "ui-btn" : "ui-btn ui-btn-primary"}
-                title={
-                  generating
-                    ? t("briefStopTitle")
-                    : !hasRuleBound
-                      ? t("briefNeedRuleTitle")
-                      : t("briefGenerateTitle")
-                }
-              >
-                {generating ? t("briefStopGenerate") : t("briefGenerate")}
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={digestBusy || !isLlmConfigured(settings) || !selectedGroupId || !hasRuleBound}
-                onClick={() => setRegenConfirmOpen(true)}
-                className="ui-btn"
-                title={t("briefRegenTitle")}
-              >
-                {t("briefRegenerate")}
-              </button>
-            )}
-          </div>
-
-          {hasOverview && !generating ? (
-            <span className="brief-toolbar-status is-ok">{t("briefReady")}</span>
-          ) : statusLine ? (
-            <span
-              className={`brief-toolbar-status ${
-                statusLine === t("briefNoIndexStatus") || statusLine === t("briefNeedRuleStatus")
-                  ? ""
-                  : "is-warn"
-              }`}
-            >
-              {statusLine}
-            </span>
-          ) : null}
         </div>
 
         {!hasOverview && !loadingSummary ? (
-          <p className="mt-2 text-[0.75rem] leading-5 text-[var(--ink-muted)]">{t("briefHint")}</p>
+          <p className="brief-home-hint">{t("briefHint")}</p>
         ) : null}
         {summaryError ? (
-          <p className="mt-2 text-[0.75rem] text-[var(--danger-text)]" role="alert">
+          <p className="brief-home-hint text-[var(--danger-text)]" role="alert">
             {summaryError}
           </p>
         ) : null}
       </header>
 
-      <div className="app-brief-mobile-tabs" role="tablist" aria-label={t("briefLabel")}>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mobilePane === "brief"}
-          className={mobilePane === "brief" ? "is-active" : ""}
-          onClick={() => setMobilePane("brief")}
-        >
-          {t("briefShowDigest")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mobilePane === "ask"}
-          className={mobilePane === "ask" ? "is-active" : ""}
-          onClick={() => setMobilePane("ask")}
-        >
-          {t("briefShowAsk")}
-        </button>
-      </div>
-
-      <div
-        ref={containerRef}
-        className={`app-brief-split flex min-h-0 flex-1 ${dragging ? "cursor-col-resize select-none" : ""}`}
+      <section
+        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--paper)]"
+        aria-label={t("briefLabel")}
       >
-        <section
-          className={`app-brief-overview-pane flex min-w-0 flex-1 flex-col overflow-hidden border-r border-[var(--rule)] bg-[var(--paper)] ${
-            mobilePane === "ask" ? "is-mobile-hidden" : ""
-          }`}
-        >
           <div ref={overviewScrollRef} className="flex-1 overflow-y-auto">
             {generating ? (
               <div className="px-5 pt-5 sm:px-8">
@@ -998,58 +955,11 @@ export default function ChatPage() {
               </div>
             ) : null}
           </div>
-        </section>
+      </section>
 
         <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label={t("briefResizeLabel")}
-          aria-valuemin={22}
-          aria-valuemax={55}
-          aria-valuenow={askPercent}
-          tabIndex={0}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerCancel}
-          onDoubleClick={resetRatio}
-          onKeyDown={(e) => {
-            const step = e.shiftKey ? 0.05 : 0.02;
-            if (e.key === "ArrowLeft") {
-              nudgeRatio(step);
-              e.preventDefault();
-            } else if (e.key === "ArrowRight") {
-              nudgeRatio(-step);
-              e.preventDefault();
-            } else if (e.key === "Home") {
-              resetRatio();
-              e.preventDefault();
-            }
-          }}
-          className="app-brief-resizer group relative z-10 w-1.5 shrink-0 cursor-col-resize bg-transparent"
-        >
-          <div
-            className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-[width,background] ${
-              dragging
-                ? "w-0.5 bg-[var(--accent)]"
-                : "bg-[var(--rule)] group-hover:w-0.5 group-hover:bg-[var(--accent)] group-focus-visible:w-0.5 group-focus-visible:bg-[var(--accent)]"
-            }`}
-          />
-          <div className="absolute inset-y-0 -left-1 -right-1" />
-          {dragging ? (
-            <span className="pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-[var(--ink)] px-2 py-0.5 text-[11px] text-[var(--paper-raised)]">
-              {t("briefLabel")} {briefPercent}% · {t("briefAsk")} {askPercent}%
-            </span>
-          ) : null}
-        </div>
-
-        <aside
-          aria-label={t("briefAsk")}
-          style={{ width: `${askPercent}%`, minWidth: 240, maxWidth: "55%" }}
-          className={`app-brief-ask-pane relative flex min-w-0 shrink-0 flex-col border-l border-[var(--rule)] bg-[var(--paper-raised)] ${
-            mobilePane === "brief" ? "is-mobile-hidden" : ""
-          } ${dropActive ? "bg-[color-mix(in_srgb,var(--accent-soft)_40%,transparent)]" : ""} ${
-            dragging ? "transition-none" : ""
+          className={`app-ask-stack ${
+            dropActive ? "bg-[color-mix(in_srgb,var(--accent-soft)_40%,transparent)]" : ""
           }`}
           onDragOver={handleArticleDragOver}
           onDragLeave={handleArticleDragLeave}
@@ -1064,9 +974,22 @@ export default function ChatPage() {
           </div>
         ) : null}
 
-        <header className="border-b border-[var(--rule)] px-4 py-3">
-          <h2 className="text-sm font-semibold tracking-tight text-[var(--ink)]">{t("briefAsk")}</h2>
-        </header>
+        {askDrawerOpen ? (
+        <section
+          id="ask-drawer"
+          className="app-ask-drawer"
+          aria-label={t("briefAsk")}
+        >
+        <div className="app-ask-drawer-head">
+          <h2 className="app-ask-drawer-title">{t("briefAsk")}</h2>
+          <button
+            type="button"
+            className="brief-export-btn ui-btn ui-btn-ghost"
+            onClick={() => setAskDrawerOpen(false)}
+          >
+            {t("close")}
+          </button>
+        </div>
 
         {error ? (
           <div
@@ -1092,7 +1015,7 @@ export default function ChatPage() {
           </details>
         ) : null}
 
-        <div ref={messagesScrollRef} className="flex-1 overflow-y-auto px-5 py-5">
+        <div ref={messagesScrollRef} className="app-ask-drawer-body">
           {messages.length === 0 ? (
             emptyState?.kind === "generating" ? (
               <div className="flex h-full items-start justify-center pt-8">
@@ -1278,8 +1201,32 @@ export default function ChatPage() {
             </div>
           )}
         </div>
+        </section>
+        ) : null}
 
-        <div className="border-t border-[var(--rule)] bg-[var(--paper-raised)] px-5 py-3">
+        {!askDrawerOpen && error ? (
+          <div
+            className="border-t border-[var(--rule)] bg-[var(--error-soft)] px-5 py-2 text-sm text-[var(--danger-text)]"
+            role="alert"
+          >
+            {error}
+          </div>
+        ) : null}
+
+        <div className="app-ask-dock">
+          {messages.length > 0 && !askDrawerOpen ? (
+            <div className="mx-auto mb-2 flex max-w-[40rem] justify-end">
+              <button
+                type="button"
+                className="brief-export-btn ui-btn ui-btn-ghost"
+                aria-expanded={false}
+                aria-controls="ask-drawer"
+                onClick={() => setAskDrawerOpen(true)}
+              >
+                {t("askShowConversation")}
+              </button>
+            </div>
+          ) : null}
           <ScopedArticlesBar
             articles={scopedArticles}
             onRemove={removeScopedArticle}
@@ -1363,8 +1310,7 @@ export default function ChatPage() {
           onOpenChange={setCitationOpen}
           onSelect={setActiveCitationIndex}
         />
-        </aside>
-      </div>
+        </div>
       <IndexBuildConfirmModal />
       <ConfirmModal
         open={regenConfirmOpen}

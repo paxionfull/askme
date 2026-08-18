@@ -26,22 +26,22 @@ export default function FakeAppShell({
     <div className={`sb-app-shell flex ${heightClassName} bg-[var(--surface)] text-[var(--ink)]`}>
       <aside className="app-sidebar shrink-0" aria-hidden="true">
         <div className="app-sidebar-brand">
-          <span className="text-xs font-semibold text-[var(--ink)]">{t("appName")}</span>
+          <img src="/logo.svg" alt="" width={24} height={24} />
+          <span className="app-sidebar-wordmark">{t("appName")}</span>
         </div>
         <nav className="flex flex-1 flex-col py-2">
           {items.map(({ id, label, Icon }) => (
             <div
               key={id}
               className={`app-nav-link${activeNav === id ? " is-active" : ""}`}
-              title={label}
             >
-              <Icon className="h-5 w-5 shrink-0" />
+              <Icon className="h-4 w-4 shrink-0" />
               <span className="app-nav-label">{label}</span>
             </div>
           ))}
           <div className="min-h-2 flex-1" />
-          <div className="app-nav-link mx-auto" title={t("navHelp")}>
-            <IconHelp className="h-5 w-5 shrink-0" />
+          <div className="app-nav-link">
+            <IconHelp className="h-4 w-4 shrink-0" />
             <span className="app-nav-label">{t("navHelp")}</span>
           </div>
         </nav>

@@ -439,7 +439,6 @@ export default function DigestTreeView({
   const tocRef = useRef<HTMLElement>(null);
   const tablistRef = useRef<HTMLDivElement>(null);
   const sectionElsRef = useRef<Map<string, HTMLElement>>(new Map());
-  const lockActiveUntilRef = useRef(0);
 
   const toc = useMemo(() => {
     const items: Array<{ key: string; label: string; count: number; kind: string }> = [];
@@ -471,57 +470,50 @@ export default function DigestTreeView({
     if (activeTab) scrollTabHorizontally(activeTab, tablist);
   }, [hasTocNav, activeKey]);
 
-  useEffect(() => {
-    if (!hasTocNav) return;
-    const scroller =
-      scrollParentRef?.current ?? findScrollParent(rootRef.current);
-    const tocEl = tocRef.current;
-    if (!scroller || !tocEl) return;
-
-    const onScroll = () => {
-      if (Date.now() < lockActiveUntilRef.current) return;
-      const offset = tocEl.offsetHeight + 4;
-      const scrollerTop = scroller.getBoundingClientRect().top;
-      let current = toc[0]?.key ?? "";
-      for (const item of toc) {
-        const el = sectionElsRef.current.get(item.key);
-        if (!el) continue;
-        const top = el.getBoundingClientRect().top - scrollerTop;
-        if (top - offset <= 2) current = item.key;
-      }
-      if (current) setActiveKey(current);
-    };
-
-    scroller.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => scroller.removeEventListener("scroll", onScroll);
-  }, [hasTocNav, toc, scrollParentRef]);
-
   function scrollSectionToTop(key: string) {
-    // Ensure the target category is expanded so jump lands on readable content.
     setCollapsed((current) => ({ ...current, [key]: false }));
     setActiveKey(key);
-    lockActiveUntilRef.current = Date.now() + 900;
 
     const run = () => {
       const target = sectionElsRef.current.get(key);
       const tocEl = tocRef.current;
-      const scroller =
-        scrollParentRef?.current ?? findScrollParent(rootRef.current);
+      const scroller = scrollParentRef?.current ?? findScrollParent(rootRef.current);
       if (!target) return;
       if (!scroller || !tocEl) {
         target.scrollIntoView({ behavior: "smooth", block: "start" });
         return;
       }
       const tocHeight = tocEl.offsetHeight;
-      const delta =
-        target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      const nextTop = scroller.scrollTop + delta - tocHeight;
-      scroller.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+      const delta = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTo({ top: Math.max(0, scroller.scrollTop + delta - tocHeight - 8), behavior: "smooth" });
     };
 
-    // Wait one frame so expand layout settles before measuring.
     requestAnimationFrame(() => requestAnimationFrame(run));
+  }
+
+  function renderSection(partition: DigestTreePartition, section: DigestTreeSection) {
+    const key = `${partition.group_id}::${section.id}`;
+    const isCollapsed =
+      collapsed[key] ?? (sectionArticleCount(section) === 0 && section.kind !== "focus");
+    return (
+      <SectionBlock
+        key={key}
+        section={section}
+        collapsed={isCollapsed}
+        sectionRef={(node) => {
+          if (node) sectionElsRef.current.set(key, node);
+          else sectionElsRef.current.delete(key);
+        }}
+        onToggle={() =>
+          setCollapsed((current) => ({
+            ...current,
+            [key]: !isCollapsed,
+          }))
+        }
+        onAddArticle={onAddArticle}
+        onAddArticles={onAddArticles}
+      />
+    );
   }
 
   if (partitions.length === 0) {
@@ -536,7 +528,7 @@ export default function DigestTreeView({
           aria-label={t("digestTocLabel")}
           className="sticky top-0 z-10 border-b border-[var(--rule)] bg-[color-mix(in_srgb,var(--paper)_88%,transparent)] backdrop-blur-[10px]"
         >
-          <div className="mx-auto flex max-w-[42rem] items-center gap-2 px-5 pt-1.5 sm:px-8">
+          <div className="digest-stage flex items-center gap-2 px-5 pt-1.5 sm:px-6">
             <div
               ref={tablistRef}
               role="tablist"
@@ -587,41 +579,27 @@ export default function DigestTreeView({
         </nav>
       ) : null}
 
-      <div className="mx-auto min-w-0 max-w-[42rem] space-y-0 px-5 pt-5 pb-6 sm:px-8">
-        {partitions.map((partition) => (
-          <div key={partition.group_id || partition.group_name || "root"}>
-            {partitions.length > 1 && partition.group_name ? (
-              <h2 className="mb-3 px-0.5 text-[0.9375rem] font-semibold tracking-[-0.01em] text-[var(--ink)]">
-                {partition.group_name}
-              </h2>
-            ) : null}
-            {(partition.sections || []).map((section) => {
-              const key = `${partition.group_id}::${section.id}`;
-              const isCollapsed =
-                collapsed[key] ??
-                (sectionArticleCount(section) === 0 && section.kind !== "focus");
-              return (
-                <SectionBlock
-                  key={key}
-                  section={section}
-                  collapsed={isCollapsed}
-                  sectionRef={(node) => {
-                    if (node) sectionElsRef.current.set(key, node);
-                    else sectionElsRef.current.delete(key);
-                  }}
-                  onToggle={() =>
-                    setCollapsed((current) => ({
-                      ...current,
-                      [key]: !isCollapsed,
-                    }))
-                  }
-                  onAddArticle={onAddArticle}
-                  onAddArticles={onAddArticles}
-                />
-              );
-            })}
-          </div>
-        ))}
+      <div className="digest-stage px-5 pt-4 pb-6 sm:px-6">
+        {partitions.map((partition) => {
+          const sections = partition.sections || [];
+          const focusSections = sections.filter((section) => section.kind === "focus");
+          const otherSections = sections.filter((section) => section.kind !== "focus");
+          return (
+            <div key={partition.group_id || partition.group_name || "root"}>
+              {partitions.length > 1 && partition.group_name ? (
+                <h2 className="mb-3 px-0.5 text-[0.9375rem] font-semibold tracking-[-0.01em] text-[var(--ink)]">
+                  {partition.group_name}
+                </h2>
+              ) : null}
+              {focusSections.map((section) => renderSection(partition, section))}
+              {otherSections.length > 0 ? (
+                <div className="digest-category-grid">
+                  {otherSections.map((section) => renderSection(partition, section))}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
