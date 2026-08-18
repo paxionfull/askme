@@ -1524,7 +1524,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <strong>Askme 1:1 Prototype</strong>
   <button type="button" class="proto-btn" id="btn-live" data-mode="live">Live app</button>
   <button type="button" class="proto-btn" id="btn-static" data-mode="static">Static snapshot</button>
-  <button type="button" class="proto-btn" id="btn-banners" data-mode="banners">Banner catalog</button>
+  <button type="button" class="proto-btn" id="btn-ui" data-mode="ui">组件图鉴</button>
   <span id="proto-status">Starting…</span>
   <span style="margin-left:auto">Live: <code>cd frontend && npm run dev</code> · <a href="http://127.0.0.1:5173/" target="_blank" rel="noreferrer">127.0.0.1:5173</a></span>
 </div>
@@ -1572,25 +1572,19 @@ async function probeLive(){
 }
 
 
-function showBanners(){
-  ui.mode='banners';
-  $('#proto-live').hidden=false;
-  $('#proto-static').hidden=true;
-  document.body.classList.add('is-live');
-  document.body.classList.remove('is-static');
-  const frame=$('#proto-frame');
-  const base = LIVE_URL.endsWith('/') ? LIVE_URL.slice(0,-1) : LIVE_URL;
-  frame.src = base + '/dev/banners';
-  setStatus('Banner catalog · Live TopJobBanner fixtures (EN/ZH)');
-  $all('[data-mode]').forEach(b => b.classList.toggle('is-active', b.dataset.mode==='banners'));
+
+function showUiCatalog(){
+  window.open('http://127.0.0.1:6006', '_blank', 'noopener');
+  setStatus('组件图鉴 · Storybook :6006（新标签）');
 }
+
 
 function showLive(){
   ui.mode='live';
   $('#proto-live').hidden=false;
   $('#proto-static').hidden=true;
   const frame=$('#proto-frame');
-  if(!frame.src || frame.src==='about:blank' || frame.src.includes('/dev/banners')) frame.src=LIVE_URL;
+  if(!frame.src || frame.src==='about:blank' || frame.src.includes('/dev/banners') || frame.src.includes('/dev/ui')) frame.src=LIVE_URL;
   document.body.classList.add('is-live');
   document.body.classList.remove('is-static');
   setStatus('Live · full React interactions');
@@ -2116,7 +2110,7 @@ function renderPage(page){
 async function boot(){
   $('#btn-live').addEventListener('click', showLive);
   $('#btn-static').addEventListener('click', showStatic);
-  $('#btn-banners').addEventListener('click', showBanners);
+  $('#btn-ui').addEventListener('click', showUiCatalog);
   const live=await probeLive();
   if(live===false){ setStatus('Live offline · static snapshot'); showStatic(); }
   else showLive();

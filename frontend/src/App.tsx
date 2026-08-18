@@ -7,7 +7,13 @@ import type { MessageKey } from "./i18n/messages";
 const ChatPage = lazy(() => import("./routes/ChatPage"));
 const ReadPage = lazy(() => import("./routes/ReadPage"));
 const SettingsPage = lazy(() => import("./routes/SettingsPage"));
-const BannerCatalogPage = lazy(() => import("./routes/BannerCatalogPage"));
+
+const BannerCatalogPage = import.meta.env.DEV
+  ? lazy(() => import("./routes/BannerCatalogPage"))
+  : null;
+const UiCatalogPage = import.meta.env.DEV
+  ? lazy(() => import("./routes/UiCatalogPage"))
+  : null;
 
 export function RouteFallback({ labelKey }: { labelKey: MessageKey }) {
   const t = useT();
@@ -41,14 +47,26 @@ function LazyPage({ children, labelKey }: { children: ReactNode; labelKey: Messa
 export default function App() {
   return (
     <Routes>
-      <Route
-        path="dev/banners"
-        element={
-          <LazyPage labelKey="settingsTitle">
-            <BannerCatalogPage />
-          </LazyPage>
-        }
-      />
+      {import.meta.env.DEV && UiCatalogPage && BannerCatalogPage ? (
+        <>
+          <Route
+            path="dev/banners"
+            element={
+              <LazyPage labelKey="settingsTitle">
+                <BannerCatalogPage />
+              </LazyPage>
+            }
+          />
+          <Route
+            path="dev/ui"
+            element={
+              <LazyPage labelKey="settingsTitle">
+                <UiCatalogPage />
+              </LazyPage>
+            }
+          />
+        </>
+      ) : null}
       <Route element={<AppShell />}>
         <Route
           index

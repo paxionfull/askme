@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Storybook example assets must not be watched by the app CSS pipeline. */
+@source not "./stories/assets";
 
 @theme {
   --color-surface: #fafafa;

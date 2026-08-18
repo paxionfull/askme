@@ -8,12 +8,12 @@
 1. **1:1 交互原型：** `frontend/prototypes/askme-current-1to1.html`
    - 默认 **Live app**：iframe 接入本机 Vite（完整 React 交互 / 弹窗 / 菜单）
    - **Static snapshot**：实机 DOM 快照 + 已接线的 Help / Add source / Manage groups / Confirm / Overflow 等
-   - **Banner catalog**：`/dev/banners`（生产组件 `TopJobBanner` 全态图鉴，不跑任务即可评审；原型顶栏第三按钮）
+   - **组件图鉴**：`/dev/ui`（顶栏 Tab：顶栏通知 / 确认框 / 菜单 / 添加源…；`/dev/banners` 重定向到此）
    - 启动：`frontend/prototypes/open-live-prototype.sh` 或 `cd frontend && npm run dev`
 2. Skill / CLI：`.cursor/skills/superdesign/` · `~/.local/bin/superdesign`
 3. Token：`frontend/design/tokens.json`（cool 为商用默认）
 4. 浏览器验收：`.cursor/mcp.json` 中的 Playwright MCP
-5. **顶栏通知图鉴：** `http://127.0.0.1:5173/dev/banners`（与 Live 同源组件）
+5. **组件图鉴：** `http://127.0.0.1:5173/dev/ui`
 
 ### Superdesign 项目（本次）
 

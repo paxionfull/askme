@@ -1,0 +1,15 @@
+/* Contain production modals (position:fixed) inside FakeAppShell preview frames. */
+.sb-app-shell {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+}
+
+.sb-app-shell .ui-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+}
