@@ -4,10 +4,11 @@ Scope: full application redesign. Visitor mode: **Operate**.
 
 ## Direction
 
-- **Canon path** with craft bar **Linear + Notion**
+- **Canon path** with craft bar **Linear + Readwise Reader + Vercel** (not Arc)
 - **Approved comp:** `.impeccable/mocks/comp-a-linear-split.webp` (Comp A)
 - Icon rail (56px), top job banners, brief + ask split on home route
-- Cool neutrals + indigo accent; Inter UI type; English default with EN/ZH toggle in sidebar
+- Cool neutrals + sparse indigo; Geist UI type; English default with EN/ZH toggle in sidebar
+- Dense chrome: ~9.5rem sidebar, 2rem controls, 5–6px radius; active nav = ink on stage (not indigo wash)
 
 ## Audience & job
 

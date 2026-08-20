@@ -485,7 +485,7 @@ function AddToChatButton({
         event.stopPropagation();
         onClick();
       }}
-      className="digest-add-btn ui-chip-btn ml-1.5 shrink-0 border border-transparent bg-transparent font-medium text-[var(--accent)] hover:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] hover:bg-[var(--accent-soft)] focus-visible:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] focus-visible:bg-[var(--accent-soft)]"
+      className="digest-add-btn digest-add-btn--row ui-chip-btn ml-1.5 shrink-0 border border-transparent bg-transparent font-medium text-[var(--accent)] hover:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] hover:bg-[var(--accent-soft)] focus-visible:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] focus-visible:bg-[var(--accent-soft)]"
     >
       {t("digestAddToChat")}
     </button>

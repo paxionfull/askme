@@ -21,7 +21,25 @@ export function briefExcerptFromSummary(summary: string, maxLen = 480): string {
   const withoutHeadings = trimmed.replace(/^#+\s.*$/gm, "").trim();
   const firstBlock = withoutHeadings.split(/\n{2,}/)[0]?.trim() || withoutHeadings;
   if (firstBlock.length <= maxLen) return firstBlock;
-  return `${firstBlock.slice(0, maxLen - 1).trim()}…`;
+
+  let cut = firstBlock.slice(0, maxLen - 1);
+  const lastNewline = cut.lastIndexOf("\n");
+  const lastSpace = cut.lastIndexOf(" ");
+  const softBreak = lastNewline > maxLen * 0.4 ? lastNewline : lastSpace;
+  if (softBreak > maxLen * 0.4) {
+    cut = cut.slice(0, softBreak);
+  }
+  // Avoid leaving a half-written markdown link/image at the end.
+  cut = cut
+    .replace(/!\[[^\]]*$/, "")
+    .replace(/\[[^\]]*\]\([^)]*$/, (partial) => {
+      const label = /^\[([^\]]*)\]/.exec(partial);
+      return label?.[1] ?? "";
+    })
+    .replace(/\[[^\]]*$/, "")
+    .replace(/[ \t]*[-*+]\s*$/, "")
+    .trim();
+  return cut ? `${cut}…` : `${firstBlock.slice(0, maxLen - 1).trim()}…`;
 }
 
 export function historyItemKey(item: Pick<BriefHistoryItem, "cache_key">): string {

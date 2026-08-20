@@ -11,6 +11,7 @@ import {
 type BriefHistoryRailProps = {
   selectedKey: string | null;
   onSelect: (item: BriefHistoryItem) => void;
+  onItemsChange?: (items: BriefHistoryItem[]) => void;
   refreshToken?: number;
   className?: string;
 };
@@ -18,6 +19,7 @@ type BriefHistoryRailProps = {
 export default function BriefHistoryRail({
   selectedKey,
   onSelect,
+  onItemsChange,
   refreshToken = 0,
   className = "",
 }: BriefHistoryRailProps) {
@@ -78,6 +80,10 @@ export default function BriefHistoryRail({
   }, [loadInitial, refreshToken]);
 
   useEffect(() => {
+    onItemsChange?.(items);
+  }, [items, onItemsChange]);
+
+  useEffect(() => {
     const node = sentinelRef.current;
     if (!node || !hasMore || loading) return;
     const observer = new IntersectionObserver(
@@ -103,7 +109,6 @@ export default function BriefHistoryRail({
       <div className="brief-history-cols" aria-hidden="true">
         <span className="brief-history-cols-date">{t("briefHistoryColDate")}</span>
         <span className="brief-history-cols-articles">{t("briefHistoryColArticles")}</span>
-        <span className="brief-history-cols-sources">{t("briefHistoryColSources")}</span>
       </div>
 
       {loading ? (

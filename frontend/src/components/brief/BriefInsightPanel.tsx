@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import CitationMarkdown from "../CitationMarkdown";
 import CitationSidebar from "../CitationSidebar";
 import OverflowMenu, { type OverflowMenuItem } from "../OverflowMenu";
@@ -16,6 +18,7 @@ type BriefInsightPanelProps = {
   onCitationOpenChange: (open: boolean) => void;
   onCitationSelect: (index: number | null) => void;
   emptyState: { kind: "generating" | "scoped" | "guide"; needIndex?: boolean } | null;
+  digestReady?: boolean;
   scopedCount: number;
   effectiveRagReady: boolean;
   indexBuildLink: ReactNode;
@@ -66,6 +69,7 @@ export default function BriefInsightPanel({
   onCitationOpenChange,
   onCitationSelect,
   emptyState,
+  digestReady = false,
   scopedCount,
   effectiveRagReady,
   indexBuildLink,
@@ -143,7 +147,32 @@ export default function BriefInsightPanel({
           </svg>
           {t("briefSummarizedBy")}
         </p>
-        <p className="brief-insight-summary-body">{excerpt || t("briefHint")}</p>
+        {excerpt.trim() ? (
+          <div className="brief-insight-summary-body">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                a: ({ href, children }) => (
+                  <a href={href} target="_blank" rel="noreferrer">
+                    {children}
+                  </a>
+                ),
+                h1: ({ children }) => <p>{children}</p>,
+                h2: ({ children }) => <p>{children}</p>,
+                h3: ({ children }) => <p>{children}</p>,
+                h4: ({ children }) => <p>{children}</p>,
+                ul: ({ children }) => <ul>{children}</ul>,
+                ol: ({ children }) => <ol>{children}</ol>,
+                li: ({ children }) => <li>{children}</li>,
+                p: ({ children }) => <p>{children}</p>,
+              }}
+            >
+              {excerpt}
+            </ReactMarkdown>
+          </div>
+        ) : (
+          <p className="brief-insight-summary-body is-empty">{t("briefSummaryEmpty")}</p>
+        )}
       </section>
 
       <div className="brief-insight-ask">
@@ -201,6 +230,17 @@ export default function BriefInsightPanel({
                   </li>
                 </ul>
               </div>
+            ) : digestReady ? (
+              <p className="text-sm leading-6 text-[var(--ink-muted)]">
+                {t("briefAskReadyHint")}
+                {emptyState?.needIndex ? (
+                  <>
+                    {" "}
+                    {indexBuildLink}
+                    {t("chatAskThenEnter")}
+                  </>
+                ) : null}
+              </p>
             ) : (
               <div>
                 <p className="text-sm font-medium text-[var(--ink)]">{t("chatHowToUse")}</p>

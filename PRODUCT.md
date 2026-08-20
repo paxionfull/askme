@@ -38,7 +38,7 @@ Askme 自动跟进用户关注的网站文章更新，生成可读简报；用�
 - **Logo 为必需品牌资产** — 正式标识位于 `frontend/public/logo.svg`，侧栏品牌槽使用
 - **默认英文界面** — 导航、标签、空状态与核心文案以英文呈现；提供明显、低摩擦的中文切换（设置或全局入口均可，以一次操作可达为准）
 - 中文为完整第二语言，而非仅部分翻译
-- **视觉工艺标杆（翻修确认）**：品类标准路径，与 **Linear + Arc** 同级工艺 — Linear 的精确紧凑 chrome，Arc 的冷静阅读与浏览器级细节；用户于方向轮次主动选择 standing exit（canon），非 challenger 隐喻世界
+- **视觉工艺标杆（用户确认）**：品类标准路径，与 **Linear + Readwise Reader + Vercel** 同级工艺 — Linear 的精确紧凑工具 chrome；Readwise Reader 的阅读/高亮/稍后读气质与内容优先密度；Vercel 的冷静产品面、清晰层级与现代部署级细节。**不以 Arc 为标杆**。Canon / standing-exit 路线，非 challenger 隐喻世界
 
 ## Accessibility & Inclusion
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useMemo, useState, type RefObject } from "react";
 import type {
   DigestTree,
   DigestTreeArticle,
@@ -74,7 +74,15 @@ function toArticleRef(article: DigestTreeArticle): ArticleRef {
   };
 }
 
-function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
+function AddButton({
+  label,
+  onClick,
+  level = "row",
+}: {
+  label: string;
+  onClick: () => void;
+  level?: "row" | "section";
+}) {
   const { t } = useLocale();
   return (
     <button
@@ -85,7 +93,7 @@ function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
         event.stopPropagation();
         onClick();
       }}
-      className="digest-add-btn ui-chip-btn ml-1.5 shrink-0 border border-transparent bg-transparent font-medium text-[var(--accent)] opacity-0 pointer-events-none transition-opacity group-hover/item:opacity-100 group-hover/item:pointer-events-auto group-focus-within/item:opacity-100 group-focus-within/item:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] hover:bg-[var(--accent-soft)] focus-visible:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] focus-visible:bg-[var(--accent-soft)] [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
+      className={`digest-add-btn digest-add-btn--${level} ui-chip-btn ml-1.5 shrink-0 border border-transparent bg-transparent font-medium text-[var(--accent)] hover:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] hover:bg-[var(--accent-soft)] focus-visible:border-[color-mix(in_srgb,var(--accent)_35%,var(--rule))] focus-visible:bg-[var(--accent-soft)]`}
     >
       {t("digestAddToChat")}
     </button>
@@ -345,6 +353,7 @@ function SectionBlock({
         </button>
         {count > 0 && onAddArticles ? (
           <AddButton
+            level="section"
             label={formatMessage(locale, "digestAddCategoryToChat", { count })}
             onClick={() => onAddArticles(sectionRefs)}
           />
@@ -391,36 +400,12 @@ function normalizePartitions(tree: DigestTree): DigestTreePartition[] {
   return [];
 }
 
-function findScrollParent(node: HTMLElement | null): HTMLElement | null {
-  let el = node?.parentElement ?? null;
-  while (el) {
-    const { overflowY } = getComputedStyle(el);
-    if (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") {
-      return el;
-    }
-    el = el.parentElement;
-  }
-  return null;
-}
-
-/** Scroll a tab horizontally inside its tablist without moving the brief vertical scroller. */
-function scrollTabHorizontally(tab: HTMLElement, tablist: HTMLElement) {
-  const listRect = tablist.getBoundingClientRect();
-  const tabRect = tab.getBoundingClientRect();
-  const pad = 12;
-  if (tabRect.left < listRect.left + pad) {
-    tablist.scrollBy({ left: tabRect.left - listRect.left - pad, behavior: "smooth" });
-  } else if (tabRect.right > listRect.right - pad) {
-    tablist.scrollBy({ left: tabRect.right - listRect.right + pad, behavior: "smooth" });
-  }
-}
-
 interface DigestTreeViewProps {
   tree: DigestTree;
   onAddArticle?: (article: ArticleRef) => void;
   onAddArticles?: (articles: ArticleRef[]) => void;
   className?: string;
-  /** 简报区滚动容器；不传则自动向上查找 */
+  /** Kept for callers; TOC jump-scroll no longer uses it. */
   scrollParentRef?: RefObject<HTMLElement | null>;
 }
 
@@ -429,67 +414,10 @@ export default function DigestTreeView({
   onAddArticle,
   onAddArticles,
   className = "",
-  scrollParentRef,
 }: DigestTreeViewProps) {
   const { t } = useLocale();
   const partitions = useMemo(() => normalizePartitions(tree), [tree]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [activeKey, setActiveKey] = useState<string>("");
-  const rootRef = useRef<HTMLDivElement>(null);
-  const tocRef = useRef<HTMLElement>(null);
-  const tablistRef = useRef<HTMLDivElement>(null);
-  const sectionElsRef = useRef<Map<string, HTMLElement>>(new Map());
-
-  const toc = useMemo(() => {
-    const items: Array<{ key: string; label: string; count: number; kind: string }> = [];
-    for (const partition of partitions) {
-      for (const section of partition.sections || []) {
-        items.push({
-          key: `${partition.group_id}::${section.id}`,
-          label: section.name,
-          count: sectionArticleCount(section),
-          kind: section.kind,
-        });
-      }
-    }
-    return items;
-  }, [partitions]);
-
-  const hasTocNav = toc.length > 1;
-
-  useEffect(() => {
-    if (!hasTocNav) return;
-    if (!activeKey && toc[0]) setActiveKey(toc[0].key);
-  }, [hasTocNav, toc, activeKey]);
-
-  useEffect(() => {
-    if (!hasTocNav || !activeKey) return;
-    const tablist = tablistRef.current;
-    if (!tablist) return;
-    const activeTab = tablist.querySelector<HTMLElement>(`[role="tab"][aria-selected="true"]`);
-    if (activeTab) scrollTabHorizontally(activeTab, tablist);
-  }, [hasTocNav, activeKey]);
-
-  function scrollSectionToTop(key: string) {
-    setCollapsed((current) => ({ ...current, [key]: false }));
-    setActiveKey(key);
-
-    const run = () => {
-      const target = sectionElsRef.current.get(key);
-      const tocEl = tocRef.current;
-      const scroller = scrollParentRef?.current ?? findScrollParent(rootRef.current);
-      if (!target) return;
-      if (!scroller || !tocEl) {
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
-        return;
-      }
-      const tocHeight = tocEl.offsetHeight;
-      const delta = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      scroller.scrollTo({ top: Math.max(0, scroller.scrollTop + delta - tocHeight - 8), behavior: "smooth" });
-    };
-
-    requestAnimationFrame(() => requestAnimationFrame(run));
-  }
 
   function renderSection(partition: DigestTreePartition, section: DigestTreeSection) {
     const key = `${partition.group_id}::${section.id}`;
@@ -500,10 +428,6 @@ export default function DigestTreeView({
         key={key}
         section={section}
         collapsed={isCollapsed}
-        sectionRef={(node) => {
-          if (node) sectionElsRef.current.set(key, node);
-          else sectionElsRef.current.delete(key);
-        }}
         onToggle={() =>
           setCollapsed((current) => ({
             ...current,
@@ -521,64 +445,7 @@ export default function DigestTreeView({
   }
 
   return (
-    <div ref={rootRef} className={className}>
-      {hasTocNav ? (
-        <nav
-          ref={tocRef}
-          aria-label={t("digestTocLabel")}
-          className="sticky top-0 z-10 border-b border-[var(--rule)] bg-[color-mix(in_srgb,var(--paper)_88%,transparent)] backdrop-blur-[10px]"
-        >
-          <div className="digest-stage flex items-center gap-2 px-5 pt-1.5 sm:px-6">
-            <div
-              ref={tablistRef}
-              role="tablist"
-              aria-label={t("digestTocLabel")}
-              className="flex min-w-0 flex-1 items-stretch gap-0 overflow-x-auto scrollbar-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            >
-              {toc.map((item) => {
-                const isActive = activeKey === item.key;
-                const isFocus = item.kind === "focus";
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={isActive}
-                    onClick={() => scrollSectionToTop(item.key)}
-                    className={`digest-toc-tab inline-flex shrink-0 items-baseline gap-1.5 border-0 border-b-2 bg-transparent px-3 pb-2.5 pt-1.5 text-[0.8125rem] tracking-[0.01em] whitespace-nowrap transition-[color,border-color,background] duration-100 ${
-                      isFocus ? "is-focus-tab" : ""
-                    } ${
-                      isActive
-                        ? isFocus
-                          ? "border-[var(--accent)] font-semibold text-[var(--accent)]"
-                          : "border-[var(--ink)] font-semibold text-[var(--ink)]"
-                        : isFocus
-                          ? "border-transparent hover:bg-[var(--accent-soft)]"
-                          : "border-transparent text-[var(--ink-muted)] hover:text-[var(--ink)]"
-                    }`}
-                  >
-                    {item.label}
-                    <span
-                      className={`digest-meta-count ${
-                        isFocus
-                          ? isActive
-                            ? "text-[var(--accent)] opacity-90"
-                            : "text-[var(--accent)] opacity-70"
-                          : isActive
-                            ? "opacity-70"
-                            : "opacity-80"
-                      }`}
-                    >
-                      {item.count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </nav>
-      ) : null}
-
+    <div className={className}>
       <div className="digest-stage px-5 pt-4 pb-6 sm:px-6">
         {partitions.map((partition) => {
           const sections = partition.sections || [];

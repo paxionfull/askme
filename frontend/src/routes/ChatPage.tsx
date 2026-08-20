@@ -200,33 +200,56 @@ export default function ChatPage() {
   const [regenConfirmOpen, setRegenConfirmOpen] = useState(false);
   const [selectedHistoryKey, setSelectedHistoryKey] = useState<string | null>(null);
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<BriefHistoryItem | null>(null);
+  const [historyItems, setHistoryItems] = useState<BriefHistoryItem[]>([]);
   const [historySnapshot, setHistorySnapshot] = useState<CachedSummaryResponse | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   const [mobileBriefTab, setMobileBriefTab] = useState<"history" | "stage" | "ask">("stage");
   const exportResetTimerRef = useRef<number | null>(null);
+  const historySelectSeqRef = useRef(0);
   const viewingLiveScope =
     !selectedHistoryItem || historyScopeMatches(selectedHistoryItem, days, selectedGroupIds);
-  const displaySummary = viewingLiveScope
-    ? generating
+  const preferHistorySnapshot = Boolean(selectedHistoryItem && historySnapshot);
+  const displaySummary =
+    generating && viewingLiveScope
       ? summary
-      : chatSummary
-    : historySnapshot?.summary ?? "";
-  const displayTree = viewingLiveScope
-    ? generating
+      : preferHistorySnapshot
+        ? (historySnapshot?.summary ?? "")
+        : viewingLiveScope
+          ? chatSummary
+          : (historySnapshot?.summary ?? "");
+  const displayTree =
+    generating && viewingLiveScope
       ? null
-      : digestTree
-    : historySnapshot?.digest_tree ?? null;
-  const stageArticleRefs = viewingLiveScope
-    ? articleRefs
-    : (historySnapshot?.article_refs ?? []).map((article) => ({
+      : preferHistorySnapshot
+        ? (historySnapshot?.digest_tree ?? null)
+        : viewingLiveScope
+          ? digestTree
+          : (historySnapshot?.digest_tree ?? null);
+  const stageArticleRefs = preferHistorySnapshot
+    ? (historySnapshot?.article_refs ?? []).map((article) => ({
         feed_id: article.feed_id,
         article_id: article.article_id,
         title: article.title ?? "",
         url: article.url ?? "",
-      }));
+      }))
+    : viewingLiveScope
+      ? articleRefs
+      : (historySnapshot?.article_refs ?? []).map((article) => ({
+          feed_id: article.feed_id,
+          article_id: article.article_id,
+          title: article.title ?? "",
+          url: article.url ?? "",
+        }));
   const showTree = Boolean(!generating && displayTree);
   const hasOverview = Boolean(displaySummary || displayTree || generating);
+  const showGettingStarted =
+    !generating &&
+    !hasOverview &&
+    !loadingSummary &&
+    !historyLoading &&
+    !selectedHistoryItem &&
+    historyItems.length === 0;
 
   const formatDateLabel = (when: Date) => {
     if (locale === "zh") {
@@ -459,27 +482,44 @@ export default function ChatPage() {
 
   const handleSelectHistory = useCallback(
     async (item: BriefHistoryItem) => {
+      const seq = ++historySelectSeqRef.current;
       setSelectedHistoryKey(historyItemKey(item));
       setSelectedHistoryItem(item);
       setMobileBriefTab("stage");
-      if (historyScopeMatches(item, days, selectedGroupIds)) {
-        setHistorySnapshot(null);
-        return;
-      }
       setHistoryLoading(true);
       try {
         const data = await fetchCachedSummary(item.days, item.feed_ids, item.group_ids, {
           allowHistory: true,
         });
+        if (historySelectSeqRef.current !== seq) return;
+        // Same scope with live digest already present: keep live as source of truth.
+        if (
+          historyScopeMatches(item, days, selectedGroupIds) &&
+          (chatSummary || digestTree)
+        ) {
+          setHistorySnapshot(null);
+          return;
+        }
         setHistorySnapshot(data);
       } catch {
+        if (historySelectSeqRef.current !== seq) return;
         setHistorySnapshot(null);
       } finally {
-        setHistoryLoading(false);
+        if (historySelectSeqRef.current === seq) setHistoryLoading(false);
       }
     },
-    [days, selectedGroupIds],
+    [chatSummary, days, digestTree, selectedGroupIds],
   );
+
+  const handleHistoryItemsChange = useCallback((items: BriefHistoryItem[]) => {
+    setHistoryItems(items);
+  }, []);
+
+  useEffect(() => {
+    if (selectedHistoryKey) return;
+    if (historyItems.length === 0) return;
+    void handleSelectHistory(historyItems[0]);
+  }, [handleSelectHistory, historyItems, selectedHistoryKey]);
 
   useEffect(() => {
     if (!generating && hasOverview && viewingLiveScope) {
@@ -488,9 +528,19 @@ export default function ChatPage() {
   }, [generating, hasOverview, viewingLiveScope]);
 
   useEffect(() => {
+    if (generating) return;
+    if (!selectedHistoryItem) return;
+    if (!historyScopeMatches(selectedHistoryItem, days, selectedGroupIds)) return;
+    if (!(chatSummary || digestTree)) return;
+    setHistorySnapshot(null);
+  }, [chatSummary, days, digestTree, generating, selectedGroupIds, selectedHistoryItem]);
+
+  useEffect(() => {
+    historySelectSeqRef.current += 1;
     setSelectedHistoryKey(null);
     setSelectedHistoryItem(null);
     setHistorySnapshot(null);
+    setHistoryLoading(false);
   }, [days, selectedGroupIds]);
 
   const stageExcerpt = useMemo(
@@ -857,6 +907,7 @@ export default function ChatPage() {
           className={mobileBriefTab === "history" ? "" : "is-mobile-hidden"}
           selectedKey={selectedHistoryKey}
           onSelect={(item) => void handleSelectHistory(item)}
+          onItemsChange={handleHistoryItemsChange}
           refreshToken={historyRefreshToken}
         />
 
@@ -889,62 +940,150 @@ export default function ChatPage() {
               </div>
             )}
             <div className="brief-home-bar mt-2">
-              <div className="brief-toolbar" role="group" aria-label={t("briefScope")}>
-                <div className="brief-toolbar-fields">
-                  <label className="brief-toolbar-field">
-                    <span>{t("briefGroup")}</span>
-                    <select
-                      value={selectedGroupId ?? ""}
-                      onChange={(e) => setSelectedSummaryGroup(e.target.value)}
-                      disabled={summaryGroupOptions.length === 0 || digestBusy}
-                      className="ui-select min-w-0 truncate disabled:opacity-50"
-                      aria-label={t("briefSelectGroup")}
+              {hasOverview && !generating ? (
+                <div
+                  className="brief-toolbar brief-toolbar--reading"
+                  role="group"
+                  aria-label={t("briefLabel")}
+                >
+                  <span className="brief-toolbar-status is-ok">{t("briefReady")}</span>
+                  <div className="brief-toolbar-actions">
+                    <button
+                      type="button"
+                      disabled={
+                        digestBusy || !isLlmConfigured(settings) || !selectedGroupId || !hasRuleBound
+                      }
+                      onClick={() => setRegenConfirmOpen(true)}
+                      className="ui-btn"
+                      title={t("briefRegenTitle")}
                     >
-                      {summaryGroupOptions.length === 0 ? (
-                        <option value="">{t("briefNoGroups")}</option>
-                      ) : (
-                        summaryGroupOptions.map((group) => (
-                          <option key={group.id} value={group.id}>
-                            {group.name}
-                          </option>
-                        ))
-                      )}
-                    </select>
-                  </label>
-                  <label className="brief-toolbar-field">
-                    <span>{t("briefRange")}</span>
-                    <DaysRangeSelect
-                      value={days}
-                      onChange={setDays}
-                      disabled={digestBusy}
-                      size="sm"
-                      className="shrink-0"
-                    />
-                  </label>
-                  {selectedGroupId && !isUngrouped ? (
-                    <label className={`brief-toolbar-field ${hasRuleBound ? "" : "is-unset"}`}>
-                      <span>{t("briefRule")}</span>
+                      {t("briefRegenerate")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExportMarkdown}
+                      title={exportDone ? t("briefExportedTitle") : t("briefExportTitle")}
+                      className="brief-export-btn ui-btn ui-btn-ghost"
+                    >
+                      {exportDone ? t("briefExported") : t("briefExportMd")}
+                    </button>
+                  </div>
+                  <details className="brief-stage-scope">
+                    <summary>{t("briefScope")}</summary>
+                    <div className="brief-stage-scope-panel">
+                      <div className="brief-toolbar-fields">
+                        <label className="brief-toolbar-field">
+                          <span>{t("briefGroup")}</span>
+                          <select
+                            value={selectedGroupId ?? ""}
+                            onChange={(e) => setSelectedSummaryGroup(e.target.value)}
+                            disabled={summaryGroupOptions.length === 0 || digestBusy}
+                            className="ui-select min-w-0 truncate disabled:opacity-50"
+                            aria-label={t("briefSelectGroup")}
+                          >
+                            {summaryGroupOptions.length === 0 ? (
+                              <option value="">{t("briefNoGroups")}</option>
+                            ) : (
+                              summaryGroupOptions.map((group) => (
+                                <option key={group.id} value={group.id}>
+                                  {group.name}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </label>
+                        <label className="brief-toolbar-field">
+                          <span>{t("briefRange")}</span>
+                          <DaysRangeSelect
+                            value={days}
+                            onChange={setDays}
+                            disabled={digestBusy}
+                            size="sm"
+                            className="shrink-0"
+                          />
+                        </label>
+                        {selectedGroupId && !isUngrouped ? (
+                          <label
+                            className={`brief-toolbar-field ${hasRuleBound ? "" : "is-unset"}`}
+                          >
+                            <span>{t("briefRule")}</span>
+                            <select
+                              value={selectedGroup?.digestSkillId ?? ""}
+                              onChange={(e) => void bindRuleToSelectedGroup(e.target.value)}
+                              disabled={digestBusy || savingRule || digestSkills.length === 0}
+                              className="ui-select min-w-0 truncate disabled:opacity-50"
+                              aria-label={t("briefSelectRule")}
+                              title={hasRuleBound ? boundRuleName : t("briefRuleRequiredTitle")}
+                            >
+                              <option value="">{t("briefUnset")}</option>
+                              {digestSkills.map((skill) => (
+                                <option key={skill.id} value={skill.id}>
+                                  {skill.name || skill.id}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : null}
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              ) : (
+                <div className="brief-toolbar" role="group" aria-label={t("briefScope")}>
+                  <div className="brief-toolbar-fields">
+                    <label className="brief-toolbar-field">
+                      <span>{t("briefGroup")}</span>
                       <select
-                        value={selectedGroup?.digestSkillId ?? ""}
-                        onChange={(e) => void bindRuleToSelectedGroup(e.target.value)}
-                        disabled={digestBusy || savingRule || digestSkills.length === 0}
+                        value={selectedGroupId ?? ""}
+                        onChange={(e) => setSelectedSummaryGroup(e.target.value)}
+                        disabled={summaryGroupOptions.length === 0 || digestBusy}
                         className="ui-select min-w-0 truncate disabled:opacity-50"
-                        aria-label={t("briefSelectRule")}
-                        title={hasRuleBound ? boundRuleName : t("briefRuleRequiredTitle")}
+                        aria-label={t("briefSelectGroup")}
                       >
-                        <option value="">{t("briefUnset")}</option>
-                        {digestSkills.map((skill) => (
-                          <option key={skill.id} value={skill.id}>
-                            {skill.name || skill.id}
-                          </option>
-                        ))}
+                        {summaryGroupOptions.length === 0 ? (
+                          <option value="">{t("briefNoGroups")}</option>
+                        ) : (
+                          summaryGroupOptions.map((group) => (
+                            <option key={group.id} value={group.id}>
+                              {group.name}
+                            </option>
+                          ))
+                        )}
                       </select>
                     </label>
-                  ) : null}
-                </div>
+                    <label className="brief-toolbar-field">
+                      <span>{t("briefRange")}</span>
+                      <DaysRangeSelect
+                        value={days}
+                        onChange={setDays}
+                        disabled={digestBusy}
+                        size="sm"
+                        className="shrink-0"
+                      />
+                    </label>
+                    {selectedGroupId && !isUngrouped ? (
+                      <label className={`brief-toolbar-field ${hasRuleBound ? "" : "is-unset"}`}>
+                        <span>{t("briefRule")}</span>
+                        <select
+                          value={selectedGroup?.digestSkillId ?? ""}
+                          onChange={(e) => void bindRuleToSelectedGroup(e.target.value)}
+                          disabled={digestBusy || savingRule || digestSkills.length === 0}
+                          className="ui-select min-w-0 truncate disabled:opacity-50"
+                          aria-label={t("briefSelectRule")}
+                          title={hasRuleBound ? boundRuleName : t("briefRuleRequiredTitle")}
+                        >
+                          <option value="">{t("briefUnset")}</option>
+                          {digestSkills.map((skill) => (
+                            <option key={skill.id} value={skill.id}>
+                              {skill.name || skill.id}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                  </div>
 
-                <div className="brief-toolbar-actions">
-                  {generating || !hasOverview ? (
+                  <div className="brief-toolbar-actions">
                     <button
                       type="button"
                       disabled={
@@ -973,48 +1112,24 @@ export default function ChatPage() {
                     >
                       {generating ? t("briefStopGenerate") : t("briefGenerate")}
                     </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={
-                        digestBusy || !isLlmConfigured(settings) || !selectedGroupId || !hasRuleBound
-                      }
-                      onClick={() => setRegenConfirmOpen(true)}
-                      className="ui-btn"
-                      title={t("briefRegenTitle")}
+                  </div>
+
+                  {statusLine ? (
+                    <span
+                      className={`brief-toolbar-status ${
+                        statusLine === t("briefNoIndexStatus") ||
+                        statusLine === t("briefNeedRuleStatus")
+                          ? ""
+                          : "is-warn"
+                      }`}
                     >
-                      {t("briefRegenerate")}
-                    </button>
-                  )}
-                  {hasOverview && !generating ? (
-                    <button
-                      type="button"
-                      onClick={handleExportMarkdown}
-                      title={exportDone ? t("briefExportedTitle") : t("briefExportTitle")}
-                      className="brief-export-btn ui-btn ui-btn-ghost"
-                    >
-                      {exportDone ? t("briefExported") : t("briefExportMd")}
-                    </button>
+                      {statusLine}
+                    </span>
                   ) : null}
                 </div>
-
-                {hasOverview && !generating ? (
-                  <span className="brief-toolbar-status is-ok">{t("briefReady")}</span>
-                ) : statusLine ? (
-                  <span
-                    className={`brief-toolbar-status ${
-                      statusLine === t("briefNoIndexStatus") ||
-                      statusLine === t("briefNeedRuleStatus")
-                        ? ""
-                        : "is-warn"
-                    }`}
-                  >
-                    {statusLine}
-                  </span>
-                ) : null}
-              </div>
+              )}
             </div>
-            {!hasOverview && !loadingSummary && !historyLoading ? (
+            {!hasOverview && !loadingSummary && !historyLoading && showGettingStarted ? (
               <p className="brief-home-hint">{t("briefHint")}</p>
             ) : null}
           </header>
@@ -1085,7 +1200,7 @@ export default function ChatPage() {
                   ) : null}
                 </div>
               )
-            ) : !generating ? (
+            ) : showGettingStarted ? (
               <div className="mx-auto max-w-[32rem] py-12 text-center">
                 <h3 className="text-lg font-medium text-[var(--ink)]">{gettingStarted.title}</h3>
                 <p className="mt-2 text-sm leading-6 text-[var(--ink-muted)]">
@@ -1093,6 +1208,8 @@ export default function ChatPage() {
                 </p>
                 <GettingStartedGuide onExplainRule={() => setRuleExplainOpen(true)} />
               </div>
+            ) : !generating && !loadingSummary && !historyLoading ? (
+              <p className="brief-home-hint py-8 text-center">{t("briefHint")}</p>
             ) : null}
           </div>
 
@@ -1117,6 +1234,7 @@ export default function ChatPage() {
           onCitationOpenChange={setCitationOpen}
           onCitationSelect={setActiveCitationIndex}
           emptyState={emptyState}
+          digestReady={hasOverview && !generating}
           scopedCount={scopedArticles.length}
           effectiveRagReady={effectiveRagReady}
           indexBuildLink={

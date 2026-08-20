@@ -255,7 +255,7 @@
   ],
   "narrative": {
     "northStar": "The Split Desk",
-    "overview": "Askme operates like a precision tool on a cool neutral desk: icon rail navigation, indigo accent for primary actions and active wayfinding, and reading columns tuned for digest scanning plus RAG chat. Expression stays Operate-mode familiar—Linear density in chrome, Notion comfort in prose blocks.",
+    "overview": "Askme operates like a precision tool on a cool neutral desk: indigo accent for primary actions and active wayfinding, reading columns tuned for digest scanning plus RAG chat. Expression stays Operate-mode familiar—Linear density in chrome, Readwise Reader content priority, Vercel-clear hierarchy (not Arc).",
     "keyCharacteristics": [
       "Cool `#FAFAFA` stage with white raised panels and `#E4E4E7` hairline borders",
       "Indigo accent `#5E6AD2` for primary buttons, active nav, progress fills",
