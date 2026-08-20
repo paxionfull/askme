@@ -11,6 +11,7 @@ from core.llm import LLMError, sse_event
 from core.time_scope import is_timestamp_today
 from digest.digest_cache import delete_summary
 from digest.digest_cache import get_summary_entry
+from digest.digest_cache import list_summary_entries
 from digest.digest_cache import set_summary as cache_summary
 from digest.digest_service import (
     build_article_refs,
@@ -59,6 +60,43 @@ def _no_body_detail(meta_count: int) -> str:
 
 
 NO_CACHED_CONTEXT_DETAIL = "请先在数据源页点击「拉取正文」后再生成概览。"
+
+
+def _brief_title(summary: str) -> str:
+    for line in summary.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        while text.startswith("#"):
+            text = text.lstrip("#").strip()
+        if text:
+            return text[:120] if len(text) > 120 else text
+    return "Untitled brief"
+
+
+def _source_count(article_refs: list) -> int:
+    feeds: set[str] = set()
+    for ref in article_refs:
+        if not isinstance(ref, dict):
+            continue
+        feed_id = str(ref.get("feed_id") or "").strip()
+        if feed_id:
+            feeds.add(feed_id)
+    return len(feeds)
+
+
+async def _resolve_group_names(group_ids: list[str]) -> list[str]:
+    if not group_ids:
+        return []
+    groups = {str(g.get("id")): g for g in feed_registry.list_groups()}
+    names: list[str] = []
+    for gid in group_ids:
+        group = groups.get(gid)
+        if group:
+            name = str(group.get("name") or gid).strip()
+            if name:
+                names.append(name)
+    return names
 
 
 async def _resolve_summarize_scope(body: SummarizeRequest) -> tuple[list[str] | None, list[str] | None]:
@@ -356,15 +394,44 @@ async def _sse_summarize_stream(body: SummarizeRequest, request: Request | None 
             )
 
 
+@router.get("/api/digest/summaries")
+async def list_digest_summaries(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    entries, total = list_summary_entries(limit=limit, offset=offset)
+    items = []
+    for entry in entries:
+        article_refs = entry.get("article_refs") or []
+        group_ids = entry.get("group_ids") or []
+        group_names = await _resolve_group_names(group_ids)
+        items.append(
+            {
+                "cache_key": entry["cache_key"],
+                "days": entry["days"],
+                "title": _brief_title(str(entry.get("summary") or "")),
+                "article_count": int(entry.get("article_count") or 0),
+                "source_count": _source_count(article_refs),
+                "truncated": bool(entry.get("truncated")),
+                "updated_at": float(entry.get("updated_at") or 0),
+                "group_ids": group_ids,
+                "group_names": group_names,
+                "feed_ids": entry.get("feed_ids") or [],
+            }
+        )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("/api/digest/summary")
 async def get_digest_summary(
     days: int = Query(default=1, ge=1, le=30),
     feed_ids: list[str] = Query(default=[]),
     group_ids: list[str] = Query(default=[]),
+    allow_history: bool = Query(default=False),
 ):
     entry = get_summary_entry(days, feed_ids or None, group_ids or None)
     # 简报「已生成」仅认当天（上海自然日）写出的缓存；跨日一律当未生成
-    if entry and not is_timestamp_today(entry.get("updated_at")):
+    if entry and not allow_history and not is_timestamp_today(entry.get("updated_at")):
         entry = None
     if not entry:
         return {

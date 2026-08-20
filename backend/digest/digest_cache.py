@@ -16,6 +16,16 @@ def _cache_key(days: int, feed_ids: list[str] | None, group_ids: list[str] | Non
     return f"{days}:{ids}"
 
 
+def _parse_cache_key(cache_key: str) -> dict[str, Any]:
+    parts = cache_key.split(":", 2)
+    days = int(parts[0]) if parts and parts[0].isdigit() else 1
+    if len(parts) >= 3 and parts[1] == "groups":
+        group_ids = [gid for gid in parts[2].split(",") if gid]
+        return {"days": days, "feed_ids": [], "group_ids": group_ids}
+    feed_ids = [fid for fid in (parts[1].split(",") if len(parts) > 1 else []) if fid]
+    return {"days": days, "feed_ids": feed_ids, "group_ids": []}
+
+
 class DigestSummaryStore:
     def __init__(self) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -145,6 +155,47 @@ class DigestSummaryStore:
             )
             return int(cur.rowcount or 0)
 
+    def list_entries(self, *, limit: int = 100, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+        safe_limit = max(1, min(int(limit), 200))
+        safe_offset = max(0, int(offset))
+        with self._connect() as conn:
+            total_row = conn.execute("SELECT COUNT(*) AS c FROM digest_summaries").fetchone()
+            total = int(total_row["c"] if total_row else 0)
+            rows = conn.execute(
+                """
+                SELECT cache_key, days, summary, article_count, truncated, updated_at, article_refs
+                FROM digest_summaries
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (safe_limit, safe_offset),
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            keys = set(row.keys())
+            refs_raw = row["article_refs"] if "article_refs" in keys else "[]"
+            try:
+                article_refs = json.loads(refs_raw or "[]")
+            except json.JSONDecodeError:
+                article_refs = []
+            if not isinstance(article_refs, list):
+                article_refs = []
+            scope = _parse_cache_key(str(row["cache_key"]))
+            items.append(
+                {
+                    "cache_key": row["cache_key"],
+                    "days": int(row["days"]),
+                    "summary": row["summary"],
+                    "article_count": int(row["article_count"]),
+                    "truncated": bool(row["truncated"]),
+                    "updated_at": float(row["updated_at"]),
+                    "article_refs": article_refs,
+                    "feed_ids": scope["feed_ids"],
+                    "group_ids": scope["group_ids"],
+                }
+            )
+        return items, total
+
 
 _store = DigestSummaryStore()
 
@@ -191,3 +242,7 @@ def delete_summary(
     group_ids: list[str] | None = None,
 ) -> None:
     _store.delete(days, feed_ids, group_ids)
+
+
+def list_summary_entries(*, limit: int = 100, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    return _store.list_entries(limit=limit, offset=offset)

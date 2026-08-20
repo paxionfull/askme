@@ -113,15 +113,15 @@ components:
 
 **Creative North Star: "The Brief Stage"**
 
-Askme is a precision local digest tool on a cool neutral desk: Linear-dense chrome, Arc-calm reading, indigo reserved for action and selection. The shell is Comp C Brief-first — a slim labeled sidebar, digest as the full-width primary stage, and Ask as an on-demand bottom dock with an expandable conversation drawer. Expression stays Operate-mode familiar; craft bar is Linear + Arc (canon / category standard).
+Askme is a precision local digest tool on a cool neutral desk: Linear-dense chrome, Arc-calm reading, indigo reserved for action and selection. The shell keeps a slim labeled sidebar; Brief is a four-column stage (history | digest | Insight with summary + Ask). Expression stays Operate-mode familiar; craft bar is Linear + Arc (canon / category standard).
 
 **Key Characteristics:**
 
 - Cool `#FAFAFA` stage with white raised panels and `#E4E4E7` hairline borders
 - Indigo accent `#5E6AD2` for primary buttons, active nav, progress fills
 - Slim text sidebar (~10rem) with logo + wordmark, icon + label nav; mobile bottom nav
-- Brief owns the reading stage; Ask dock + optional drawer — no permanent Brief|Ask split
-- Inter UI type at fixed rem steps; ~42rem digest measure, ~40rem Ask composer
+- Brief history rail (scroll, no pagination); digest categories always single column; Ask in the right Insight pane
+- Inter UI type at fixed rem steps
 - English default UI with persistent EN/ZH toggle in the sidebar (and mobile bottom nav)
 - SVG logo in the brand slot (`frontend/public/logo.svg`)
 - Accessibility: skip link, landmarks, live regions, modal focus trap, keyboard-reachable hover actions
@@ -177,18 +177,19 @@ Restrained neutral stack with one indigo accent and semantic washes.
 
 ## Layout
 
-Brief-first shell: labeled sidebar + full-width main; home route stages digest above a persistent Ask dock.
+Brief route uses a four-column stage inside the shell: labeled sidebar + Brief history rail + digest stage + Insight (summary + Ask).
 
-- **Desktop sidebar:** `--sidebar-width: 10rem`; raised surface, right hairline border; brand row (24px logo + wordmark) then vertical nav with icon + text label.
-- **Main stage:** `#main-content` fills remaining width; Brief overview scrolls full-bleed within the stage; digest body centers at ~42rem; Ask composer centers at ~40rem.
-- **Ask (Comp C):** Bottom `.app-ask-dock` always present on Brief (scoped chips + composer). Conversation is an expandable `.app-ask-drawer` above the dock (max ~48vh / 28rem), not a permanent side pane.
+- **Desktop sidebar:** `--sidebar-width: 10rem`; raised surface, right hairline border; brand row (24px logo + wordmark) then vertical nav with icon + text label; Help + EN/ZH at foot.
+- **Brief history rail (~17.5rem):** scrollable list of past briefs (no pagination, no status badges); selects a digest snapshot.
+- **Digest stage (flex):** date as page title; meta line omits date; toolbar; categories always single column.
+- **Insight pane (~22.5rem):** top “Summarized by Askme” excerpt; bottom Ask conversation + composer (always present on desktop).
 - **Top strip:** Job banners (LLM config, onboarding, refresh, digest) sit above the shell row.
 - **Content widths:** narrow 44rem, medium 1200px, wide 1500px via `.app-content-*`.
-- **≤768px:** Sidebar hidden; bottom nav with icon + micro label + lang toggle. Ask drawer max ~36vh / 16rem. Form controls min-height 44px. Sources stack: feed sidebar max ~40vh above article list.
+- **≤900px (Brief):** History | Brief | Ask tabs; one pane at a time. Shell bottom nav remains for Brief/Sources/Settings/Help.
 
 ### Named Rules
 
-**The Brief Owns the Stage Rule.** Digest is the primary full-width surface. Ask is dock + optional drawer—never a permanent Brief|Ask split pane.
+**The Brief Stage Rule.** Digest owns the center reading stage; Ask lives in the right Insight pane (or the Ask mobile tab)—not a bottom dock.
 
 **The Text Nav Rule.** Desktop navigation is a ~10rem labeled sidebar (icon + readable label), not an icon-only 64px rail.
 
@@ -264,10 +265,10 @@ Progress / success / warning / error / neutral tones for refresh, index, digest,
 
 ### Do:
 
-- **Do** keep Brief as the full-width primary stage and Ask as dock + optional drawer.
-- **Do** keep the ~10rem labeled sidebar (logo + wordmark + text nav) on desktop.
+- **Do** keep the Brief four-column stage: history rail + digest + Insight (summary/Ask).
+- **Do** keep the ~10rem labeled sidebar (logo + wordmark + text nav + Help) on desktop.
 - **Do** keep EN default with one-click ZH toggle in the shell chrome.
-- **Do** use the logo SVG in the brand slot.
+- **Do** keep the logo SVG in the brand slot.
 - **Do** preserve focus-visible outlines on all interactive elements.
 - **Do** use `.ui-icon-btn` (36×36px min) for compact icon-only controls (⋯, ↻, drag handles).
 - **Do** use `.ui-chip-btn` for inline citation/index chips (24px min touch floor).
@@ -275,9 +276,10 @@ Progress / success / warning / error / neutral tones for refresh, index, digest,
 
 ### Don't:
 
-- **Don't** restore a permanent Brief|Ask split pane or Brief/Ask mobile tab switcher as the home composition.
+- **Don't** restore the bottom Ask dock as the home composition.
 - **Don't** shrink the desktop nav back to an icon-only ~64px rail.
 - **Don't** reintroduce warm parchment palette from the previous world.
 - **Don't** use colored side-tab borders on cards or nav items.
 - **Don't** hardcode UI strings outside `messages.ts`.
 - **Don't** flood large surfaces with indigo wash—accent stays sparse.
+- **Don't** paginate Brief History or show Done/Partial status badges.

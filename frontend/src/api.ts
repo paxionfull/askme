@@ -530,6 +530,26 @@ export interface CachedSummaryResponse {
   digest_tree?: DigestTree | null;
 }
 
+export interface BriefHistoryItem {
+  cache_key: string;
+  days: number;
+  title: string;
+  article_count: number;
+  source_count: number;
+  truncated: boolean;
+  updated_at: number;
+  group_ids: string[];
+  group_names: string[];
+  feed_ids: string[];
+}
+
+export interface BriefHistoryResponse {
+  items: BriefHistoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export type DigestTreeArticle = {
   feed_id: string;
   article_id: string;
@@ -561,7 +581,12 @@ export type DigestTree = {
   sections?: DigestTreeSection[];
 };
 
-export function fetchCachedSummary(days: number, feedIds?: string[], groupIds?: string[]) {
+export function fetchCachedSummary(
+  days: number,
+  feedIds?: string[],
+  groupIds?: string[],
+  options?: { allowHistory?: boolean },
+) {
   const params = new URLSearchParams({ days: String(days) });
   for (const id of feedIds ?? []) {
     params.append("feed_ids", id);
@@ -569,7 +594,18 @@ export function fetchCachedSummary(days: number, feedIds?: string[], groupIds?: 
   for (const id of groupIds ?? []) {
     params.append("group_ids", id);
   }
+  if (options?.allowHistory) {
+    params.set("allow_history", "true");
+  }
   return request<CachedSummaryResponse>(`/api/digest/summary?${params}`);
+}
+
+export function fetchBriefHistory(limit = 50, offset = 0) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return request<BriefHistoryResponse>(`/api/digest/summaries?${params}`);
 }
 
 export function clearCachedSummary(days: number, feedIds?: string[]) {
