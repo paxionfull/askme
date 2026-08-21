@@ -3,16 +3,16 @@
 @source not "./stories/assets";
 
 @theme {
-  --color-surface: #fafafa;
-  --color-surface-raised: #ffffff;
-  --color-ink: #171717;
-  --color-ink-muted: #737373;
-  --color-border: #e5e5e5;
-  --color-border-strong: #d4d4d4;
-  --color-accent: #5e6ad2;
-  --color-accent-soft: #f3f4fb;
-  --color-accent-hover: #4f5abf;
-  --color-link: #404040;
+  --color-surface: #eef1ef;
+  --color-surface-raised: #f6f8f6;
+  --color-ink: #1a1f1c;
+  --color-ink-muted: #6b736e;
+  --color-border: #d7ddd9;
+  --color-border-strong: #c5cdc8;
+  --color-accent: #14532d;
+  --color-accent-soft: #ecfdf5;
+  --color-accent-hover: #166534;
+  --color-link: #3f4a44;
   --color-success: #15803d;
   --color-success-soft: #f0fdf4;
   --color-warning: #b45309;
@@ -23,24 +23,25 @@
   --color-danger-text: #991b1b;
   --color-danger-hover: #b91c1c;
   --color-danger-track: #fecaca;
-  --color-on-accent: #ffffff;
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --color-on-accent: #f0fdf4;
+  --font-sans: "Public Sans Variable", "Public Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-reading: "Newsreader Variable", "Newsreader", Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 :root {
-  --surface: #fafafa;
-  --surface-raised: #ffffff;
-  --ink: #171717;
-  --ink-muted: #737373;
-  --border: #e5e5e5;
-  --border-strong: #d4d4d4;
-  --accent: #5e6ad2;
-  --accent-soft: #f3f4fb;
-  --accent-hover: #4f5abf;
+  --surface: #eef1ef;
+  --surface-raised: #f6f8f6;
+  --ink: #1a1f1c;
+  --ink-muted: #6b736e;
+  --border: #d7ddd9;
+  --border-strong: #c5cdc8;
+  --accent: #14532d;
+  --accent-soft: #ecfdf5;
+  --accent-hover: #166534;
   --focus-wash: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
-  --link: #404040;
-  --focus-ring: #5e6ad2;
+  --link: #3f4a44;
+  --focus-ring: #14532d;
   --success: #15803d;
   --success-soft: #f0fdf4;
   --warning: #b45309;
@@ -51,7 +52,7 @@
   --danger-text: #991b1b;
   --danger-hover: #b91c1c;
   --danger-track: #fecaca;
-  --on-accent: #ffffff;
+  --on-accent: #f0fdf4;
   --radius-control: 5px;
   --radius-panel: 6px;
   --control-height: 2rem;
@@ -59,8 +60,9 @@
   --app-content-max-medium: 1200px;
   --app-content-max-wide: 1500px;
   --app-content-max-narrow: 44rem;
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-sans: "Public Sans Variable", "Public Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-reading: "Newsreader Variable", "Newsreader", Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --paper: var(--surface);
   --paper-raised: var(--surface-raised);
   --rule: var(--border);
@@ -636,6 +638,8 @@ body {
 
 .article-content {
   max-width: 65ch;
+  font-family: var(--font-reading);
+  font-optical-sizing: auto;
   font-size: 0.9375rem;
   line-height: 1.7;
   color: var(--ink);
@@ -668,10 +672,16 @@ body {
   opacity: 1 !important;
 }
 
+.markdown-body {
+  font-family: var(--font-reading);
+  font-optical-sizing: auto;
+}
+
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3 {
   margin: 1.25rem 0 0.75rem;
+  font-family: var(--font-reading);
   font-weight: 600;
   line-height: 1.4;
   color: var(--ink);
@@ -885,6 +895,7 @@ body {
 .digest-article-title {
   color: var(--ink);
   text-decoration: none;
+  font-family: var(--font-reading);
   font-weight: 500;
   letter-spacing: -0.005em;
 }
@@ -1394,15 +1405,15 @@ body {
   }
 }
 
-/* Brief stage layout (history | digest | insight) */
-/* Brief stage — history rail | digest | insight (summary + ask) */
+/* Brief stage — history rail | digest | floating insight (Summary | Ask tabs) */
 .app-brief-stage {
+  position: relative;
   display: flex;
   min-height: 0;
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  background: var(--surface-raised);
+  background: var(--surface);
 }
 
 /* ---------- Brief history rail ---------- */
@@ -1580,7 +1591,9 @@ body {
   flex: 1;
   flex-direction: column;
   overflow: hidden;
-  background: var(--surface-raised);
+  background: var(--surface);
+  /* Clearance for floating insight (T2b-4: 28rem + right inset) */
+  padding-right: calc(28rem + 1.1rem + 0.75rem);
 }
 
 .brief-stage-header {
@@ -1764,23 +1777,74 @@ body {
   background: var(--accent-soft);
 }
 
-/* ---------- Insight panel (summary + ask) ---------- */
+/* ---------- Insight float (T2b-4: Summary | Ask tabs) ---------- */
 .brief-insight-pane {
+  position: absolute;
+  z-index: 20;
+  top: 3.25rem;
+  right: 1.1rem;
+  bottom: 3.25rem;
   display: flex;
-  width: 22.5rem;
+  width: 28rem;
   flex-shrink: 0;
   flex-direction: column;
   min-height: 0;
-  border-left: 1px solid var(--border);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
   background: var(--surface-raised);
+  box-shadow: 0 14px 40px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+
+.brief-insight-tabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: 1.25rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.brief-insight-tab {
+  position: relative;
+  margin: 0;
+  padding: 0.65rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+}
+
+.brief-insight-tab.is-active {
+  color: var(--accent);
+}
+
+.brief-insight-tab.is-active::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+}
+
+.brief-insight-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .brief-insight-summary {
-  flex-shrink: 0;
-  max-height: 50%;
-  overflow-y: auto;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
   padding: 1rem 1.1rem 1.1rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
+  max-height: none;
 }
 
 .brief-insight-summary-label {
@@ -1788,6 +1852,7 @@ body {
   align-items: center;
   gap: 0.4rem;
   margin: 0 0 0.9rem;
+  flex-shrink: 0;
   font-size: 0.75rem;
   font-weight: 500;
   letter-spacing: 0;
@@ -1802,13 +1867,19 @@ body {
 
 .brief-insight-summary-body {
   margin: 0;
-  font-size: 0.8125rem;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  font-family: var(--font-reading);
+  font-size: 0.9375rem;
   line-height: 1.65;
-  color: var(--ink-muted);
+  color: var(--ink);
 }
 
 .brief-insight-summary-body.is-empty {
   color: var(--ink-muted);
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
 }
 
 .brief-insight-summary-body p {
@@ -1986,9 +2057,19 @@ body {
   }
 
   .brief-insight-pane {
+    position: relative;
+    top: auto;
+    right: auto;
+    bottom: auto;
     width: 100%;
     flex: 1;
-    border-left: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .brief-stage-pane {
+    padding-right: 0;
   }
 
   .app-brief-mobile-tabs {
@@ -2021,7 +2102,10 @@ body {
 
 @media (max-width: 1100px) {
   .brief-history-rail { width: 15rem; }
-  .brief-insight-pane { width: 19rem; }
+  .brief-insight-pane { width: 24rem; }
+  .brief-stage-pane {
+    padding-right: calc(24rem + 1.1rem + 0.75rem);
+  }
 }
 
 @media (max-width: 900px) {
@@ -2058,10 +2142,20 @@ body {
     display: none;
   }
 
+  .brief-stage-pane {
+    padding-right: 0;
+  }
+
   .brief-history-rail,
   .brief-insight-pane {
+    position: relative;
+    top: auto;
+    right: auto;
+    bottom: auto;
     width: 100%;
     border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 }
 

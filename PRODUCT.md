@@ -39,6 +39,8 @@ Askme 自动跟进用户关注的网站文章更新，生成可读简报；用�
 - **默认英文界面** — 导航、标签、空状态与核心文案以英文呈现；提供明显、低摩擦的中文切换（设置或全局入口均可，以一次操作可达为准）
 - 中文为完整第二语言，而非仅部分翻译
 - **视觉工艺标杆（用户确认）**：品类标准路径，与 **Linear + Readwise Reader + Vercel** 同级工艺 — Linear 的精确紧凑工具 chrome；Readwise Reader 的阅读/高亮/稍后读气质与内容优先密度；Vercel 的冷静产品面、清晰层级与现代部署级细节。**不以 Arc 为标杆**。Canon / standing-exit 路线，非 challenger 隐喻世界
+- **锁定视觉（用户筛选 2026-08-21）**：按钮主色墨绿 `#14532D`；背景薄青灰 `#EEF1EF` / raised `#F6F8F6`；UI **Public Sans** + 正文 **Newsreader**（见 `DESIGN.md`）
+- **锁定 Brief 布局（T2b-4）**：History 常驻；右侧浮层 Insight（上下 inset 3.25rem）；内为 Summary | Ask 下划线 Tab，默认 Summary
 
 ## Accessibility & Inclusion
 

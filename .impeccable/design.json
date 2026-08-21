@@ -1,138 +1,358 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-07T19:45:32Z",
+  "generatedAt": "2026-08-21T08:30:44Z",
   "title": "Design System: Askme",
   "extensions": {
     "colorMeta": {
       "surface": {
         "role": "neutral",
         "displayName": "Stage",
-        "canonical": "#fafafa",
-        "tonalRamp": ["#18181b", "#27272a", "#3f3f46", "#52525b", "#71717a", "#a1a1aa", "#e4e4e7", "#fafafa"]
+        "canonical": "#eef1ef",
+        "tonalRamp": [
+          "#1a1f1c",
+          "#2a322e",
+          "#3f4a44",
+          "#6b736e",
+          "#a3aba6",
+          "#d7ddd9",
+          "#eef1ef",
+          "#f6f8f6"
+        ]
       },
       "surface-raised": {
         "role": "neutral",
         "displayName": "Raised",
-        "canonical": "#ffffff",
-        "tonalRamp": ["#18181b", "#27272a", "#3f3f46", "#52525b", "#a1a1aa", "#e4e4e7", "#fafafa", "#ffffff"]
+        "canonical": "#f6f8f6",
+        "tonalRamp": [
+          "#1a1f1c",
+          "#2a322e",
+          "#3f4a44",
+          "#6b736e",
+          "#a3aba6",
+          "#d7ddd9",
+          "#eef1ef",
+          "#f6f8f6"
+        ]
       },
       "ink": {
         "role": "neutral",
         "displayName": "Ink",
-        "canonical": "#18181b",
-        "tonalRamp": ["#09090b", "#18181b", "#27272a", "#3f3f46", "#52525b", "#71717a", "#a1a1aa", "#e4e4e7"]
+        "canonical": "#1a1f1c",
+        "tonalRamp": [
+          "#0d100e",
+          "#1a1f1c",
+          "#2a322e",
+          "#3f4a44",
+          "#6b736e",
+          "#a3aba6",
+          "#d7ddd9",
+          "#eef1ef"
+        ]
       },
       "ink-muted": {
         "role": "neutral",
         "displayName": "Muted",
-        "canonical": "#52525b",
-        "tonalRamp": ["#18181b", "#27272a", "#3f3f46", "#52525b", "#71717a", "#a1a1aa", "#d4d4d8", "#f4f4f5"]
+        "canonical": "#6b736e",
+        "tonalRamp": [
+          "#1a1f1c",
+          "#2a322e",
+          "#3f4a44",
+          "#6b736e",
+          "#8a928c",
+          "#a3aba6",
+          "#d7ddd9",
+          "#eef1ef"
+        ]
       },
       "border": {
         "role": "neutral",
         "displayName": "Border",
-        "canonical": "#e4e4e7",
-        "tonalRamp": ["#3f3f46", "#52525b", "#71717a", "#a1a1aa", "#d4d4d8", "#e4e4e7", "#f4f4f5", "#fafafa"]
+        "canonical": "#d7ddd9",
+        "tonalRamp": [
+          "#3f4a44",
+          "#6b736e",
+          "#a3aba6",
+          "#c5cdc8",
+          "#d7ddd9",
+          "#eef1ef",
+          "#f6f8f6",
+          "#fafbfa"
+        ]
       },
       "border-strong": {
         "role": "neutral",
         "displayName": "Border Strong",
-        "canonical": "#d4d4d8",
-        "tonalRamp": ["#3f3f46", "#52525b", "#71717a", "#a1a1aa", "#d4d4d8", "#e4e4e7", "#f4f4f5", "#fafafa"]
+        "canonical": "#c5cdc8",
+        "tonalRamp": [
+          "#3f4a44",
+          "#6b736e",
+          "#a3aba6",
+          "#c5cdc8",
+          "#d7ddd9",
+          "#eef1ef",
+          "#f6f8f6",
+          "#fafbfa"
+        ]
       },
       "accent": {
         "role": "primary",
-        "displayName": "Indigo Accent",
-        "canonical": "#5e6ad2",
-        "tonalRamp": ["#1e1b4b", "#312e81", "#4338ca", "#4f5abf", "#5e6ad2", "#818cf8", "#a5b4fc", "#eef0fb"]
+        "displayName": "Forest Accent",
+        "canonical": "#14532d",
+        "tonalRamp": [
+          "#052e16",
+          "#14532d",
+          "#166534",
+          "#15803d",
+          "#16a34a",
+          "#4ade80",
+          "#bbf7d0",
+          "#ecfdf5"
+        ]
       },
       "accent-soft": {
         "role": "primary",
-        "displayName": "Indigo Wash",
-        "canonical": "#eef0fb",
-        "tonalRamp": ["#312e81", "#4338ca", "#5e6ad2", "#818cf8", "#a5b4fc", "#c7d2fe", "#e0e7ff", "#eef0fb"]
+        "displayName": "Forest Wash",
+        "canonical": "#ecfdf5",
+        "tonalRamp": [
+          "#14532d",
+          "#166534",
+          "#15803d",
+          "#4ade80",
+          "#86efac",
+          "#bbf7d0",
+          "#dcfce7",
+          "#ecfdf5"
+        ]
       },
       "accent-hover": {
         "role": "primary",
-        "displayName": "Indigo Hover",
-        "canonical": "#4f5abf",
-        "tonalRamp": ["#1e1b4b", "#312e81", "#4338ca", "#4f5abf", "#5e6ad2", "#6366f1", "#818cf8", "#eef0fb"]
+        "displayName": "Forest Hover",
+        "canonical": "#166534",
+        "tonalRamp": [
+          "#052e16",
+          "#14532d",
+          "#166534",
+          "#15803d",
+          "#16a34a",
+          "#4ade80",
+          "#bbf7d0",
+          "#ecfdf5"
+        ]
       },
       "link": {
         "role": "neutral",
         "displayName": "Link Ink",
-        "canonical": "#3f3f46",
-        "tonalRamp": ["#18181b", "#27272a", "#3f3f46", "#52525b", "#71717a", "#a1a1aa", "#d4d4d8", "#f4f4f5"]
+        "canonical": "#3f4a44",
+        "tonalRamp": [
+          "#1a1f1c",
+          "#2a322e",
+          "#3f4a44",
+          "#6b736e",
+          "#8a928c",
+          "#a3aba6",
+          "#d7ddd9",
+          "#eef1ef"
+        ]
       },
       "success": {
         "role": "semantic",
         "displayName": "Success",
         "canonical": "#15803d",
-        "tonalRamp": ["#14532d", "#166534", "#15803d", "#16a34a", "#4ade80", "#bbf7d0", "#dcfce7", "#f0fdf4"]
+        "tonalRamp": [
+          "#14532d",
+          "#166534",
+          "#15803d",
+          "#16a34a",
+          "#4ade80",
+          "#bbf7d0",
+          "#dcfce7",
+          "#f0fdf4"
+        ]
       },
       "success-soft": {
         "role": "semantic",
         "displayName": "Success Soft",
         "canonical": "#f0fdf4",
-        "tonalRamp": ["#14532d", "#15803d", "#16a34a", "#4ade80", "#86efac", "#bbf7d0", "#dcfce7", "#f0fdf4"]
+        "tonalRamp": [
+          "#14532d",
+          "#15803d",
+          "#16a34a",
+          "#4ade80",
+          "#86efac",
+          "#bbf7d0",
+          "#dcfce7",
+          "#f0fdf4"
+        ]
       },
       "warning": {
         "role": "semantic",
         "displayName": "Warning",
         "canonical": "#b45309",
-        "tonalRamp": ["#78350f", "#92400e", "#b45309", "#d97706", "#f59e0b", "#fde68a", "#fef3c7", "#fffbeb"]
+        "tonalRamp": [
+          "#78350f",
+          "#92400e",
+          "#b45309",
+          "#d97706",
+          "#f59e0b",
+          "#fde68a",
+          "#fef3c7",
+          "#fffbeb"
+        ]
       },
       "warning-text": {
         "role": "semantic",
         "displayName": "Warning Text",
         "canonical": "#92400e",
-        "tonalRamp": ["#78350f", "#92400e", "#b45309", "#d97706", "#f59e0b", "#fde68a", "#fef3c7", "#fffbeb"]
+        "tonalRamp": [
+          "#78350f",
+          "#92400e",
+          "#b45309",
+          "#d97706",
+          "#f59e0b",
+          "#fde68a",
+          "#fef3c7",
+          "#fffbeb"
+        ]
       },
       "warning-soft": {
         "role": "semantic",
         "displayName": "Warning Soft",
         "canonical": "#fffbeb",
-        "tonalRamp": ["#78350f", "#b45309", "#d97706", "#f59e0b", "#fde68a", "#fef3c7", "#fffbeb", "#fffef7"]
+        "tonalRamp": [
+          "#78350f",
+          "#b45309",
+          "#d97706",
+          "#f59e0b",
+          "#fde68a",
+          "#fef3c7",
+          "#fffbeb",
+          "#fffef7"
+        ]
       },
       "error-soft": {
         "role": "semantic",
         "displayName": "Error Soft",
         "canonical": "#fef2f2",
-        "tonalRamp": ["#7f1d1d", "#991b1b", "#dc2626", "#f87171", "#fecaca", "#fee2e2", "#fef2f2", "#fff5f5"]
+        "tonalRamp": [
+          "#7f1d1d",
+          "#991b1b",
+          "#dc2626",
+          "#f87171",
+          "#fecaca",
+          "#fee2e2",
+          "#fef2f2",
+          "#fff5f5"
+        ]
       },
       "danger": {
         "role": "semantic",
         "displayName": "Danger",
         "canonical": "#dc2626",
-        "tonalRamp": ["#7f1d1d", "#991b1b", "#b91c1c", "#dc2626", "#ef4444", "#fecaca", "#fee2e2", "#fef2f2"]
+        "tonalRamp": [
+          "#7f1d1d",
+          "#991b1b",
+          "#b91c1c",
+          "#dc2626",
+          "#ef4444",
+          "#fecaca",
+          "#fee2e2",
+          "#fef2f2"
+        ]
       },
       "danger-text": {
         "role": "semantic",
         "displayName": "Danger Text",
         "canonical": "#991b1b",
-        "tonalRamp": ["#7f1d1d", "#991b1b", "#b91c1c", "#dc2626", "#ef4444", "#fecaca", "#fee2e2", "#fef2f2"]
+        "tonalRamp": [
+          "#7f1d1d",
+          "#991b1b",
+          "#b91c1c",
+          "#dc2626",
+          "#ef4444",
+          "#fecaca",
+          "#fee2e2",
+          "#fef2f2"
+        ]
       },
       "danger-hover": {
         "role": "semantic",
         "displayName": "Danger Hover",
         "canonical": "#b91c1c",
-        "tonalRamp": ["#7f1d1d", "#991b1b", "#b91c1c", "#dc2626", "#ef4444", "#fecaca", "#fee2e2", "#fef2f2"]
+        "tonalRamp": [
+          "#7f1d1d",
+          "#991b1b",
+          "#b91c1c",
+          "#dc2626",
+          "#ef4444",
+          "#fecaca",
+          "#fee2e2",
+          "#fef2f2"
+        ]
       },
       "danger-track": {
         "role": "semantic",
         "displayName": "Danger Track",
         "canonical": "#fecaca",
-        "tonalRamp": ["#991b1b", "#dc2626", "#f87171", "#fca5a5", "#fecaca", "#fee2e2", "#fef2f2", "#fff5f5"]
+        "tonalRamp": [
+          "#991b1b",
+          "#dc2626",
+          "#f87171",
+          "#fca5a5",
+          "#fecaca",
+          "#fee2e2",
+          "#fef2f2",
+          "#fff5f5"
+        ]
+      },
+      "on-accent": {
+        "role": "primary",
+        "displayName": "On Accent",
+        "canonical": "#f0fdf4",
+        "tonalRamp": [
+          "#14532d",
+          "#166534",
+          "#15803d",
+          "#4ade80",
+          "#86efac",
+          "#bbf7d0",
+          "#dcfce7",
+          "#f0fdf4"
+        ]
       }
     },
     "typographyMeta": {
-      "body": { "displayName": "Body", "purpose": "Default UI copy at 0.875rem / 1.5." },
-      "title": { "displayName": "Title", "purpose": "Panel headings at 0.9375rem / 600." },
-      "page-title": { "displayName": "Page title", "purpose": "Route h1 at 1.35rem across Brief, Sources, Settings." },
-      "label": { "displayName": "Label", "purpose": "Field labels and meta at 0.75rem / 500." },
-      "compact": { "displayName": "Compact", "purpose": "Buttons and inputs at 0.8125rem / 500." },
-      "micro": { "displayName": "Micro", "purpose": "Dense chips and inline actions at 0.6875rem / 600." },
-      "nav": { "displayName": "Nav", "purpose": "Icon-rail micro labels at 0.6875rem / 600." }
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default UI copy at 0.875rem / 1.5."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Panel headings at 0.9375rem / 600."
+      },
+      "page-title": {
+        "displayName": "Page title",
+        "purpose": "Route h1 at 1.35rem across Brief, Sources, Settings."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Field labels and meta at 0.75rem / 500."
+      },
+      "compact": {
+        "displayName": "Compact",
+        "purpose": "Buttons and inputs at 0.8125rem / 500."
+      },
+      "micro": {
+        "displayName": "Micro",
+        "purpose": "Dense chips and inline actions at 0.6875rem / 600."
+      },
+      "nav": {
+        "displayName": "Nav",
+        "purpose": "Desktop sidebar labels at 0.8125rem / 500."
+      },
+      "reading": {
+        "displayName": "Reading",
+        "purpose": "Digest markdown, Insight summary, article body — Newsreader at ~0.9375rem / 1.65."
+      }
     },
     "shadows": [
       {
@@ -176,9 +396,9 @@
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Indigo solid CTA for primary actions (Update, Save, Send).",
+      "description": "Forest solid CTA for primary actions (Update, Save, Send).",
       "html": "<button class=\"ds-btn-primary\" type=\"button\">Update selected</button>",
-      "css": ".ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;min-height:2.25rem;padding:.4rem .75rem;border-radius:6px;border:1px solid #5e6ad2;background:#5e6ad2;color:#fff;font:500 .8125rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif;cursor:pointer;transition:background .15s ease,border-color .15s ease}.ds-btn-primary:hover{background:#4f5abf;border-color:#4f5abf}.ds-btn-primary:focus-visible{outline:2px solid color-mix(in srgb,#5e6ad2 55%,transparent);outline-offset:2px}.ds-btn-primary:disabled{opacity:.5;cursor:not-allowed}"
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;min-height:2.25rem;padding:.4rem .75rem;border-radius:6px;border:1px solid #14532d;background:#14532d;color:#f0fdf4;font:500 .8125rem/1.5 \"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif;cursor:pointer;transition:background .15s ease,border-color .15s ease}.ds-btn-primary:hover{background:#166534;border-color:#166534}.ds-btn-primary:focus-visible{outline:2px solid color-mix(in srgb,#14532d 55%,transparent);outline-offset:2px}.ds-btn-primary:disabled{opacity:.5;cursor:not-allowed}"
     },
     {
       "name": "Default Button",
@@ -186,15 +406,15 @@
       "refersTo": "button-default",
       "description": "Raised bordered control for secondary actions (Edit, Cancel, Build index).",
       "html": "<button class=\"ds-btn\" type=\"button\">Build search index</button>",
-      "css": ".ds-btn{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;min-height:2.25rem;padding:.4rem .75rem;border-radius:6px;border:1px solid #e4e4e7;background:#fff;color:#18181b;font:500 .8125rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif;cursor:pointer;transition:background .15s ease,border-color .15s ease}.ds-btn:hover{background:#fafafa;border-color:#d4d4d8}.ds-btn:focus-visible{outline:2px solid color-mix(in srgb,#5e6ad2 55%,transparent);outline-offset:2px}"
+      "css": ".ds-btn{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;min-height:2.25rem;padding:.4rem .75rem;border-radius:6px;border:1px solid #d7ddd9;background:#f6f8f6;color:#1a1f1c;font:500 .8125rem/1.5 \"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif;cursor:pointer;transition:background .15s ease,border-color .15s ease}.ds-btn:hover{background:#eef1ef;border-color:#c5cdc8}.ds-btn:focus-visible{outline:2px solid color-mix(in srgb,#14532d 55%,transparent);outline-offset:2px}"
     },
     {
       "name": "Accent Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Indigo wash button for quieter accent actions (Think on, Relogin).",
+      "description": "Forest wash button for quieter accent actions (Think on, Relogin).",
       "html": "<button class=\"ds-btn-accent\" type=\"button\" aria-pressed=\"true\">Think</button>",
-      "css": ".ds-btn-accent{display:inline-flex;align-items:center;justify-content:center;min-height:2.25rem;padding:.4rem .75rem;border-radius:6px;border:1px solid color-mix(in srgb,#5e6ad2 35%,#e4e4e7);background:#eef0fb;color:#5e6ad2;font:500 .8125rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif;cursor:pointer;transition:background .15s ease}.ds-btn-accent:hover{background:color-mix(in srgb,#eef0fb 65%,#fff)}.ds-btn-accent:focus-visible{outline:2px solid color-mix(in srgb,#5e6ad2 55%,transparent);outline-offset:2px}"
+      "css": ".ds-btn-accent{display:inline-flex;align-items:center;justify-content:center;min-height:2.25rem;padding:.4rem .75rem;border-radius:6px;border:1px solid color-mix(in srgb,#14532d 35%,#d7ddd9);background:#ecfdf5;color:#14532d;font:500 .8125rem/1.5 \"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif;cursor:pointer;transition:background .15s ease}.ds-btn-accent:hover{background:color-mix(in srgb,#ecfdf5 65%,#f6f8f6)}.ds-btn-accent:focus-visible{outline:2px solid color-mix(in srgb,#14532d 55%,transparent);outline-offset:2px}"
     },
     {
       "name": "Danger Button",
@@ -202,7 +422,7 @@
       "refersTo": "button-default",
       "description": "Soft danger control for Reset/Delete secondary destructive actions.",
       "html": "<button class=\"ds-btn-danger\" type=\"button\">Reset</button>",
-      "css": ".ds-btn-danger{display:inline-flex;align-items:center;justify-content:center;min-height:2.25rem;padding:.4rem .75rem;border-radius:6px;border:1px solid color-mix(in srgb,#dc2626 35%,#e4e4e7);background:#fef2f2;color:#b91c1c;font:500 .8125rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif;cursor:pointer;transition:background .15s ease}.ds-btn-danger:hover{background:color-mix(in srgb,#fef2f2 70%,#fff)}.ds-btn-danger:focus-visible{outline:2px solid color-mix(in srgb,#5e6ad2 55%,transparent);outline-offset:2px}"
+      "css": ".ds-btn-danger{display:inline-flex;align-items:center;justify-content:center;min-height:2.25rem;padding:.4rem .75rem;border-radius:6px;border:1px solid color-mix(in srgb,#dc2626 35%,#d7ddd9);background:#fef2f2;color:#b91c1c;font:500 .8125rem/1.5 \"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif;cursor:pointer;transition:background .15s ease}.ds-btn-danger:hover{background:color-mix(in srgb,#fef2f2 70%,#f6f8f6)}.ds-btn-danger:focus-visible{outline:2px solid color-mix(in srgb,#14532d 55%,transparent);outline-offset:2px}"
     },
     {
       "name": "Icon Button",
@@ -210,23 +430,23 @@
       "refersTo": "button-default",
       "description": "36×36 compact chrome for refresh, overflow, close, and drawer actions.",
       "html": "<button class=\"ds-icon-btn\" type=\"button\" aria-label=\"Refresh\"><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M15.5 8.2a5.5 5.5 0 1 0 1 3.3\"/><path d=\"M15.5 4.5v3.7h-3.7\"/></svg></button>",
-      "css": ".ds-icon-btn{display:inline-flex;align-items:center;justify-content:center;min-width:2.25rem;min-height:2.25rem;padding:.25rem;border-radius:6px;border:1px solid transparent;background:transparent;color:#52525b;cursor:pointer;transition:background .15s ease,color .15s ease}.ds-icon-btn:hover{background:#fff;color:#18181b}.ds-icon-btn:focus-visible{outline:2px solid color-mix(in srgb,#5e6ad2 55%,transparent);outline-offset:2px}"
+      "css": ".ds-icon-btn{display:inline-flex;align-items:center;justify-content:center;min-width:2.25rem;min-height:2.25rem;padding:.25rem;border-radius:6px;border:1px solid transparent;background:transparent;color:#6b736e;cursor:pointer;transition:background .15s ease,color .15s ease}.ds-icon-btn:hover{background:#f6f8f6;color:#1a1f1c}.ds-icon-btn:focus-visible{outline:2px solid color-mix(in srgb,#14532d 55%,transparent);outline-offset:2px}"
     },
     {
       "name": "Text Field",
       "kind": "input",
       "refersTo": "input-default",
-      "description": "Default form control with indigo focus ring; 44px min-height at ≤768px.",
+      "description": "Default form control with forest focus ring; 44px min-height at ≤768px.",
       "html": "<label class=\"ds-field\"><span class=\"ds-field-label\">Base URL</span><input class=\"ds-input\" type=\"url\" value=\"https://api.openai.com/v1\"/></label>",
-      "css": ".ds-field{display:block}.ds-field-label{display:block;margin-bottom:.375rem;font:500 .75rem/1.45 Inter,ui-sans-serif,system-ui,sans-serif;color:#52525b}.ds-input{display:block;width:100%;min-height:2.25rem;padding:.4rem .65rem;border-radius:6px;border:1px solid #e4e4e7;background:#fff;color:#18181b;font:400 .8125rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif}.ds-input:focus{outline:2px solid color-mix(in srgb,#5e6ad2 45%,transparent);outline-offset:1px;border-color:color-mix(in srgb,#5e6ad2 40%,#e4e4e7)}.ds-input::placeholder{color:#52525b}"
+      "css": ".ds-field{display:block}.ds-field-label{display:block;margin-bottom:.375rem;font:500 .75rem/1.45 \"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif;color:#6b736e}.ds-input{display:block;width:100%;min-height:2.25rem;padding:.4rem .65rem;border-radius:6px;border:1px solid #d7ddd9;background:#f6f8f6;color:#1a1f1c;font:400 .8125rem/1.5 \"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif}.ds-input:focus{outline:2px solid color-mix(in srgb,#14532d 45%,transparent);outline-offset:1px;border-color:color-mix(in srgb,#14532d 40%,#d7ddd9)}.ds-input::placeholder{color:#6b736e}"
     },
     {
-      "name": "Icon Rail Nav",
+      "name": "Sidebar Nav",
       "kind": "nav",
       "refersTo": "button-default",
-      "description": "64px rail item with micro label; active state uses indigo wash.",
+      "description": "Labeled sidebar item; active state uses stage fill + ink (not accent wash).",
       "html": "<nav class=\"ds-rail\" aria-label=\"Main navigation\"><a class=\"ds-nav-link is-active\" href=\"#\"><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M5 4h10v12H5z\"/><path d=\"M7 7h6M7 10h6M7 13h4\"/></svg><span class=\"ds-nav-label\">Brief</span></a><a class=\"ds-nav-link\" href=\"#\"><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M4 6h12M4 10h12M4 14h8\"/><circle cx=\"15.5\" cy=\"14\" r=\"1.5\" fill=\"currentColor\" stroke=\"none\"/></svg><span class=\"ds-nav-label\">Sources</span></a></nav>",
-      "css": ".ds-rail{display:flex;flex-direction:column;gap:.15rem;width:4rem;padding:.35rem 0;background:#fff;border-right:1px solid #e4e4e7;font-family:Inter,ui-sans-serif,system-ui,sans-serif}.ds-nav-link{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.15rem;width:3.25rem;min-height:2.75rem;margin:.2rem auto;padding:.4rem .2rem;border-radius:6px;color:#52525b;text-decoration:none;transition:background .15s ease,color .15s ease}.ds-nav-link:hover{background:#fafafa;color:#18181b}.ds-nav-link:focus-visible{outline:2px solid color-mix(in srgb,#5e6ad2 55%,transparent);outline-offset:2px}.ds-nav-link.is-active{background:#eef0fb;color:#5e6ad2}.ds-nav-label{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.6875rem;font-weight:600;line-height:1.1;letter-spacing:.01em}"
+      "css": ".ds-rail{display:flex;flex-direction:column;gap:.15rem;width:4rem;padding:.35rem 0;background:#f6f8f6;border-right:1px solid #d7ddd9;font-family:\"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif}.ds-nav-link{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.15rem;width:3.25rem;min-height:2.75rem;margin:.2rem auto;padding:.4rem .2rem;border-radius:6px;color:#6b736e;text-decoration:none;transition:background .15s ease,color .15s ease}.ds-nav-link:hover{background:#eef1ef;color:#1a1f1c}.ds-nav-link:focus-visible{outline:2px solid color-mix(in srgb,#14532d 55%,transparent);outline-offset:2px}.ds-nav-link.is-active{background:#eef1ef;color:#1a1f1c;font-weight:600}.ds-nav-label{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.6875rem;font-weight:600;line-height:1.1;letter-spacing:.01em}"
     },
     {
       "name": "Citation Chip",
@@ -234,15 +454,15 @@
       "refersTo": "button-default",
       "description": "Dense 24px-min inline citation/index chip.",
       "html": "<button class=\"ds-chip\" type=\"button\">1</button>",
-      "css": ".ds-chip{display:inline-flex;align-items:center;justify-content:center;min-width:1.5rem;min-height:1.5rem;padding:.125rem .375rem;border-radius:9999px;border:1px solid transparent;background:#eef0fb;color:#5e6ad2;font:600 .75rem/1 Inter,ui-sans-serif,system-ui,sans-serif;cursor:pointer;vertical-align:baseline}.ds-chip:hover{background:color-mix(in srgb,#eef0fb 65%,#fff)}.ds-chip:focus-visible{outline:2px solid color-mix(in srgb,#5e6ad2 55%,transparent);outline-offset:2px}"
+      "css": ".ds-chip{display:inline-flex;align-items:center;justify-content:center;min-width:1.5rem;min-height:1.5rem;padding:.125rem .375rem;border-radius:9999px;border:1px solid transparent;background:#ecfdf5;color:#14532d;font:600 .75rem/1 \"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif;cursor:pointer;vertical-align:baseline}.ds-chip:hover{background:color-mix(in srgb,#ecfdf5 65%,#f6f8f6)}.ds-chip:focus-visible{outline:2px solid color-mix(in srgb,#14532d 55%,transparent);outline-offset:2px}"
     },
     {
       "name": "Raised Panel",
       "kind": "card",
       "refersTo": "button-default",
       "description": "Flat bordered panel for Settings sections and digest chrome; no nested cards.",
-      "html": "<section class=\"ds-panel\"><h2 class=\"ds-panel-title\">Chat model</h2><p class=\"ds-panel-body\">Configured · indigo marks actions, not large fills.</p></section>",
-      "css": ".ds-panel{background:#fff;border:1px solid #e4e4e7;border-radius:8px;padding:1.25rem;font-family:Inter,ui-sans-serif,system-ui,sans-serif}.ds-panel-title{margin:0;font-size:.9375rem;font-weight:600;letter-spacing:-.01em;line-height:1.4;color:#18181b}.ds-panel-body{margin:.35rem 0 0;font-size:.875rem;line-height:1.5;color:#52525b}"
+      "html": "<section class=\"ds-panel\"><h2 class=\"ds-panel-title\">Chat model</h2><p class=\"ds-panel-body\">Configured · Forest marks actions, not large fills.</p></section>",
+      "css": ".ds-panel{background:#f6f8f6;border:1px solid #d7ddd9;border-radius:8px;padding:1.25rem;font-family:\"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif}.ds-panel-title{margin:0;font-size:.9375rem;font-weight:600;letter-spacing:-.01em;line-height:1.4;color:#1a1f1c}.ds-panel-body{margin:.35rem 0 0;font-size:.875rem;line-height:1.5;color:#6b736e}"
     },
     {
       "name": "Warning Banner",
@@ -250,40 +470,43 @@
       "refersTo": "button-default",
       "description": "TopJobBanner warning tone using warning tokens (not accent).",
       "html": "<div class=\"ds-banner-warning\" role=\"status\"><span class=\"ds-banner-title\">Scheduled update had failures</span><button class=\"ds-banner-close\" type=\"button\">Close</button></div>",
-      "css": ".ds-banner-warning{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;padding:.5rem 1rem;border-bottom:1px solid #e4e4e7;background:#fffbeb;color:#92400e;font:400 .875rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif}.ds-banner-title{font-weight:500}.ds-banner-close{display:inline-flex;align-items:center;justify-content:center;min-height:2.25rem;padding:.4rem .65rem;border-radius:6px;border:1px solid transparent;background:transparent;color:#92400e;font:500 .75rem/1 Inter,ui-sans-serif,system-ui,sans-serif;cursor:pointer}.ds-banner-close:hover{background:#fff;border-color:#e4e4e7}.ds-banner-close:focus-visible{outline:2px solid color-mix(in srgb,#5e6ad2 55%,transparent);outline-offset:2px}"
+      "css": ".ds-banner-warning{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;padding:.5rem 1rem;border-bottom:1px solid #d7ddd9;background:#f6f8f6beb;color:#92400e;font:400 .875rem/1.5 \"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif}.ds-banner-title{font-weight:500}.ds-banner-close{display:inline-flex;align-items:center;justify-content:center;min-height:2.25rem;padding:.4rem .65rem;border-radius:6px;border:1px solid transparent;background:transparent;color:#92400e;font:500 .75rem/1 \"Public Sans Variable\", \"Public Sans\",ui-sans-serif,system-ui,sans-serif;cursor:pointer}.ds-banner-close:hover{background:#f6f8f6;border-color:#d7ddd9}.ds-banner-close:focus-visible{outline:2px solid color-mix(in srgb,#14532d 55%,transparent);outline-offset:2px}"
     }
   ],
   "narrative": {
-    "northStar": "The Split Desk",
-    "overview": "Askme operates like a precision tool on a cool neutral desk: indigo accent for primary actions and active wayfinding, reading columns tuned for digest scanning plus RAG chat. Expression stays Operate-mode familiar—Linear density in chrome, Readwise Reader content priority, Vercel-clear hierarchy (not Arc).",
+    "northStar": "The Brief Stage",
+    "overview": "Askme is a precision local digest tool on sage paper: Linear-dense chrome, Readwise Reader content priority. Public Sans for UI; Newsreader for digest/Insight/article. Forest accent #14532D used sparingly. Brief four-column stage.",
     "keyCharacteristics": [
-      "Cool `#FAFAFA` stage with white raised panels and `#E4E4E7` hairline borders",
-      "Indigo accent `#5E6AD2` for primary buttons, active nav, progress fills",
-      "64px icon sidebar with micro labels (Comp A), top job status strip, brief + ask split workspace",
-      "Inter UI type at fixed rem steps; 65ch reading measure in digest/article",
-      "English default UI with persistent EN/ZH toggle in sidebar rail",
-      "SVG logo mark in rail brand slot",
-      "Accessibility: skip link, landmarks, live regions, modal focus trap, keyboard-reachable hover actions"
+      "Sage stage `#EEF1EF` with raised `#F6F8F6` and `#D7DDD9` hairline borders",
+      "Forest accent `#14532D` for primary buttons and progress only",
+      "Slim labeled sidebar (~9.5rem); active nav = ink on stage fill",
+      "Public Sans chrome + Newsreader reading; system mono for code",
+      "English default UI with persistent EN/ZH toggle",
+      "SVG logo in the brand slot",
+      "Accessibility: skip link, landmarks, live regions, modal focus trap"
     ],
     "rules": [
       {
-        "name": "The Indigo Sparingly Rule",
-        "body": "Accent marks actions, selection, and progress—not large background fields.",
+        "name": "The Forest Sparingly Rule",
+        "body": "Accent marks actions, selection, and progress—not large background fields or active-nav fills.",
         "section": "colors"
+      },
+      {
+        "name": "The Split Face Rule",
+        "body": "Chrome uses Public Sans; long-form reading uses Newsreader.",
+        "section": "typography"
       }
     ],
     "dos": [
-      "Do keep EN default with one-click ZH toggle in the sidebar.",
-      "Do use the logo SVG in the rail brand slot.",
-      "Do preserve focus-visible outlines on all interactive elements.",
-      "Do use `.ui-icon-btn` (36×36px min) for compact icon-only controls (⋯, ↻, drag handles).",
-      "Do use `.ui-chip-btn` for inline citation/index chips (24px min touch floor).",
-      "Do use documented type steps (micro = 0.6875rem) for dense inline actions."
+      "Do use Public Sans for chrome and Newsreader for reading surfaces.",
+      "Do keep forest accent sparse; keep sage paper (non-white) stage/raised.",
+      "Do keep EN default with one-click ZH toggle in the shell.",
+      "Do preserve focus-visible outlines on all interactive elements."
     ],
     "donts": [
-      "Don't reintroduce warm parchment palette from the previous world.",
-      "Don't use colored side-tab borders on cards or nav items.",
-      "Don't hardcode UI strings outside `messages.ts`."
+      "Don't reintroduce indigo, pure-white raised panels, or Geist/Inter as the product face.",
+      "Don't paint active nav with accent wash by default.",
+      "Don't put Newsreader on chrome controls or Public Sans on digest long-form by default."
     ]
   }
 }

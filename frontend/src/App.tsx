@@ -14,6 +14,15 @@ const BannerCatalogPage = import.meta.env.DEV
 const UiCatalogPage = import.meta.env.DEV
   ? lazy(() => import("./routes/UiCatalogPage"))
   : null;
+const DesignProbePage = import.meta.env.DEV
+  ? lazy(() => import("./routes/dev/DesignProbePage"))
+  : null;
+const DesignChoicesPage = import.meta.env.DEV
+  ? lazy(() => import("./routes/dev/DesignChoicesPage"))
+  : null;
+const LayoutProbePage = import.meta.env.DEV
+  ? lazy(() => import("./routes/dev/LayoutProbePage"))
+  : null;
 
 export function RouteFallback({ labelKey }: { labelKey: MessageKey }) {
   const t = useT();
@@ -65,6 +74,36 @@ export default function App() {
               </LazyPage>
             }
           />
+          {DesignProbePage ? (
+            <Route
+              path="dev/design-probe"
+              element={
+                <LazyPage labelKey="settingsTitle">
+                  <DesignProbePage />
+                </LazyPage>
+              }
+            />
+          ) : null}
+          {DesignChoicesPage ? (
+            <Route
+              path="dev/design-choices"
+              element={
+                <LazyPage labelKey="settingsTitle">
+                  <DesignChoicesPage />
+                </LazyPage>
+              }
+            />
+          ) : null}
+          {LayoutProbePage ? (
+            <Route
+              path="dev/layout-probe"
+              element={
+                <LazyPage labelKey="settingsTitle">
+                  <LayoutProbePage />
+                </LazyPage>
+              }
+            />
+          ) : null}
         </>
       ) : null}
       <Route element={<AppShell />}>

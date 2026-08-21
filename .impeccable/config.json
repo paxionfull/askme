@@ -2,7 +2,9 @@
   "detector": {
     "ignoreRules": [],
     "ignoreFiles": [
-      "frontend/src/index.css"
+      "frontend/src/index.css",
+      "frontend/src/routes/dev/DesignChoicesPage.tsx",
+      "frontend/src/routes/dev/LayoutProbePage.tsx"
     ],
     "ignoreValues": [
       {
@@ -21,16 +23,13 @@
         "reason": "Redesign overhaul in progress; blockquote left rule reviewed"
       },
       {
-        "rule": "overused-font",
-        "value": "geist",
-        "createdAt": "2026-08-20T09:42:45.007Z",
-        "reason": "Craft bar includes Vercel; Geist is the intentional UI face"
-      },
-      {
-        "rule": "overused-font",
-        "value": "geist mono",
-        "createdAt": "2026-08-20T09:42:45.071Z",
-        "reason": "Craft bar includes Vercel; mono pair for code"
+        "rule": "design-system-color",
+        "value": "*",
+        "files": [
+          "frontend/src/routes/dev/DesignChoicesPage.tsx"
+        ],
+        "createdAt": "2026-08-21T08:01:49.224Z",
+        "reason": "DEV taste board alternatives for user pick"
       }
     ]
   }

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import CitationMarkdown from "../CitationMarkdown";
@@ -9,6 +10,9 @@ import type { ChatUiMessage, ScopedArticle } from "../../contexts/ChatContext";
 import type { CitationItem } from "../../api";
 import { useLocale } from "../../i18n/LocaleContext";
 import { formatMessage, type MessageKey } from "../../i18n/messages";
+
+type InsightTab = "summary" | "ask";
+
 type BriefInsightPanelProps = {
   excerpt: string;
   messages: ChatUiMessage[];
@@ -111,6 +115,7 @@ export default function BriefInsightPanel({
   className = "",
 }: BriefInsightPanelProps) {
   const { t, locale } = useLocale();
+  const [tab, setTab] = useState<InsightTab>("summary");
 
   const label = (key: MessageKey) => (
     <span className="font-medium text-[var(--ink)]">{t(key)}</span>
@@ -133,7 +138,39 @@ export default function BriefInsightPanel({
         </div>
       ) : null}
 
-      <section className="brief-insight-summary" aria-label={t("briefSummarizedBy")}>
+      <div className="brief-insight-tabs" role="tablist" aria-label={t("briefInsightTabs")}>
+        <button
+          type="button"
+          role="tab"
+          id="brief-insight-tab-summary"
+          aria-controls="brief-insight-panel-summary"
+          aria-selected={tab === "summary"}
+          className={`brief-insight-tab${tab === "summary" ? " is-active" : ""}`}
+          onClick={() => setTab("summary")}
+        >
+          {t("briefSummaryTab")}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="brief-insight-tab-ask"
+          aria-controls="brief-insight-panel-ask"
+          aria-selected={tab === "ask"}
+          className={`brief-insight-tab${tab === "ask" ? " is-active" : ""}`}
+          onClick={() => setTab("ask")}
+        >
+          {t("briefAskTab")}
+        </button>
+      </div>
+
+      {tab === "summary" ? (
+      <section
+        id="brief-insight-panel-summary"
+        role="tabpanel"
+        aria-labelledby="brief-insight-tab-summary"
+        className="brief-insight-summary"
+        aria-label={t("briefSummarizedBy")}
+      >
         <p className="brief-insight-summary-label">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path
@@ -174,8 +211,13 @@ export default function BriefInsightPanel({
           <p className="brief-insight-summary-body is-empty">{t("briefSummaryEmpty")}</p>
         )}
       </section>
-
-      <div className="brief-insight-ask">
+      ) : (
+      <div
+        id="brief-insight-panel-ask"
+        role="tabpanel"
+        aria-labelledby="brief-insight-tab-ask"
+        className="brief-insight-ask"
+      >
         {error ? (
           <div
             className="border-b border-[var(--border)] bg-[var(--error-soft)] px-3 py-2 text-sm text-[var(--danger-text)]"
@@ -434,6 +476,7 @@ export default function BriefInsightPanel({
           </form>
         </div>
       </div>
+      )}
 
       <CitationSidebar
         items={citations}
